@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn>=0.30
+python-dotenv>=1.0
+requests>=2.31
+numpy>=1.24
+opencv-python>=4.8
+faster-whisper>=1.0
+edge-tts>=6.1
+gTTS>=2.3
+yt-dlp>=2024.1
+scenedetect>=0.6.2
+soundfile>=0.12

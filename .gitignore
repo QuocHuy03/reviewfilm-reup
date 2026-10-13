@@ -1,0 +1,14 @@
+node_modules/
+frontend/dist/
+electron/dist/
+backend/.env
+backend/data/
+backend/bin/
+__pycache__/
+release/
+backend/.venv/
+*.log
+*.bak
+*.fixing.*
+.DS_Store
+Thumbs.db

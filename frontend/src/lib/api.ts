@@ -1,0 +1,76 @@
+import type {
+  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, QaReport, Scene, Settings, SystemInfo, Voice,
+} from "./types"
+
+export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(BASE_URL + path, {
+    method,
+    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`
+    try {
+      const data = await res.json()
+      if (typeof data.detail === "string") msg = data.detail
+      else if (Array.isArray(data.detail)) msg = data.detail.map((d: { msg: string }) => d.msg).join("; ")
+    } catch {
+      /* body không phải JSON */
+    }
+    throw new Error(msg)
+  }
+  return res.json() as Promise<T>
+}
+
+export const mediaUrl = (path: string) => `${BASE_URL}/api/media?path=${encodeURIComponent(path)}`
+
+export const api = {
+  health: () => request<{ ok: boolean }>("GET", "/api/health"),
+  options: () => request<Options>("GET", "/api/options"),
+  system: () => request<SystemInfo>("GET", "/api/system"),
+  settings: () => request<Settings>("GET", "/api/settings"),
+  saveSettings: (patch: Partial<Settings>) => request<Settings>("PUT", "/api/settings", patch),
+  keys: () => request<ApiKey[]>("GET", "/api/keys"),
+  fonts: (refresh = false) => request<FontInfo[]>("GET", `/api/fonts${refresh ? "?refresh=true" : ""}`),
+  importFont: (path: string) => request<{ family: string; vi: boolean; path: string }>("POST", "/api/fonts/import", { path }),
+  saveKeys: (values: Record<string, string>) => request<ApiKey[]>("PUT", "/api/keys", { values }),
+  voices: () => request<Voice[]>("GET", "/api/voices"),
+  testVoice: (voice: string, text?: string, ref_audio?: string) =>
+    request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text, ref_audio }),
+
+  jobs: () => request<JobSummary[]>("GET", "/api/jobs"),
+  job: (id: string) => request<JobDetail>("GET", `/api/jobs/${id}`),
+  createVideoJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/video", cfg),
+  createSrtJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/srt", cfg),
+  createBurnJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/burn", cfg),
+  confirm: (id: string, body: { confirmed: boolean; scenes?: Scene[]; mixer?: Record<string, unknown> }) =>
+    request<{ ok: boolean }>("POST", `/api/jobs/${id}/confirm`, body),
+  /** Tạo lại giọng 1 cảnh. Gửi kèm cảnh hiện tại ở client (đã có thể bị đổi thứ tự / cắt) → server không phụ thuộc số thứ tự cũ. */
+  regenScene: (id: string, idx: number, text: string, scene?: Scene) =>
+    request<Scene>("POST", `/api/jobs/${id}/scenes/${idx}/tts`, { text, scene }),
+  aiPolish: (id: string, scenes: Scene[], instruction = "") =>
+    request<{ edits: AiEdit[] }>("POST", `/api/jobs/${id}/ai-polish`, { scenes, instruction }),
+  resume: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/resume`),
+  recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),
+  retry: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/retry`),
+  cancel: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/cancel`),
+  deleteJob: (id: string) => request<{ ok: boolean }>("DELETE", `/api/jobs/${id}`),
+  streamUrl: (id: string, since = 0) => `${BASE_URL}/api/jobs/${id}/stream?since=${since}`,
+
+  readSrt: (path: string) => request<{ path: string; cues: { start: number; end: number; text: string }[] }>("GET", `/api/srt?path=${encodeURIComponent(path)}`),
+  saveSrt: (path: string, cues: { start: number; end: number; text: string }[]) => request<{ ok: boolean }>("PUT", "/api/srt", { path, cues }),
+}
+
+export const bridge = {
+  pickVideo: () => window.rf?.pickFile([{ name: "Video", extensions: ["mp4", "mkv", "avi", "mov", "webm", "flv", "m4v", "ts", "wmv"] }]) ?? Promise.resolve(null),
+  pickAudio: () => window.rf?.pickFile([{ name: "Audio", extensions: ["wav", "mp3", "m4a", "flac", "ogg"] }]) ?? Promise.resolve(null),
+  pickImage: () => window.rf?.pickFile([{ name: "Ảnh", extensions: ["png", "jpg", "jpeg", "webp"] }]) ?? Promise.resolve(null),
+  pickFont: () => window.rf?.pickFile([{ name: "Font", extensions: ["ttf", "otf", "ttc"] }]) ?? Promise.resolve(null),
+  pickSrt: () => window.rf?.pickFile([{ name: "Phụ đề", extensions: ["srt"] }]) ?? Promise.resolve(null),
+  pickFolder: () => window.rf?.pickFolder() ?? Promise.resolve(null),
+  open: (p: string) => window.rf?.openPath(p),
+  reveal: (p: string) => window.rf?.showInFolder(p),
+  available: () => Boolean(window.rf),
+}

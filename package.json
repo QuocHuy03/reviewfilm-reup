@@ -1,0 +1,88 @@
+{
+  "name": "reviewfilm",
+  "version": "2.0.0",
+  "private": true,
+  "description": "ReviewFilm Studio — AI review phim, dịch & reup, phụ đề",
+  "main": "electron/dist/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron -c yellow,cyan \"npm:dev:web\" \"npm:dev:electron\"",
+    "dev:web": "npm --prefix frontend run dev",
+    "dev:electron": "tsc -p electron && wait-on tcp:127.0.0.1:5173 && cross-env RF_DEV=1 node scripts/electron.cjs",
+    "start": "tsc -p electron && node scripts/electron.cjs",
+    "build": "npm --prefix frontend run build && tsc -p electron",
+    "check": "tsc -p electron --noEmit && npm --prefix frontend run typecheck && python -m compileall -q backend/main.py backend/app backend/core backend/workers",
+    "version:patch": "node scripts/version.cjs patch",
+    "version:minor": "node scripts/version.cjs minor",
+    "version:major": "node scripts/version.cjs major",
+    "dist": "npm run build && electron-builder --win",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "concurrently": "^10.0.6",
+    "cross-env": "^10.1.0",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "wait-on": "^9.5.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "got-scraping": "^4.2.2",
+    "node-machine-id": "^1.1.12",
+    "playwright": "^1.64.0"
+  },
+  "author": "TaoThaoAI",
+  "build": {
+    "appId": "com.taothaoai.reviewfilm",
+    "productName": "ReviewFilm Studio",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "package.json",
+      "electron/dist/**",
+      "electron/ai/**",
+      "frontend/dist/**",
+      "build/icon.*",
+      "CHANGELOG.md"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!data/**",
+          "!.env",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/playwright/**",
+      "node_modules/playwright-core/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "ReviewFilm Studio"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "quochuy03",
+        "repo": "reviewfilm-public"
+      }
+    ]
+  }
+}

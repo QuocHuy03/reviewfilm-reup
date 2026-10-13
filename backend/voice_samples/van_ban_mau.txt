@@ -1,0 +1,34 @@
+============================================================
+DANH SÁCH VĂN BẢN MẪU DÙNG CHO NHÂN BẢN GIỌNG NÓI (GPT-SoVITS)
+============================================================
+
+1. File ghi âm mẫu: mc_truyen_hinh_clone.wav
+Văn bản mẫu:
+Hai biên tập viên thời sự của truyền hình Quốc hội cố giấu nước mắt trong lần dẫn bản tin cuối cùng. Khi kênh kết thúc hoạt động tối ngày 31 tháng 12 năm 2020 làm người xem cảm xúc cũng thật lẫn lộn.
+
+------------------------------------------------------------
+
+2. File ghi âm mẫu: giong_bac_noi_luc.wav
+Văn bản mẫu:
+Mừng Quốc khánh mùng 2 tháng 9 và chào đón năm học mới, siêu sale lớn nhất năm đã bắt đầu. Nam Phát Tiến chơi lớn, giảm sâu kịch nóc, giảm giá từ 10% đến 50% cùng muôn vàn quà tặng. Áp dụng cho các mặt hàng điện máy, điện lạnh, nội thất, xe đạp điện. Cùng chế độ hậu mãi bảo hành chính hãng 36 tháng, hãy đến ngay siêu thị Nam Phát Tiến, mua sắm liền tay, không lo về tiền.
+
+------------------------------------------------------------
+
+3. File ghi âm mẫu: giong_doc_he_thong.wav
+Văn bản mẫu:
+Cậu không đến đây để ngắm cảnh đâu chứ. Thật ra thì cậu vốn dĩ không nên có mặt ở đây. Cậu càng sớm nhận ra điều đó thì càng tốt cho cả hai chúng ta thôi. Không ngắm cảnh à? Ok, hiểu rồi. Còn về việc tôi ở đây, ông cứ đi mà ý kiến với bà M nhé. Thử rồi, bả ý cứ khăng khăng là chúng tôi phải cho cậu một cơ hội. Và tôi sẽ nắm lấy cơ hội đó. Tốt thôi, cho đến khi cậu thấy chán hoặc là công việc quá vất vả, tôi sẽ xem qua hồ sơ của cậu. Để làm được công việc này, cậu cần có kỹ năng, kỷ luật và trên hết là sự cống hiến. Chỉ dựa vào may mắn thôi thì không giúp được cậu tiến xa đâu. Thật mừng vì chúng ta đang gặp ở đây. Chào sếp nhé. Chúc mừng sinh nhật bạn An béo nhé. Tôi thích cái cách mà người ta cải tạo nơi này, tái sử dụng công năng mà không làm hỏng giá trị của di sản lịch sử. Chỉ là có hơi phung phí ngân sách quốc phòng một chút. Chúng tôi đáp ứng được hoặc thậm chí là vượt qua mọi tiêu chuẩn dành cho mọi cơ quan tình báo. Chắc đó là lý do mà tôi có mặt ở đây đấy. Đặc nhiệm SAS cũng có mặt ở đây sao? Cậu đúng là rất giỏi ở mấy cái điều hiển nhiên đấy. Tôi thấy hơi bất ngờ thôi. Tôi không biết là họ cũng huấn luyện ở đây. Tôi e là danh sách những điều cậu đang không biết chắc còn dài lắm đấy. Đi nào, lối này.
+
+============================================================
+
+
+--- GIONG MAU FPT AI (Dung de clone offline) ---
+Van ban doc mau:
+"Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính."
+
+- fpt_lena.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_banmai.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_mia.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_nguyen.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_nam.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_thuminh.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
+- fpt_minhquang.wav: Chào mừng bạn đã quay trở lại với kênh review phim. Hôm nay chúng ta sẽ cùng phân tích một tác phẩm vô cùng hấp dẫn và đầy kịch tính.
