@@ -523,64 +523,6 @@ def _escape_inner_quotes(json_str):
             escape = False
         return prefix + ''.join(escaped_content) + suffix
     return re.sub(pattern, replace_fn, json_str)
-def polish_script_with_gpt(script, openai_key, style_guide_path, log_fn=print, troll_tone=True):
-    # NOTE: than ham goc bi decompiler pha hong hoan toan -> dung lai theo ngu canh
-    # (file van phong van_phong_chatgpt.txt + regex _escape_inner_quotes cho "id"/"polished").
-    # Tra ve script cung kieu dau vao ({'scenes': [...]} hoac list scenes); loi -> tra ve nguyen ban.
-    if not script:
-        return script
-    scenes = script.get('scenes') if isinstance(script, dict) else script
-    if not isinstance(scenes, list) or not scenes:
-        return script
-    openai_key = ((openai_key or '')).strip()
-    if not openai_key:
-        log_fn('   [Polish] Chua co OPENAI_API_KEY -> bo qua buoc bien tap van phong.')
-        return script
-    style_guide = ''
-    if style_guide_path:
-        try:
-            with open(style_guide_path, 'r', encoding='utf-8') as f:
-                style_guide = f.read().strip()
-        except OSError:
-            log_fn(f'''   [Polish] [WARN] Khong doc duoc file van phong: {style_guide_path}''')
-    items = [{'id': i + 1, 'text': (s.get('voiceover') or '')} for (i, s) in enumerate(scenes)]
-    tone_str = 'Giọng văn hơi troll, hóm hỉnh, vui vẻ.' if troll_tone else 'Giọng văn nghiêm túc, kịch tính, lôi cuốn.'
-    prompt = f'''Bạn là biên tập viên kịch bản review phim tiếng Việt. Hãy biên tập lại lời thuyết minh của từng cảnh dưới đây cho tự nhiên, mượt mà, đúng văn phong.\n{tone_str}\n''' + (f'''\nBỘ QUY TẮC VĂN PHONG (BẮT BUỘC TUÂN THỦ):\n{style_guide}\n''' if style_guide else '') + f'''\nQUY TẮC: giữ NGUYÊN nội dung/sự kiện của từng cảnh, KHÔNG gộp/đảo cảnh, độ dài mỗi cảnh tương đương bản gốc, TUYỆT ĐỐI KHÔNG dùng chữ số (0-9).\n\nDANH SÁCH CẢNH (JSON):\n{json.dumps(items, ensure_ascii=False)}\n\nTrả về JSON thuần túy đúng schema: {{"scenes": [{{"id": <số cảnh>, "polished": "lời thuyết minh đã biên tập"}}]}}'''
-    max_tokens = min(16000, 1000 + len(scenes) * 200)
-    content = _llm_text_openai(prompt, openai_key, log_fn, max_tokens, temperature=0.7)
-    if not content:
-        log_fn('   [Polish] [WARN] GPT khong tra ve ket qua -> giu kich ban goc.')
-        return script
-    content = re.sub('^```(?:json)?\\s*|\\s*```$', '', content.strip())
-    data = None
-    for candidate in (content, _clean_json_newlines(content), _escape_inner_quotes(_clean_json_newlines(content))):
-        try:
-            data = json.loads(candidate)
-            break
-        except Exception:
-            continue
-    if data is None:
-        log_fn('   [Polish] [WARN] Khong parse duoc JSON bien tap -> giu kich ban goc.')
-        return script
-    polished_list = data.get('scenes', []) if isinstance(data, dict) else data
-    if not isinstance(polished_list, list):
-        return script
-    n_ok = 0
-    for item in polished_list:
-        if not isinstance(item, dict):
-            continue
-        try:
-            sid = int(item.get('id', item.get('scene_number', 0)))
-        except (TypeError, ValueError):
-            continue
-        txt = ((item.get('polished') or item.get('voiceover') or item.get('text') or '')).strip()
-        if 1 <= sid <= len(scenes) and txt:
-            scenes[sid - 1]['voiceover'] = txt
-            if 'subtitle' in scenes[sid - 1]:
-                scenes[sid - 1]['subtitle'] = txt
-            n_ok += 1
-    log_fn(f'''   [Polish] Da bien tap van phong {n_ok}/{len(scenes)} canh.''')
-    return script
 def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print):
     try:
         from .translator import _find_known_titles as _fkt, _get_char_glossary_for_film as _gcgf, _fetch_characters_from_ai as _fcai

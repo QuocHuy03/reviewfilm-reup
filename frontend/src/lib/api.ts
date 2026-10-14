@@ -1,5 +1,5 @@
 import type {
-  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, QaReport, Scene, Settings, SystemInfo, Voice,
+  AiEdit, ApiKey, FontInfo, JobDetail, DownloadStatus, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, Voice,
 } from "./types"
 
 export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
@@ -37,8 +37,8 @@ export const api = {
   importFont: (path: string) => request<{ family: string; vi: boolean; path: string }>("POST", "/api/fonts/import", { path }),
   saveKeys: (values: Record<string, string>) => request<ApiKey[]>("PUT", "/api/keys", { values }),
   voices: () => request<Voice[]>("GET", "/api/voices"),
-  testVoice: (voice: string, text?: string, ref_audio?: string) =>
-    request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text, ref_audio }),
+  testVoice: (voice: string, text?: string) =>
+    request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text }),
 
   jobs: () => request<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => request<JobDetail>("GET", `/api/jobs/${id}`),
@@ -53,7 +53,23 @@ export const api = {
   aiPolish: (id: string, scenes: Scene[], instruction = "") =>
     request<{ edits: AiEdit[] }>("POST", `/api/jobs/${id}/ai-polish`, { scenes, instruction }),
   resume: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/resume`),
+  publish: (id: string, body: { platforms?: string[]; tone?: string; extra?: string }) =>
+    request<PublishPack>("POST", `/api/jobs/${id}/publish`, body),
+  publishThumbnail: (id: string, index: number, text: string) =>
+    request<PublishPack>("POST", `/api/jobs/${id}/publish/thumbnail`, { index, text }),
+  saveDraft: (id: string, scenes: Scene[], mixer?: Record<string, unknown>) =>
+    request<{ ok: boolean }>("PUT", `/api/jobs/${id}/draft`, { scenes, mixer }),
+  presets: () => request<Preset[]>("GET", "/api/presets"),
+  savePreset: (name: string, mode: string, cfg: Record<string, unknown>) => request<Preset[]>("PUT", "/api/presets", { name, mode, cfg }),
+  deletePreset: (name: string) => request<Preset[]>("DELETE", `/api/presets/${encodeURIComponent(name)}`),
+  createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}) =>
+    request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles }),
+  downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
+  thumbUrl: (url: string) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}`,
+  downloadStatus: () => request<DownloadStatus>("GET", "/api/download/status"),
+  downloadUpdate: () => request<{ version: string }>("POST", "/api/download/update"),
   recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),
+  reedit: (id: string, voice?: string) => request<JobSummary>("POST", `/api/jobs/${id}/reedit`, { voice }),
   retry: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/retry`),
   cancel: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => request<{ ok: boolean }>("DELETE", `/api/jobs/${id}`),
@@ -65,6 +81,7 @@ export const api = {
 
 export const bridge = {
   pickVideo: () => window.rf?.pickFile([{ name: "Video", extensions: ["mp4", "mkv", "avi", "mov", "webm", "flv", "m4v", "ts", "wmv"] }]) ?? Promise.resolve(null),
+  pickVideos: () => window.rf?.pickFiles([{ name: "Video", extensions: ["mp4", "mkv", "avi", "mov", "webm", "flv", "m4v", "ts", "wmv"] }]) ?? Promise.resolve([] as string[]),
   pickAudio: () => window.rf?.pickFile([{ name: "Audio", extensions: ["wav", "mp3", "m4a", "flac", "ogg"] }]) ?? Promise.resolve(null),
   pickImage: () => window.rf?.pickFile([{ name: "Ảnh", extensions: ["png", "jpg", "jpeg", "webp"] }]) ?? Promise.resolve(null),
   pickFont: () => window.rf?.pickFile([{ name: "Font", extensions: ["ttf", "otf", "ttc"] }]) ?? Promise.resolve(null),

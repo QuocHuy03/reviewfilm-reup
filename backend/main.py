@@ -96,7 +96,8 @@ def main():
         # Proactor loop in traceback ConnectionResetError mỗi khi client đóng kết nối SSE — vô hại, làm rác log.
         import asyncio
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    uvicorn.run('app.main:app', host='127.0.0.1', port=port, log_level='warning')
+    # loop='none': dùng đúng policy Selector đặt ở trên (uvicorn 0.5x mặc định ép Proactor trên Windows)
+    uvicorn.run('app.main:app', host='127.0.0.1', port=port, log_level='warning', loop='none' if os.name == 'nt' else 'auto')
 
 
 if __name__ == '__main__':

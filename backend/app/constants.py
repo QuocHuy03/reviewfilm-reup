@@ -176,7 +176,6 @@ VOICE_OPTIONS = {
     "VieNeu — Thái Sơn (Nam)": "vieneu-thai-son",
     "VieNeu — Đức Trí (Nam)": "vieneu-duc-tri",
     "VieNeu — Trọng Hữu (Nam)": "vieneu-trong-huu",
-    "VieNeu — Clone giọng mẫu (tự chọn file)": "vieneu-clone",
     "VieNeu3 — Chiến Thắng": "vieneu3-chien-thang",
     "VieNeu3 — Hùng Bá": "vieneu3-hung-ba",
     "VieNeu3 — Lâm Lê": "vieneu3-lam-le",
@@ -209,6 +208,15 @@ VOICE_OPTIONS = {
     "VieNeu3 — Nữ Lưu Loát": "vieneu3-nu-luu-loat",
     "VieNeu3 — Nữ Nhàn Nhã": "vieneu3-nu-nhan-nha",
     "VieNeu3 — Nữ Nhẹ Nhàng": "vieneu3-nu-nhe-nhang",
+    "CapCut — Nhỏ Ngọt Ngào (Nữ)": "capcut-BV421_vivn_streaming",
+    "CapCut — Giọng Nữ Phổ Thông": "capcut-vi_female_huong",
+    "CapCut — Cô Gái Hoạt Ngôn (Nữ)": "capcut-BV074_streaming",
+    "CapCut — Mai (Nữ)": "capcut-BV562_streaming",
+    "CapCut — Hoài My (Nữ)": "capcut-vi-VN-HoaiMyNeural",
+    "CapCut — Nam Minh (Nam)": "capcut-vi-VN-NamMinhNeural",
+    "CapCut — Giọng Bé": "capcut-BV074_streaming_dsp",
+    "CapCut — Việt Méo (Nam, hài)": "capcut-BV075_streaming_vibrato_dsp",
+    "CapCut — Kenny Đại Đế (Nam, hài)": "capcut-BV075_streaming_demon_dsp",
     "Edge TTS — Nam Bắc (miễn phí)": "vi-VN-NamMinhNeural",
     "Edge TTS — Nữ Bắc (miễn phí)": "vi-VN-HoaiMyNeural"
 }

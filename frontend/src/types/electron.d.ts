@@ -69,6 +69,7 @@ export interface ReviewFilmBridge {
   backendUrl: string
   platform: string
   pickFile: (filters?: FileFilter[]) => Promise<string | null>
+  pickFiles: (filters?: FileFilter[]) => Promise<string[]>
   pickFolder: () => Promise<string | null>
   openPath: (path: string) => Promise<void>
   showInFolder: (path: string) => Promise<void>
@@ -90,6 +91,12 @@ export interface ReviewFilmBridge {
     check: () => Promise<UpdateState>
     install: () => Promise<boolean>
     onState: (cb: (s: UpdateState) => void) => () => void
+  }
+  /** Đăng nhập nền tảng video (Douyin, TikTok, Bilibili…) — lưu cookie cho bộ tải. */
+  capcut: {
+    /** Mở cửa sổ capcut.com, đăng nhập xong → chuỗi cookie. Đã đăng nhập từ trước thì trả ngay. */
+    login: () => Promise<string>
+    logout: () => Promise<void>
   }
   ai: {
     state: () => Promise<AiState>

@@ -29,7 +29,7 @@ def get_whisper_cache_dir(audio_path):
 
 def _has_nvidia_gpu():
     try:
-        r = subprocess.run(['nvidia-smi'], capture_output=True, text=True, creationflags=_HIDE)
+        r = subprocess.run(['nvidia-smi'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
         return r.returncode == 0
     except Exception:
         return False
@@ -50,7 +50,9 @@ def _add_cuda_dll_dirs(log_fn=print):
         pass
     return False
 
-def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5):
+def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5, should_stop=None):
+    global _should_stop
+    _should_stop = should_stop
     _inject_ffmpeg_to_path()
     drive = os.path.splitdrive(os.path.abspath(temp_dir))[0]
     if drive:
@@ -64,7 +66,7 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
     audio_path = os.path.join(temp_dir, 'audio_extracted.wav')
     def _extract():
         log_fn('   Trích xuất audio từ video...')
-        r = subprocess.run([FFMPEG_EXE, '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path], capture_output=True, text=True, creationflags=_HIDE)
+        r = subprocess.run([FFMPEG_EXE, '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
         if r.returncode != 0 or not os.path.exists(audio_path):
             log_fn(f'   [LỖI] Trích audio: {r.stderr[:200] if r.stderr else "Không tạo được file audio"}')
             return False
@@ -78,6 +80,9 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
     def _run_whisper():
         try:
             return _run_whisper_py(audio_path, model, language, log_fn, device, beam_size)
+        except WhisperCancelled:
+            log_fn('   [DỪNG] Đã huỷ khi đang nhận dạng giọng nói.')
+            return None
         except Exception as e:
             log_fn(f'   [WARN] In-process whisper lỗi ({e}), thử subprocess...')
             try:
@@ -175,6 +180,8 @@ def _run_whisper_py(audio_path, model_name, language, log_fn, device, beam_size=
     try:
         from faster_whisper import WhisperModel
         return _run_faster_whisper(audio_path, model_name, language, log_fn, device, beam_size)
+    except WhisperCancelled:
+        raise
     except Exception as e:
         log_fn(f'   [WARN] faster-whisper lỗi ({e}), thử openai-whisper...')
         
@@ -199,6 +206,24 @@ def _run_whisper_py(audio_path, model_name, language, log_fn, device, beam_size=
     except Exception as e:
         log_fn(f'   [LỖI] Whisper: {e}')
         return None
+
+_MODEL_CACHE = {}          # (thư mục model, thiết bị, kiểu tính) → WhisperModel đã nạp — job sau khỏi nạp lại
+_should_stop = None        # callable do transcribe_audio đặt → True khi job bị huỷ
+
+
+class WhisperCancelled(RuntimeError):
+    pass
+
+
+def _collect(segments_gen):
+    """Đọc dần kết quả Whisper, dừng ngay khi job bị huỷ (trước đây phải chờ nhận dạng hết cả phim)."""
+    out = []
+    for seg in segments_gen:
+        if _should_stop and _should_stop():
+            raise WhisperCancelled('Đã huỷ khi đang nhận dạng giọng nói.')
+        out.append(seg)
+    return out
+
 
 def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, beam_size=5):
     from faster_whisper import WhisperModel
@@ -244,9 +269,17 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             log_fn(f"   Tải model '{model_name}' từ HuggingFace (lần đầu, sau đó dùng cache)...")
             snapshot_download(hub_name, local_dir=local_dir, local_dir_use_symlinks=False)
             
-        log_fn(f'   Load faster-whisper từ: {local_dir}')
+        key = (local_dir, device, compute_type)
+        model = _MODEL_CACHE.get(key)
+        if model is not None:
+            log_fn(f"   Dùng lại model '{model_name}' đã nạp sẵn trong bộ nhớ")
+        else:
+            log_fn(f'   Load faster-whisper từ: {local_dir}')
         try:
-            model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+            if model is None:
+                _MODEL_CACHE.clear()           # chỉ giữ 1 model — đổi model thì nhả model cũ cho đỡ RAM/VRAM
+                model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+                _MODEL_CACHE[key] = model
         except Exception as e:
             if device == 'cuda':
                 log_fn(f'   [WARN] CUDA không dùng được ({str(e)[:60]}) — lùi về CPU (int8)')
@@ -266,8 +299,12 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             kwargs['language'] = language
 
         try:
+            if _should_stop and _should_stop():
+                raise WhisperCancelled('Đã huỷ trước khi nhận dạng.')
             segments_gen, info = model.transcribe(audio_path, **kwargs)
-            segments_list = list(segments_gen)
+            segments_list = _collect(segments_gen)
+        except WhisperCancelled:
+            raise
         except Exception as run_err:
             log_fn(f'   [WARN] Lỗi transcribe với VAD ({str(run_err)[:80]}), thử tắt VAD hoặc lùi CPU...')
             kwargs['vad_filter'] = False
@@ -276,7 +313,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
                 device, compute_type = 'cpu', 'int8'
                 model = WhisperModel(local_dir, device=device, compute_type=compute_type)
             segments_gen, info = model.transcribe(audio_path, **kwargs)
-            segments_list = list(segments_gen)
+            segments_list = _collect(segments_gen)
 
         detected_lang = getattr(info, 'language', 'vi')
         log_fn(f'   Ngôn ngữ phát hiện: {detected_lang}')

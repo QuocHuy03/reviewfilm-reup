@@ -20,6 +20,8 @@ import { SettingsPage } from "@/pages/SettingsPage"
 import { StudioPage } from "@/pages/StudioPage"
 import { SubtitlesPage } from "@/pages/SubtitlesPage"
 import { VoicesPage } from "@/pages/VoicesPage"
+import { ConfirmHost } from "@/components/ConfirmHost"
+import { DownloadPage } from "@/pages/DownloadPage"
 
 function useActiveJob(enabled: boolean) {
   const [job, setJob] = useState<JobSummary | null>(null)
@@ -77,6 +79,7 @@ function Shell() {
               {page === "home" && <div className="h-full overflow-y-auto"><HomePage /></div>}
               {page === "create" && <CreatePage />}
               {page === "studio" && <StudioPage />}
+              {page === "download" && <DownloadPage />}
               {page === "subtitles" && <SubtitlesPage />}
               {page === "voices" && <VoicesPage />}
               {page === "jobs" && <JobsPage />}
@@ -99,6 +102,7 @@ export default function App() {
           </StoreProvider>
         </AuthGate>
         <Toaster position="bottom-right" richColors closeButton />
+        <ConfirmHost />
       </TooltipProvider>
     </ThemeProvider>
   )

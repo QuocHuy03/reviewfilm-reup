@@ -63,18 +63,28 @@ def word_count(text):
     return len(re.findall(r'\w+', text or '', flags=re.UNICODE))
 
 
-def target_words(seconds):
-    return max(3, round(max(0.0, seconds) * WORDS_PER_SEC * FILL_RATIO))
+def target_words(seconds, wps=None):
+    return max(3, round(max(0.0, seconds) * (wps or WORDS_PER_SEC) * FILL_RATIO))
 
 
-def _scene_rows(scenes):
+def measure_wps(scenes):
+    """Tốc độ đọc THẬT của giọng đang dùng (từ/giây, trung vị các cảnh ≥ 2s). Mỗi giọng một tốc độ —
+    CapCut ~4.4, Edge ~3.8 — nên số từ mục tiêu phải tính theo giọng thật. None nếu chưa đủ dữ liệu."""
+    rates = sorted(word_count(s.get('voiceover')) / float(s['tts_duration']) for s in scenes
+                   if not s.get('excluded') and float(s.get('tts_duration') or 0) >= 2 and word_count(s.get('voiceover')) >= 5)
+    if len(rates) < 2:
+        return None
+    return round(min(5.5, max(2.5, rates[len(rates) // 2])), 2)
+
+
+def _scene_rows(scenes, wps=None):
     rows = []
     for (i, s) in enumerate(scenes[:MAX_SCENES]):
         if s.get('excluded'):
             continue
         hinh = max(0.0, float(s.get('clip_end') or 0) - float(s.get('clip_start') or 0))
         vo = (s.get('voiceover') or '').strip()
-        row = {'id': i, 'hinh': round(hinh, 1), 'tu_hien_tai': word_count(vo), 'tu_muc_tieu': target_words(hinh), 'voiceover': vo}
+        row = {'id': i, 'hinh': round(hinh, 1), 'tu_hien_tai': word_count(vo), 'tu_muc_tieu': target_words(hinh, wps), 'voiceover': vo}
         sub = (s.get('subtitle') or '').strip()
         if sub and sub != vo:
             row['subtitle'] = sub
@@ -101,18 +111,19 @@ def _off_target(text, target, tol):
     return target > 0 and abs(n - target) / target > tol
 
 
-def suggest_edits(scenes, kind='review', instruction='', log_fn=print):
+def suggest_edits(scenes, kind='review', instruction='', log_fn=print, wps=None):
     """→ [{'id', 'voiceover'?, 'subtitle'?, 'exclude', 'reason'}]. RuntimeError nếu chưa đăng nhập / AI lỗi."""
     from core import web_llm
     if not web_llm.available():
         raise RuntimeError('Chưa đăng nhập tài khoản ChatGPT hoặc Gemini (Cài đặt → Tài khoản AI).')
-    rows = _scene_rows(scenes)
+    wps = wps or measure_wps(scenes)
+    rows = _scene_rows(scenes, wps)
     if not rows:
         return []
     off = sum(1 for r in rows if _off_target(r['voiceover'], r['tu_muc_tieu'], TOLERANCE))
-    log_fn(f'   [AI hậu kỳ] {len(rows)} cảnh, {off} cảnh lệch độ dài so với hình — gửi AI rà...')
+    log_fn(f'   [AI hậu kỳ] {len(rows)} cảnh, {off} cảnh lệch độ dài so với hình (giọng đọc ~{wps or WORDS_PER_SEC:.1f} từ/giây) — gửi AI rà...')
     extra = f'\n# YÊU CẦU THÊM CỦA NGƯỜI DÙNG (ưu tiên)\n{instruction.strip()}\n' if instruction.strip() else ''
-    prompt = SYSTEM_PROMPT.format(kind='review phim' if kind == 'review' else 'dịch & lồng tiếng phim', wps=WORDS_PER_SEC,
+    prompt = SYSTEM_PROMPT.format(kind='review phim' if kind == 'review' else 'dịch & lồng tiếng phim', wps=wps or WORDS_PER_SEC,
                                   tol=int(TOLERANCE * 100), extra=extra, scenes=json.dumps(rows, ensure_ascii=False, indent=0))
     data = _extract_json(web_llm.chat(prompt, log_fn))
     if not isinstance(data, dict):
@@ -188,17 +199,18 @@ Chỉ trả về JSON: {{"edits": [{{"id": <số>, "voiceover": "<lời mới>"}
 {scenes}"""
 
 
-def rewrite_to_length(scenes, problems, log_fn=print):
+def rewrite_to_length(scenes, problems, log_fn=print, wps=None):
     """AI viết lại lời các cảnh lỗi. problems: {chỉ số cảnh: {'why', 'fit': số giây lời nên có, 'ref'?: chỉ số cảnh bị trùng}}.
     → {chỉ số: lời mới}."""
     from core import web_llm
     if not problems or not web_llm.available():
         return {}
+    wps = wps or measure_wps(scenes)
     rows = []
     for (i, pb) in sorted(problems.items()):
         s = scenes[i]
         vo = (s.get('voiceover') or '').strip()
-        row = {'id': i, 'loi': pb['why'], 'hinh': round(pb['fit'], 1), 'tu_hien_tai': word_count(vo), 'tu_muc_tieu': target_words(pb['fit']),
+        row = {'id': i, 'loi': pb['why'], 'hinh': round(pb['fit'], 1), 'tu_hien_tai': word_count(vo), 'tu_muc_tieu': target_words(pb['fit'], wps),
                'voiceover': vo, 'truoc': (scenes[i - 1].get('voiceover') or '')[:160] if i > 0 else '',
                'sau': (scenes[i + 1].get('voiceover') or '')[:160] if i + 1 < len(scenes) else ''}
         if pb.get('ref') is not None:

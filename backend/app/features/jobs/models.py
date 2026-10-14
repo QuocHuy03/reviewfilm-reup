@@ -25,7 +25,6 @@ class VideoJobRequest(SubtitleOptions):
     video_speed: str = '1.0x (mặc định)'
     mirror_video: bool = False
     voice: str = 'Edge TTS — Nữ Bắc (miễn phí)'
-    ref_audio: str = ''
     strict_voice: bool = False
     multi_voice: bool = False
     sub_source: str = 'Theo lời đọc AI (khớp voiceover)'
@@ -37,6 +36,7 @@ class VideoJobRequest(SubtitleOptions):
     # Hậu kỳ tự động sau lồng tiếng: căn hình theo lời + AI sửa kịch bản + tạo lại giọng
     auto_post: bool = True
     auto_fix: bool = True
+    auto_publish: bool = True      # xuất xong → AI viết bài đăng theo nền tảng + thumbnail
     # Thương hiệu & khung hình
     target_resolution: str = '1920x1080'
     watermark_path: str = ''
@@ -74,6 +74,33 @@ class ConfirmRequest(BaseModel):
 class RegenRequest(BaseModel):
     text: str
     scene: dict | None = None      # cảnh hiện tại ở client (có thể đã đổi thứ tự / cắt) — ưu tiên hơn job.scenes[idx]
+
+
+class DownloadJobRequest(BaseModel):
+    urls: list[str]
+    quality: str = 'best'          # best | 1080 | 720 | audio
+    out_dir: str = ''
+    titles: dict[str, str] = {}    # tiêu đề cho link video trực tiếp (để đặt tên file)
+
+
+class ReeditRequest(BaseModel):
+    voice: str | None = None       # đổi giọng khi mở lại (để trống = giữ giọng cũ)
+
+
+class DraftRequest(BaseModel):
+    scenes: list[dict]
+    mixer: dict | None = None
+
+
+class PublishRequest(BaseModel):
+    platforms: list[str] = []
+    tone: str = 'hap-dan'
+    extra: str = ''
+
+
+class ThumbnailRequest(BaseModel):
+    index: int
+    text: str
 
 
 class AiPolishRequest(BaseModel):

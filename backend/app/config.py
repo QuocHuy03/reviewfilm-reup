@@ -13,6 +13,7 @@ DATA_DIR = _USER_DATA or os.path.join(BACKEND_DIR, 'data')
 JOBS_DIR = os.path.join(DATA_DIR, 'jobs')
 ENV_FILE = os.path.join(DATA_DIR, '.env') if _USER_DATA else os.path.join(BACKEND_DIR, '.env')
 SETTINGS_FILE = os.path.join(DATA_DIR, 'settings.json')
+PRESETS_FILE = os.path.join(DATA_DIR, 'presets.json')       # mẫu cấu hình theo kênh
 
 os.makedirs(JOBS_DIR, exist_ok=True)
 
@@ -22,6 +23,7 @@ API_KEYS = {
     'FPT_API_KEY': 'FPT.AI (giọng cao cấp)',
     'ELEVENLABS_API_KEY': 'ElevenLabs',
     'VIETTEL_AI_TOKEN': 'Viettel AI',
+    'CAPCUT_COOKIE': 'Tài khoản CapCut (tuỳ chọn)',
 }
 
 DEFAULT_SETTINGS = {
@@ -54,6 +56,37 @@ def save_settings(patch):
         with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return data
+
+
+def load_presets():
+    try:
+        with open(PRESETS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_preset(name, mode, cfg):
+    """Thêm / ghi đè mẫu theo tên (không phân biệt hoa thường)."""
+    name = (name or '').strip()[:60]
+    if not name:
+        raise ValueError('Tên mẫu đang trống.')
+    with _lock:
+        items = [p for p in load_presets() if p.get('name', '').lower() != name.lower()]
+        items.append({'name': name, 'mode': mode, 'cfg': cfg})
+        items.sort(key=lambda p: p['name'].lower())
+        with open(PRESETS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        return items
+
+
+def delete_preset(name):
+    with _lock:
+        items = [p for p in load_presets() if p.get('name', '').lower() != (name or '').strip().lower()]
+        with open(PRESETS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        return items
 
 
 def _read_env():
@@ -95,6 +128,9 @@ def save_api_keys(values):
             if k not in API_KEYS:
                 continue
             v = (v or '').strip()
+            if k == 'CAPCUT_COOKIE' and v:
+                from core.capcut_tts import normalize_cookie
+                v = normalize_cookie(v)          # JSON / nhiều dòng → 1 dòng "a=b; c=d"
             if v:
                 env[k] = v
                 os.environ[k] = v

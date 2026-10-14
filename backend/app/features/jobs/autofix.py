@@ -211,28 +211,29 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
         out = job.result['output_path']
         backup = (out + '.bak', [dict(s) for s in job.scenes], qa)
         shutil.copy2(out, backup[0])          # vòng này làm tệ hơn → khôi phục
-        try:
+        before = qa['score']
+        try:                                   # lỗi giữa chừng → trả lại đúng bản trước, không để sót .bak (cỡ cả video)
             if changed or p['rerender']:
                 job.scenes = scenes
                 render()
                 actions.append('dựng lại video')
+            if p['audio'] and normalize_audio(job.result['output_path'], log):
+                actions.append('chuẩn hoá âm lượng')
+            if p['srt'] or changed:
+                write_srt()
+                if p['srt']:
+                    actions.append('xuất lại phụ đề')
+            if actions:
+                qa = check_video(out, job.scenes, job.config, job.result.get('srt_path', ''))
         except BaseException:
             os.replace(backup[0], out)
             job.scenes = backup[1]
             raise
-        if p['audio'] and normalize_audio(job.result['output_path'], log):
-            actions.append('chuẩn hoá âm lượng')
-        if p['srt'] or changed:
-            write_srt()
-            if p['srt']:
-                actions.append('xuất lại phụ đề')
         if not actions:
             os.remove(backup[0])
             log('   [Tự sửa] Không có thay đổi nào áp dụng được — dừng.', 'info')
             break
 
-        before = qa['score']
-        qa = check_video(out, job.scenes, job.config, job.result.get('srt_path', ''))
         if qa['score'] < before:
             os.replace(backup[0], out)
             job.scenes, qa = backup[1], backup[2]

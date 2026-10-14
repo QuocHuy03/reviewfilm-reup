@@ -7,7 +7,8 @@ from fastapi.responses import StreamingResponse
 
 from app.config import load_settings
 from .manager import TERMINAL, manager
-from .models import AiPolishRequest, BurnJobRequest, ConfirmRequest, RegenRequest, SrtJobRequest, VideoJobRequest
+from .models import (AiPolishRequest, BurnJobRequest, ConfirmRequest, DownloadJobRequest, DraftRequest, PublishRequest, ReeditRequest, RegenRequest, SrtJobRequest,
+                     ThumbnailRequest, VideoJobRequest)
 from . import pipelines
 
 router = APIRouter(prefix='/api/jobs', tags=['jobs'])
@@ -24,7 +25,25 @@ RUNNERS = {
     'reup': (pipelines.run_video_pipeline, 'Dịch & Reup'),
     'srt': (pipelines.run_srt_pipeline, 'Tách SRT'),
     'burn': (pipelines.run_burn_pipeline, 'Ghép phụ đề'),
+    'download': (pipelines.run_download_pipeline, 'Tải video'),
 }
+
+
+MIN_FREE_GB = 3
+
+
+def _check_disk(out_dir):
+    """Thư mục tạm nằm cùng ổ với thư mục xuất (video tải về + audio + clip) — hết chỗ giữa chừng thì job hỏng."""
+    import shutil
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        free = shutil.disk_usage(out_dir).free / 1024 ** 3
+    except OSError:
+        return
+    if free < MIN_FREE_GB:
+        drive = os.path.splitdrive(os.path.abspath(out_dir))[0] or out_dir
+        raise HTTPException(400, f'Ổ {drive} chỉ còn {free:.1f} GB trống — cần ít nhất {MIN_FREE_GB} GB để xử lý video. '
+                                 'Dọn bớt ổ hoặc đổi thư mục xuất sang ổ khác (Cài đặt).')
 
 
 def _start(kind, cfg):
@@ -36,6 +55,7 @@ def _start(kind, cfg):
     if kind == 'burn' and not os.path.isfile(cfg.get('srt_path', '')):
         raise HTTPException(400, 'Không tìm thấy file SRT.')
     cfg['out_dir'] = cfg.get('out_dir') or load_settings()['output_dir']
+    _check_disk(cfg['out_dir'])
     (runner, prefix) = RUNNERS[kind]
     return manager.start(kind, cfg, runner, _title(cfg['inp'], prefix)).summary()
 
@@ -58,6 +78,21 @@ def create_srt_job(req: SrtJobRequest):
 @router.post('/burn')
 def create_burn_job(req: BurnJobRequest):
     return _start('burn', req.model_dump())
+
+
+@router.post('/download')
+def create_download(req: DownloadJobRequest):
+    """Tải 1 hoặc nhiều video từ link — 1 job, tải lần lượt."""
+    from core.downloader import detect_platform, extract_url
+    urls = list(dict.fromkeys(extract_url(u) for u in req.urls if u.strip()))
+    urls = [u for u in urls if u.startswith('http')]
+    if not urls:
+        raise HTTPException(400, 'Chưa có link hợp lệ (cần bắt đầu bằng http…).')
+    out_dir = req.out_dir or os.path.join(load_settings()['output_dir'], 'Downloads')
+    _check_disk(out_dir)
+    cfg = {'urls': urls, 'quality': req.quality, 'out_dir': out_dir, 'titles': req.titles}
+    title = f'Tải video · {detect_platform(urls[0])[1]} · {urls[0].split("?")[0][-40:]}' if len(urls) == 1 else f'Tải video · {len(urls)} link'
+    return manager.start('download', cfg, pipelines.run_download_pipeline, title).summary()
 
 
 @router.post('/{job_id}/resume')
@@ -89,6 +124,37 @@ def retry_job(job_id: str):
     return _start(old.kind, dict(old.config))
 
 
+@router.post('/{job_id}/reedit')
+def reedit_job(job_id: str, req: ReeditRequest):
+    """Mở lại hậu kỳ cho video đã xong: job mới dùng lại kịch bản cũ, đọc lại giọng rồi dừng ở bước Xem trước.
+    Bỏ qua Whisper + Vision AI + viết kịch bản (vài phút). Job cũ giữ nguyên trong lịch sử."""
+    try:
+        old = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if old.kind not in ('review', 'reup') or old.status != 'done' or not old.scenes:
+        raise HTTPException(409, 'Chỉ mở lại được job Review / Reup đã hoàn thành.')
+    video = old.result.get('video_path') or (old.config.get('inp') if os.path.isfile(old.config.get('inp', '')) else '')
+    if not video or not os.path.isfile(video):
+        raise HTTPException(409, 'Không còn file video gốc (video tải từ link đã bị dọn cùng thư mục tạm) — hãy Chạy lại từ đầu.')
+    cfg = dict(old.config)
+    if req.voice:
+        cfg['voice'] = req.voice
+    cfg.update(script_edit=False, scene_preview=True, auto_post=False)   # giữ nguyên kịch bản đã duyệt, dừng ở Xem trước
+    keep = ('voiceover', 'subtitle', 'clip_start', 'clip_end', 'original_text', 'speaker', 'scene_id', 'description')
+    scenes = [{k: s[k] for k in keep if k in s} for s in old.scenes if not s.get('excluded')]
+    base = os.path.splitext(os.path.basename(old.result.get('output_path') or video))[0]
+    base = base.removesuffix('_review').removesuffix('_reup')
+    checkpoint = {'done': 'edit', 'next_label': 'Tạo giọng đọc', 'video_path': video, 'base': base,
+                  'lang': cfg.get('source_lang', 'auto'), 'transcript': {'segments': []}, 'mixer': {}}
+    result = {k: old.result[k] for k in ('video_path', 'original_srt', 'film') if old.result.get(k)}
+    (runner, prefix) = RUNNERS[old.kind]
+    name = old.title.split(' · ', 1)[-1]
+    job = manager.start_seeded(old.kind, cfg, runner, f'{prefix} · {name} (hậu kỳ lại)', scenes, checkpoint, result)
+    job.log(f'[HẬU KỲ LẠI] Dùng lại kịch bản {len(scenes)} cảnh từ job {old.id} — bỏ qua Whisper & AI viết kịch bản', 'info')
+    return job.summary()
+
+
 @router.get('/{job_id}')
 def get_job(job_id: str):
     try:
@@ -106,6 +172,22 @@ def confirm(job_id: str, req: ConfirmRequest):
     if not job.waiting:
         raise HTTPException(409, 'Job không ở trạng thái chờ xác nhận.')
     job.resolve(req.model_dump())
+    return {'ok': True}
+
+
+@router.put('/{job_id}/draft')
+def save_draft(job_id: str, req: DraftRequest):
+    """Tự lưu chỉnh sửa đang làm ở bước chờ (sửa kịch bản / xem trước) — quay lại màn hình hay mở lại app vẫn còn."""
+    import time
+    try:
+        job = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    stage = job.waiting or (job.draft or {}).get('waiting')
+    if not stage:
+        raise HTTPException(409, 'Job không ở bước chờ chỉnh sửa.')
+    job.draft = {'waiting': stage, 'scenes': req.scenes, 'mixer': req.mixer, 'at': time.time()}
+    job.save()
     return {'ok': True}
 
 
@@ -152,6 +234,41 @@ def recheck_quality(job_id: str):
     qa = pipelines.run_qa(job)
     job.save()
     return qa
+
+
+def _done_video_job(job_id):
+    try:
+        job = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if not job.result.get('output_path') or job.kind not in ('review', 'reup'):
+        raise HTTPException(409, 'Job chưa có video.')
+    return job
+
+
+@router.post('/{job_id}/publish')
+def make_publish(job_id: str, req: PublishRequest):
+    """AI viết bài đăng theo nền tảng (YouTube, Shorts, TikTok, Facebook, Instagram) + thumbnail."""
+    from .publish import generate
+    job = _done_video_job(job_id)
+    try:
+        pack = generate(job, req.platforms, req.tone, req.extra, job.log)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    job.save()
+    return pack
+
+
+@router.post('/{job_id}/publish/thumbnail')
+def edit_thumbnail(job_id: str, req: ThumbnailRequest):
+    from .publish import redo_thumbnail
+    job = _done_video_job(job_id)
+    try:
+        pack = redo_thumbnail(job, req.index, req.text, job.log)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    job.save()
+    return pack
 
 
 @router.post('/{job_id}/cancel')

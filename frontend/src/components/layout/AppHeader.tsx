@@ -12,6 +12,7 @@ const TITLES: Record<Page, { title: string; sub: string }> = {
   create: { title: "Tạo video", sub: "Review phim bằng AI hoặc Dịch & Reup" },
   studio: { title: "Studio", sub: "Tiến trình, kịch bản và xem trước" },
   subtitles: { title: "Phụ đề", sub: "Tách SRT · Ghép phụ đề vào video" },
+  download: { title: "Tải video", sub: "Douyin · TikTok · Bilibili · Kuaishou · YouTube… — tải về rồi làm Review / Reup" },
   voices: { title: "Giọng đọc", sub: "Nghe mẫu và tạo thử giọng" },
   jobs: { title: "Lịch sử", sub: "Các job đã chạy và file xuất" },
   settings: { title: "Cài đặt", sub: "API key, mặc định, hệ thống" },

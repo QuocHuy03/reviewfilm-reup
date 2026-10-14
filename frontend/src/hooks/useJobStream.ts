@@ -10,12 +10,13 @@ export function useJobStream(jobId: string | null) {
   const [logs, setLogs] = useState<LogLine[]>([])
   const cursor = useRef(0)
   const [nonce, setNonce] = useState(0)
+  const [error, setError] = useState("")
 
   useEffect(() => {
     if (!jobId) return
     let es: EventSource | null = null
     let closed = false
-    setLogs([]); setJob(null); cursor.current = 0
+    setLogs([]); setJob(null); setError(""); cursor.current = 0
 
     api.job(jobId).then((d) => {
       if (closed) return
@@ -24,7 +25,8 @@ export function useJobStream(jobId: string | null) {
       if (["done", "error", "cancelled"].includes(d.status)) return
       es = new EventSource(api.streamUrl(jobId, cursor.current))
       es.onmessage = (ev) => {
-        const p = JSON.parse(ev.data) as StreamPayload
+        let p: StreamPayload
+        try { p = JSON.parse(ev.data) as StreamPayload } catch { return }
         // EventSource reconnect gửi lại từ `since` cũ → chỉ lấy log chưa nhận
         const fresh = p.logs.slice(Math.max(0, cursor.current - (p.cursor - p.logs.length)))
         cursor.current = Math.max(cursor.current, p.cursor)
@@ -33,12 +35,12 @@ export function useJobStream(jobId: string | null) {
         if (["done", "error", "cancelled"].includes(p.state.status)) es?.close()
       }
       es.onerror = () => { /* EventSource tự reconnect */ }
-    }).catch(() => {})
+    }).catch((e) => { if (!closed) setError((e as Error).message || "Không tải được job") })
 
     return () => { closed = true; es?.close() }
   }, [jobId, nonce])
 
   /** Tải lại + mở lại stream (sau khi tiếp tục / chạy lại job đã kết thúc). */
   const reload = () => setNonce((n) => n + 1)
-  return { job, setJob, logs, reload }
+  return { job, setJob, logs, reload, error }
 }

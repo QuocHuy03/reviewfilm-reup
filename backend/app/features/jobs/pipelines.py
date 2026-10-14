@@ -26,7 +26,6 @@ from .manager import JobCancelled
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v', '.ts', '.wmv')
 DEFAULT_LAYOUT = '2 dòng gọn (khuyên dùng)'
 DEFAULT_STYLE = 'Mặc định (chữ trắng, viền đen)'
-CLONE_VOICES = ('local-xtts', 'local-gptsovits', 'vieneu-clone')
 MULTI_VOICE_HINT = ('Ở những phân cảnh quan trọng, hãy giữ lại 1-2 câu thoại đắt giá của nhân vật dưới dạng trích dẫn '
                     'trực tiếp trong ngoặc kép (ví dụ: Nàng nói: "..."), thay vì kể gián tiếp toàn bộ.')
 
@@ -192,7 +191,14 @@ def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False):
     job.log('[2] Whisper nhận dạng giọng nói...', 'info')
     lang = C.LANGUAGE_MAP.get(cfg.get('source_lang', 'Tự động'), 'auto')
     transcript = transcribe_audio(video_path, cfg.get('whisper_model', 'base'), temp_dir, lang, job.log,
-                                  device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam)
+                                  device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam, should_stop=lambda: job.cancelled)
+    job.check()
+    if transcript is None:
+        # None = Whisper/trích audio LỖI (khác với "không có lời thoại"). Chỉ coi là không lời khi video không có tiếng.
+        from core.video_editor import _has_audio
+        if _has_audio(video_path):
+            raise RuntimeError('Whisper chạy lỗi (xem nhật ký phía trên) — bấm Tiếp tục để thử lại, hoặc đổi Whisper model nhỏ hơn.')
+        job.log('   Video không có track âm thanh.', 'warn')
     if transcript and transcript.get('segments'):
         kept = [seg for seg in transcript['segments'] if not _is_hallucination(seg.get('text', ''))]
         dropped = len(transcript['segments']) - len(kept)
@@ -217,13 +223,10 @@ def _translate(job, segments, lang, cfg, video_path, cost=None):
         video_filename=os.path.basename(video_path), allow_web=use_ai)
 
 
-def synthesize(scenes, voice_label, out_dir, log, ref_audio='', strict=False):
+def synthesize(scenes, voice_label, out_dir, log, strict=False):
     from core.tts_engine import generate_tts_per_scene
     voice = _voice_id(voice_label)
-    if voice in CLONE_VOICES and not ref_audio:
-        log('   [WARN] Clone giọng cần file mẫu — tự chuyển sang VieNeu Bình An.', 'warn')
-        voice = 'vieneu-binh-an'
-    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, ref_audio_path=ref_audio,
+    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log,
                                   fptai_key=get_key('FPT_API_KEY'), openai_key=NO_KEY,
                                   elevenlabs_key=get_key('ELEVENLABS_API_KEY'),
                                   viettel_key=get_key('VIETTEL_AI_TOKEN'), strict_voice=strict)
@@ -364,6 +367,8 @@ def _step_script(run):
                              openai_key=NO_KEY, quality='standard', film_context=film_ctx)
     if not analysis:
         raise RuntimeError('Phân tích nội dung thất bại.')
+    if isinstance(analysis, dict):     # giữ phần tóm tắt cho bước viết bài đăng
+        job.result['film'] = {k: analysis.get(k) for k in ('title_guess', 'genre', 'setting', 'themes', 'summary') if analysis.get(k)}
     job.check()
 
     job.set_progress(45, 'Viết kịch bản')
@@ -420,11 +425,43 @@ def _step_voice(run):
         rendered = _multi_voice(job, voice_label, audio_dir, cast_key, cfg)
     else:
         run.log(f'[5] Tạo giọng đọc: {voice_label}', 'info')
-        rendered = synthesize([dict(s) for s in job.scenes], voice_label, audio_dir, job.log,
-                              ref_audio=cfg.get('ref_audio', ''), strict=cfg.get('strict_voice', False))
+        rendered = synthesize([dict(s) for s in job.scenes], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False))
     if not rendered:
         raise RuntimeError('Tạo giọng đọc thất bại.')
+    rendered = _fill_missing_voices(job, rendered, voice_label, audio_dir, cfg)
     job.scenes = [_clean_scene(s) for s in rendered]
+
+
+EDGE_BACKUP_VOICE = 'Edge TTS — Nữ Bắc (miễn phí)'
+
+
+def _fill_missing_voices(job, rendered, voice_label, audio_dir, cfg):
+    """Engine TTS bỏ qua cảnh lỗi (mạng, bị chặn tần suất…) → video sẽ mất đoạn mà không ai biết.
+    Đọc lại riêng từng cảnh thiếu; vẫn lỗi thì đọc bằng Edge; vẫn không được thì dừng job, báo rõ cảnh nào."""
+    wanted = [(i, s) for (i, s) in enumerate(job.scenes) if (s.get('voiceover') or '').strip()]
+    got = {int(s.get('_original_index', -1)) for s in rendered}
+    missing = [(i, s) for (i, s) in wanted if i not in got]
+    if not missing:
+        return rendered
+    job.log(f"   [WARN] {len(missing)} cảnh chưa có giọng ({', '.join(f'#{i + 1}' for (i, _) in missing[:10])}) — đọc lại từng cảnh...", 'warn')
+    strict = cfg.get('strict_voice', False)
+    fixed, still = [], []
+    for (i, s) in missing:
+        out = None
+        for label in [voice_label] + ([] if strict or voice_label == EDGE_BACKUP_VOICE else [EDGE_BACKUP_VOICE]):
+            job.check()
+            r = synthesize([dict(s)], label, os.path.join(audio_dir, f'retry_{i}'), job.log, strict=strict)
+            if r and r[0].get('tts_path'):
+                out = {**r[0], '_original_index': i}
+                if label != voice_label:
+                    job.log(f'   Cảnh #{i + 1}: đọc bằng {label} thay giọng đã chọn', 'warn')
+                break
+        (fixed if out else still).append(out or i)
+    if still:
+        raise RuntimeError(f"Không tạo được giọng cho cảnh {', '.join(f'#{i + 1}' for i in still[:10])} — "
+                           'kiểm tra mạng / đổi giọng rồi bấm Tiếp tục.')
+    job.log(f'   Đã đọc bù {len(fixed)} cảnh', 'ok')
+    return sorted(rendered + fixed, key=lambda s: int(s.get('_original_index', 0)))
 
 
 def _step_autopost(run):
@@ -463,8 +500,7 @@ def _step_autopost(run):
                 if run.is_review:
                     sc['subtitle'] = e['voiceover']
                 out_dir = os.path.join(run.temp_dir, 'audio', f"autopost_{e['id']}")
-                rendered = synthesize([dict(sc)], cfg.get('voice', ''), out_dir, job.log,
-                                      ref_audio=cfg.get('ref_audio', ''), strict=cfg.get('strict_voice', False))
+                rendered = synthesize([dict(sc)], cfg.get('voice', ''), out_dir, job.log, strict=cfg.get('strict_voice', False))
                 if rendered and rendered[0].get('tts_path'):
                     sc.update({k: v for (k, v) in rendered[0].items() if k.startswith('tts_') or k == '_tts_engine_used'})
                     regen_ok += 1
@@ -539,6 +575,13 @@ def _step_render(run):
         raise
     except Exception as e:               # QA/tự sửa chỉ để nâng chất lượng — không làm hỏng video đã dựng xong
         run.log(f'   [WARN] Kiểm tra/tự sửa video lỗi: {e}', 'warn')
+    if cfg.get('auto_publish', True) and _web_ai().available():
+        job.set_progress(99, 'Viết bài đăng')
+        try:
+            from .publish import generate
+            generate(job, log=job.log)
+        except Exception as e:           # bài đăng viết lại được ở màn Hoàn thành
+            run.log(f'   [WARN] Chưa viết được bài đăng: {e} — bấm "Bài đăng AI" ở màn Hoàn thành để thử lại.', 'warn')
 
 
 def _render(run, out_path):
@@ -550,7 +593,9 @@ def _render(run, out_path):
                                 target_resolution=cfg.get('target_resolution') or '1920x1080',
                                 sub_source_mode=sub_source, is_reup=not run.is_review,
                                 mirror_video=bool(cfg.get('mirror_video')), video_speed=_speed(cfg),
+                                should_stop=lambda: job.cancelled,
                                 **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer))
+    job.check()
     if not result or not os.path.isfile(out_path):
         raise RuntimeError('Dựng video thất bại.')
     job.result['output_path'] = out_path
@@ -572,7 +617,13 @@ def _auto_fix(run, qa):
     def render():
         job.check()
         tmp = os.path.splitext(out_path)[0] + '.fixing.mp4'
-        _render(run, tmp)
+        try:
+            _render(run, tmp)
+        except BaseException:
+            for f in (tmp, os.path.splitext(tmp)[0] + '.srt', os.path.splitext(tmp)[0] + '.ass'):
+                if os.path.isfile(f):
+                    os.remove(f)
+            raise
         os.replace(tmp, out_path)
         for ext in ('.srt', '.ass'):       # video_editor ghi kèm phụ đề cạnh file tạm → thay vào bản chính
             side = os.path.splitext(tmp)[0] + ext
@@ -583,8 +634,7 @@ def _auto_fix(run, qa):
 
     def synth(scene, tag):
         job.check()
-        rendered = synthesize([scene], cfg.get('voice', ''), os.path.join(run.temp_dir, 'audio', tag), job.log,
-                              ref_audio=cfg.get('ref_audio', ''), strict=cfg.get('strict_voice', False))
+        rendered = synthesize([scene], cfg.get('voice', ''), os.path.join(run.temp_dir, 'audio', tag), job.log, strict=cfg.get('strict_voice', False))
         if rendered and rendered[0].get('tts_path'):
             return _clean_scene({**scene, **rendered[0]})
         return None
@@ -615,7 +665,7 @@ def _multi_voice(job, voice_label, audio_dir, cast_key, cfg):
         job.log(f'   [WARN] Phân vai lỗi ({e}) — đọc 1 giọng.', 'warn')
         characters = None
     if not characters:
-        return synthesize(scenes, voice_label, audio_dir, job.log, ref_audio=cfg.get('ref_audio', ''),
+        return synthesize(scenes, voice_label, audio_dir, job.log,
                           strict=cfg.get('strict_voice', False))
     (vmap, mi, fi) = ({}, 0, 0)
     for c in characters:
@@ -647,8 +697,7 @@ def regenerate_scene(job, idx, text, scene=None):
     if scene.get('subtitle') in (None, '') or job.config.get('mode') == 'review':
         scene['subtitle'] = text
     out_dir = os.path.join(job.temp_dir, 'audio', f'regen_{uuid.uuid4().hex[:6]}')
-    rendered = synthesize([scene], job.config.get('voice', ''), out_dir, job.log,
-                          ref_audio=job.config.get('ref_audio', ''), strict=job.config.get('strict_voice', False))
+    rendered = synthesize([scene], job.config.get('voice', ''), out_dir, job.log, strict=job.config.get('strict_voice', False))
     if not rendered or not rendered[0].get('tts_path'):
         raise RuntimeError('Không tạo được giọng cho câu này.')
     new = _clean_scene({**scene, **rendered[0]})
@@ -719,6 +768,55 @@ def _force_style(style):
     ])
 
 
+def run_download_pipeline(job):
+    """Tải nhiều video từ link (YouTube, TikTok, Douyin, Bilibili, Kuaishou, Tiểu Hồng Thư…) — lần lượt, có tiến độ."""
+    from core.downloader import detect_platform, download, normalize
+    cfg = job.config
+    urls = [normalize(u) for u in cfg.get('urls') or [] if u.strip()]
+    out_dir = cfg.get('out_dir') or os.path.join(load_settings()['output_dir'], 'Downloads')
+    os.makedirs(out_dir, exist_ok=True)
+    items = [{'url': u, 'platform': detect_platform(u)[1]} for u in urls]
+    job.result['items'] = items
+    job.result['out_dir'] = out_dir
+    n = len(urls)
+    for (i, it) in enumerate(items):
+        job.check()
+        job.log(f"[{i + 1}/{n}] Tải {it['platform']}...", 'info')
+
+        def prog(pct, size, speed, eta, i=i):
+            job.progress = int((i + pct / 100) / n * 100)
+            job.stage = f'Đang tải {i + 1}/{n} · {pct:.0f}%' + (f' · {size}' if size else '') + (f' · {speed}' if speed else '')
+            job.save(throttle=True)
+
+        try:
+            path = download(it['url'], out_dir, job.log, cfg.get('quality', 'best'), prog, should_stop=lambda: job.cancelled,
+                            title=(cfg.get('titles') or {}).get(it['url'], ''))
+            it.update(path=path, size=os.path.getsize(path))
+            job.log(f'   [OK] {os.path.basename(path)} ({os.path.getsize(path) / 1_048_576:.1f} MB)', 'ok')
+        except RuntimeError as e:
+            job.check()
+            it['error'] = str(e)
+            job.log(f'   [LỖI] {e}', 'err')
+        job.save()
+    ok = sum(1 for it in items if it.get('path'))
+    if not ok:
+        raise RuntimeError(items[0].get('error') if n == 1 else f'Không tải được video nào ({n} link) — xem chi tiết từng link.')
+    job.result['output_path'] = next(it['path'] for it in items if it.get('path'))
+    job.log(f'[XONG] Tải được {ok}/{n} video → {out_dir}', 'ok')
+
+
+def _audio_codec(path):
+    """Codec âm thanh của file — AAC/MP3 chép thẳng vào .mp4 được; WMA/PCM/Vorbis phải mã hoá lại."""
+    from core.utils import FFPROBE_EXE
+    try:
+        r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name',
+                            '-of', 'default=nw=1:nk=1', path], capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           timeout=20, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return r.stdout.strip().lower()
+    except Exception:
+        return ''
+
+
 def run_burn_pipeline(job):
     from core.utils import FFMPEG_EXE, get_video_duration, run_subprocess
     cfg = job.config
@@ -748,7 +846,8 @@ def run_burn_pipeline(job):
         job.log(f'[1] Ghép {len(cues)} dòng phụ đề vào video...', 'info')
         # cwd=temp_dir + đường dẫn tương đối: filter subtitles= của ffmpeg không chịu ký tự ':' của ổ Windows.
         cmd = [FFMPEG_EXE, '-y', '-i', video, '-vf', f"subtitles=subs.srt:fontsdir=fonts:force_style='{_force_style(style)}'",
-               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'copy', out_path]
+               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+               *(['-c:a', 'copy'] if _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k']), out_path]
         dur = get_video_duration(video)
         r = run_subprocess(cmd, timeout=max(600, int(dur * 6)) if dur > 0 else None, cwd=temp_dir,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')

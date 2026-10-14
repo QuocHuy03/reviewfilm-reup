@@ -13,6 +13,7 @@ import { api, bridge } from "@/lib/api"
 import { fmtRelative } from "@/lib/format"
 import type { JobSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { confirmAction } from "@/components/ConfirmHost"
 
 export function StudioPage() {
   const { activeJobId, openJob, go } = useStore()
@@ -46,7 +47,8 @@ export function StudioPage() {
 }
 
 function JobView({ jobId }: { jobId: string }) {
-  const { job, logs, reload } = useJobStream(jobId)
+  const { job, logs, reload, error } = useJobStream(jobId)
+  const { go } = useStore()
   const [logOpen, setLogOpen] = useState(false)
   const { fullscreen, setFullscreen } = useStore()
 
@@ -60,7 +62,24 @@ function JobView({ jobId }: { jobId: string }) {
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [fullscreen, setFullscreen])
+  if (!job && error) return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+      <p className="text-sm font-medium">Không mở được job này</p>
+      <p className="max-w-sm text-xs text-muted-foreground">{/không tồn tại|404/i.test(error) ? "Job đã bị xoá khỏi lịch sử." : error}</p>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={reload}>Thử lại</Button>
+        <Button size="sm" onClick={() => go("jobs")}>Về Lịch sử</Button>
+      </div>
+    </div>
+  )
   if (!job) return <div className="flex h-full items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+  if (job.kind === "download") return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+      <p className="text-sm font-medium">{job.title}</p>
+      <p className="text-xs text-muted-foreground">Job tải video — xem tiến độ và file đã tải ở trang Tải video.</p>
+      <Button size="sm" onClick={() => go("download")}>Mở trang Tải video</Button>
+    </div>
+  )
 
   const running = job.status === "running" || job.status === "queued"
   const outPath = job.result.output_path || job.result.vi_srt || job.result.original_srt
@@ -80,7 +99,11 @@ function JobView({ jobId }: { jobId: string }) {
           <div className="flex items-center gap-0.5">
             {(running || job.status === "waiting") && (
               <Button variant="ghost" size="icon-sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive" title="Dừng job"
-                onClick={() => api.cancel(job.id).then(() => toast("Đang dừng job…"))}><Square /></Button>
+                onClick={async () => {
+                  if (!await confirmAction({ title: "Dừng job này?", danger: true, action: "Dừng job",
+                    desc: "Bước đang chạy sẽ dừng lại. Sau đó có thể bấm Tiếp tục để chạy tiếp từ bước đã xong gần nhất." })) return
+                  api.cancel(job.id).then(() => toast("Đang dừng job…")).catch((e) => toast.error("Không dừng được", { description: (e as Error).message }))
+                }}><Square /></Button>
             )}
             {outPath && <Button variant="ghost" size="icon-sm" title="Mở thư mục kết quả" onClick={() => bridge.reveal(outPath)}><FolderOpen /></Button>}
             <Button variant="ghost" size="icon-sm" title={fullscreen ? "Thoát toàn màn hình (Esc)" : "Toàn màn hình (F)"} onClick={() => setFullscreen(!fullscreen)}>

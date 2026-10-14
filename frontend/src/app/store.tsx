@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api } from "@/lib/api"
 import type { Options, Settings, SystemInfo, Voice } from "@/lib/types"
 
-export type Page = "home" | "create" | "studio" | "subtitles" | "voices" | "jobs" | "settings"
+export type Page = "home" | "create" | "download" | "studio" | "subtitles" | "voices" | "jobs" | "settings"
 
 type Store = {
   page: Page
@@ -52,7 +52,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => { alive = false }
   }, [])
 
-  const refreshSystem = useCallback(() => { api.system().then(setSystem).catch(() => {}) }, [])
+  // Sau khi lưu key / đăng nhập CapCut, AI: cả trạng thái hệ thống lẫn giọng "dùng được" đều đổi
+  const refreshSystem = useCallback(() => {
+    api.system().then(setSystem).catch(() => {})
+    api.voices().then(setVoices).catch(() => {})
+  }, [])
   const openJob = useCallback((id: string) => { setActiveJobId(id); setPage("studio") }, [])
 
   const value = useMemo<Store>(() => ({

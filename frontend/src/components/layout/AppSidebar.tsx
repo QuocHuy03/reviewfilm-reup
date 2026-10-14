@@ -1,4 +1,4 @@
-import { AudioLines, Captions, Clapperboard, Film, History, LayoutDashboard, Settings } from "lucide-react"
+import { AudioLines, Captions, Clapperboard, Download, Film, History, LayoutDashboard, Settings } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useStore, type Page } from "@/app/store"
@@ -7,13 +7,19 @@ import { LogoMark } from "./Logo"
 
 type NavItem = { page: Page; label: string; icon: LucideIcon; hint: string }
 
-const MAIN: NavItem[] = [
-  { page: "home", label: "Tổng quan", icon: LayoutDashboard, hint: "Trạng thái & job gần đây" },
-  { page: "create", label: "Tạo video", icon: Clapperboard, hint: "Review phim / Dịch & Reup" },
-  { page: "studio", label: "Studio", icon: Film, hint: "Theo dõi & chỉnh kịch bản" },
-  { page: "subtitles", label: "Phụ đề", icon: Captions, hint: "Tách SRT · Ghép phụ đề" },
-  { page: "voices", label: "Giọng đọc", icon: AudioLines, hint: "Nghe thử & chọn giọng" },
-  { page: "jobs", label: "Lịch sử", icon: History, hint: "Tất cả job đã chạy" },
+// Chia nhóm: tổng quan · làm video (theo thứ tự công việc) · công cụ lẻ
+const GROUPS: NavItem[][] = [
+  [{ page: "home", label: "Tổng quan", icon: LayoutDashboard, hint: "Trạng thái & job gần đây" }],
+  [
+    { page: "download", label: "Tải video", icon: Download, hint: "Douyin · TikTok · Bilibili · YouTube…" },
+    { page: "create", label: "Tạo video", icon: Clapperboard, hint: "Review phim / Dịch & Reup" },
+    { page: "studio", label: "Studio", icon: Film, hint: "Theo dõi, sửa kịch bản, hậu kỳ" },
+    { page: "jobs", label: "Lịch sử", icon: History, hint: "Tất cả job đã chạy" },
+  ],
+  [
+    { page: "subtitles", label: "Phụ đề", icon: Captions, hint: "Tách SRT · Ghép · Sửa phụ đề" },
+    { page: "voices", label: "Giọng đọc", icon: AudioLines, hint: "Nghe thử & chọn giọng" },
+  ],
 ]
 
 function NavButton({ item, active, onClick, badge }: { item: NavItem; active: boolean; onClick: () => void; badge?: boolean }) {
@@ -54,9 +60,14 @@ export function AppSidebar({ studioBadge }: { studioBadge?: boolean }) {
         </button>
       </div>
       <nav className="mt-3 flex flex-1 flex-col items-center gap-1.5">
-        {MAIN.map((item) => (
-          <NavButton key={item.page} item={item} active={page === item.page} onClick={() => go(item.page)}
-            badge={item.page === "studio" && studioBadge} />
+        {GROUPS.map((group, k) => (
+          <div key={k} className="flex flex-col items-center gap-1.5">
+            {k > 0 && <span className="my-1 h-px w-6 bg-sidebar-border" />}
+            {group.map((item) => (
+              <NavButton key={item.page} item={item} active={page === item.page} onClick={() => go(item.page)}
+                badge={item.page === "studio" && studioBadge} />
+            ))}
+          </div>
         ))}
       </nav>
       <NavButton item={{ page: "settings", label: "Cài đặt", icon: Settings, hint: "API key, mặc định, hệ thống" }}

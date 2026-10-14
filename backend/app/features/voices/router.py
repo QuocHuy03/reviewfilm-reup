@@ -23,11 +23,15 @@ def _group(label, vid):
         return 'VieNeu'
     if vid.startswith('vi-VN-'):
         return 'Edge TTS'
+    if vid.startswith('capcut-'):
+        return 'CapCut'
     return 'Cao cấp (FPT.AI)'
 
 
 def _gender(label, vid):
     l = (label + ' ' + vid).lower()
+    if 'giọng bé' in l:
+        return 'neutral'
     if 'nữ' in l or any(h in l for h in ('lena', 'mia', 'ban mai', 'thu minh', 'quỳnh anh', 'thảo chi', 'yến', 'hoaimy', 'ngọc', 'mỹ', 'trúc', 'linh san', 'lan nhi')):
         return 'female'
     if 'nam' in l or any(h in l for h in ('dũng', 'sơn', 'long', 'tùng', 'khánh', 'quang', 'huy')):
@@ -73,10 +77,10 @@ def availability(vid):
     """→ (dùng được?, cần gì). Giọng chưa dùng được sẽ tự đổi sang Edge TTS khi tạo giọng."""
     if vid.startswith('vi-VN-'):
         return True, ''
+    if vid.startswith('capcut-'):
+        return True, ''          # cookie CapCut tuỳ chọn
     if vid.startswith(('vieneu3-', 'vieneu-')):
         return (True, '') if _vieneu_available() else (False, 'Cần cài Model Pack VieNeu')
-    if vid in ('local-xtts', 'local-gptsovits'):
-        return False, 'Cần Model Pack + máy có GPU'
     return (True, '') if get_key('FPT_API_KEY') else (False, 'Cần FPT_API_KEY (Cài đặt → Key giọng đọc)')
 
 
@@ -85,16 +89,17 @@ def list_voices():
     out = []
     for label, vid in C.VOICE_OPTIONS.items():
         ok, need = availability(vid)
-        out.append({'label': label, 'id': vid, 'group': _group(label, vid), 'gender': _gender(label, vid),
-                    'sample': sample_path(vid), 'clone': vid in ('vieneu-clone', 'local-xtts', 'local-gptsovits'),
-                    'free': not (_group(label, vid) == 'Cao cấp (FPT.AI)'), 'available': ok, 'need': need})
+        group = _group(label, vid)
+        # tier: free = dùng ngay, miễn phí · key = cần API key (Cài đặt) · install = cần cài thêm trên máy
+        tier = 'key' if group == 'Cao cấp (FPT.AI)' else 'install' if vid.startswith(('vieneu3-', 'vieneu-')) else 'free'
+        out.append({'label': label, 'id': vid, 'group': group, 'gender': _gender(label, vid),
+                    'sample': sample_path(vid), 'tier': tier, 'free': tier != 'key', 'available': ok, 'need': need})
     return out
 
 
 class TestVoiceRequest(BaseModel):
     voice: str
     text: str = 'Đây là thử nghiệm giọng đọc, xin chào các bạn, chúc một ngày tốt lành.'
-    ref_audio: str = ''
 
 
 @router.post('/test')
@@ -102,7 +107,7 @@ def test_voice(req: TestVoiceRequest):
     text = req.text.strip()
     if not text:
         raise HTTPException(400, 'Câu thử đang trống.')
-    key = (req.voice, text, req.ref_audio)
+    key = (req.voice, text)
     hit = _cache.get(key)
     if hit and os.path.isfile(hit['path']):
         return {**hit, 'cached': True}
@@ -113,7 +118,7 @@ def test_voice(req: TestVoiceRequest):
         from app.features.jobs.pipelines import synthesize
         out_dir = os.path.join(_PREVIEW_DIR, uuid.uuid4().hex[:8])
         res = synthesize([{'voiceover': text, 'subtitle': text, 'clip_start': 0, 'clip_end': 5}], req.voice, out_dir,
-                         lambda m, t=None: logs.append(str(m)), ref_audio=req.ref_audio)
+                         lambda m, t=None: logs.append(str(m)))
         if not res or not res[0].get('tts_path') or not os.path.isfile(res[0]['tts_path']):
             raise HTTPException(500, 'Không tạo được audio thử. ' + ' | '.join(logs[-3:]))
         out = {'path': res[0]['tts_path'], 'duration': res[0].get('tts_duration', 0),

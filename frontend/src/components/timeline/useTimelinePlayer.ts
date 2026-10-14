@@ -51,9 +51,17 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
   const layoutKey = scenes.map((s) => `${s.excluded ? 1 : 0}|${s.tts_path ?? ""}|${s.tts_duration ?? 0}|${s.clip_start}|${s.clip_end}`).join(";")
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const { clips, total } = useMemo(() => layoutClips(scenes), [layoutKey])
-  const [time, setTime] = useState(0)
+  const timeRef = useRef(0)              // thời gian phát mới nhất cho callback ổn định (attachVideo)
+  const [time, setTimeState] = useState(0)
+  const setTime = useCallback((v: number | ((t: number) => number)) => {
+    setTimeState((prev) => { const next = typeof v === "function" ? v(prev) : v; timeRef.current = next; return next })
+  }, [])
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState<Record<TrackKey, boolean>>({ video: false, voice: false, music: false })
+  const mutedRef = useRef(muted)
+  mutedRef.current = muted
+  const originalVolumeRef = useRef(originalVolume)
+  originalVolumeRef.current = originalVolume
   const [videoDuration, setVideoDuration] = useState(Infinity)   // độ dài video gốc — giới hạn khi nới đoạn hình
 
   const voice = useRef<HTMLAudioElement | null>(null)
@@ -178,18 +186,26 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
     else { current.current = c; syncVideo(c, Math.max(0, clamped - c.start), false) }
   }, [play, syncVideo, total])
 
-  /** Video monitor đăng ký vào đây; hiện đúng khung ở đầu phát hiện tại. */
+  /**
+   * Video monitor đăng ký vào đây; hiện đúng khung ở đầu phát hiện tại.
+   * Ổn định (không phụ thuộc thời gian phát) — nếu đổi theo từng khung hình, React tháo/gắn ref liên tục
+   * và mỗi lần lại thêm 1 listener loadedmetadata không bao giờ gỡ (rò bộ nhớ khi phát).
+   */
   const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    if (video.current === el) return
     video.current = el
     if (!el) return
-    el.volume = Math.min(1, originalVolume / 100)
-    el.muted = muted.video
-    const c = clipAt(clipsRef.current, time) ?? clipsRef.current[0]
-    el.addEventListener("loadedmetadata", () => {
+    el.volume = Math.min(1, originalVolumeRef.current / 100)
+    el.muted = mutedRef.current.video
+    const onMeta = () => {
       if (Number.isFinite(el.duration)) setVideoDuration(el.duration)
-      if (c) syncVideo(c, Math.max(0, time - c.start), false)
-    }, { once: true })
-  }, [muted.video, originalVolume, syncVideo, time])
+      const t = timeRef.current
+      const c = clipAt(clipsRef.current, t) ?? clipsRef.current[0]
+      if (c) syncVideo(c, Math.max(0, t - c.start), false)
+    }
+    if (el.readyState >= 1) onMeta()
+    else el.addEventListener("loadedmetadata", onMeta, { once: true })
+  }, [syncVideo])
 
   // Danh sách cảnh đổi (bỏ cảnh / tạo lại giọng) → dừng để bố cục mới có hiệu lực, giữ đầu phát trong giới hạn
   useEffect(() => { stopAll(); setTime((t) => Math.min(t, total)) }, [layoutKey, stopAll, total])

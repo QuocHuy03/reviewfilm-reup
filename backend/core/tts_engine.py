@@ -221,6 +221,24 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
         out = _render_edge_parallel(scenes, _get_fallback_edge_voice(vt_voice_code), rate, log_fn, temp_dir)
         log_fn(f'''   Hoan tat TTS (Edge - fallback tu VT): {len(out)}/{len(nonempty)} canh''')
         return out
+    if voice.lower().startswith('capcut-'):
+        cc_voice = voice[len('capcut-'):]
+        cookie = os.getenv('CAPCUT_COOKIE', '').strip()      # tuỳ chọn — không có vẫn chạy
+        from core.capcut_tts import VOICES as CC_VOICES
+        log_fn(f'''   TTS Engine: CapCut | Giọng: {CC_VOICES.get(cc_voice, (cc_voice,))[0]}{'' if cookie else ' (không cookie)'}''')
+        out = _render_capcut_parallel(scenes, cc_voice, cookie, log_fn, temp_dir)
+        if out and len(out) == len(nonempty):
+            log_fn(f'''   Hoàn tất TTS (CapCut): {len(out)}/{len(nonempty)} cảnh''')
+            return out
+        if strict_voice:
+            log_fn('   [LỖI] CapCut lỗi ở một số cảnh. Đang bật giữ đúng giọng nên KHÔNG tự đổi sang Edge TTS.')
+            return out or []
+        log_fn('   [WARN] CapCut lỗi — đọc lại TOÀN BỘ bằng Edge TTS cho đồng đều giọng'
+               + ('' if cookie else ' (thử dán cookie CapCut ở Cài đặt nếu lỗi lặp lại)') + '...')
+        from core.capcut_tts import edge_fallback
+        out = _render_edge_parallel(scenes, edge_fallback(cc_voice), rate, log_fn, temp_dir)
+        log_fn(f'''   Hoàn tất TTS (Edge - thay CapCut): {len(out)}/{len(nonempty)} cảnh''')
+        return out
     _voice_lower = voice.lower()
     if _voice_lower.startswith('vieneu-') or _voice_lower.startswith('vieneu3-'):
         if not _has_model_pack_entitlement():
@@ -547,6 +565,34 @@ def _render_viettel_parallel(scenes, voice, token, log_fn, temp_dir):
     results = _run_coro(_run_all)
     result_map = _collect_results(results)
     return _build_out_scenes(indexed, result_map, 'viettel', log_fn, '   [WARN] Cảnh {n}: (VT) thất bại, bỏ qua', '   [WARN] Cảnh {n}: audio quá ngắn, bỏ qua')
+_CAPCUT_MAX_CONCURRENCY = 4
+def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir):
+    from core.capcut_tts import CapcutError, synthesize as capcut_synthesize
+    indexed = [(s.get('_original_index', i), s) for (i, s) in enumerate(scenes) if (s.get('voiceover') or '').strip()]
+    log_fn(f'''   Đang tạo giọng CapCut {len(indexed)} cảnh (song song {_CAPCUT_MAX_CONCURRENCY} luồng)...''')
+    errors = []
+    def _one_sync(i, text):
+        out_path = os.path.join(temp_dir, f'''vo_{i:04d}.mp3''')
+        for attempt in range(2):
+            try:
+                capcut_synthesize(text, voice, cookie, out_path)
+                return True
+            except CapcutError as e:
+                if attempt:
+                    errors.append(str(e))
+                    return False
+        return False
+    async def _one(sem, i, text):
+        async with sem:
+            ok = await asyncio.to_thread(_one_sync, i, text)
+            return (i, os.path.join(temp_dir, f'''vo_{i:04d}.mp3'''), ok)
+    async def _run_all():
+        sem = asyncio.Semaphore(_CAPCUT_MAX_CONCURRENCY)
+        return await asyncio.gather(*[_one(sem, i, s.get('voiceover_for_tts', s['voiceover']).strip()) for (i, s) in indexed], return_exceptions=True)
+    result_map = _collect_results(_run_coro(_run_all))
+    if errors:
+        log_fn(f'''   [WARN] CapCut: {errors[0]}''')
+    return _build_out_scenes(indexed, result_map, 'capcut', log_fn, '   [WARN] Cảnh {n}: CapCut thất bại', '   [WARN] Cảnh {n}: audio quá ngắn, bỏ qua')
 VI_PHONETIC_REPLACEMENTS = {'quay': 'kwai', 'tro': 'cher', 'phim': 'feem', 'thuyet': 'tweet', 'truyen': 'chuen', 'tich': 'tick', 'gi': 'zee', 'da': 'dah', 'cung': 'kung', 'tinh': 'ting', 'minh': 'ming', 'kenh': 'keng', 'hop': 'hop', 'chao': 'chow', 'mung': 'mung', 'ban': 'bahn', 'voi': 'veil', 'co': 'co', 'giau': 'zhou', 'nuoc': 'nook', 'mat': 'mat', 'lan': 'luhn', 'cuoi': 'coy', 'bien': 'bee-an', 'tap': 'tub', 'thoi': 'toy', 'su': 'suh', 'hinh': 'hing', 'mot': 'mote', 'vo': 'vo', 'hom': 'hohm', 'nay': 'nay', 'chung': 'choong', 'ta': 'ta', 'se': 'se', 'phan': 'fun', 'tac': 'tack', 'pham': 'fam', 'hap': 'hub', 'dan': 'zen', 'nam': 'nam', 'bac': 'bark', 'nu': 'new', 'nhe': 'nay', 'nhang': 'nyang', 'cam': 'kam', 'trong': 'chong', 'ro': 'roh', 'rang': 'rang', 'pho': 'foe', 'am': 'am', 'the': 'tay', 'hien': 'hee-an', 'tot': 'tot', 'khoe': 'kway', 'khoang': 'kwang', 'manh': 'mang', 'me': 'may', 'nghiem': 'neem', 'tuc': 'took', 'phu': 'foo', 'hanh': 'hang', 'dong': 'dong', 'kinh': 'king', 'di': 'zee', 'huyen': 'huyen', 'bi': 'bee', 'tre': 'chay', 'nang': 'nang', 'tuoi': 'tuoi', 'dien': 'zee-an', 'va': 'veil', 'giong': 'zong', 'doc': 'doc', 'he': 'hay', 'thong': 'tong', 'cau': 'cow', 'den': 'den', 'day': 'they', 'ngam': 'ngam', 'canh': 'kang', 'chu': 'choo', 'that': 'tat', 'von': 'von', 'nen': 'nen', 'som': 'sohm', 'nhan': 'yan', 'dieu': 'zeo', 'thi': 'tee', 'ca': 'kah', 'hai': 'high', 'ong': 'ong', 'cu': 'koo', 'ba': 'bah', 'thu': 'too', 'khang': 'kang', 'coo': 'coo', 'hoi': 'hoy', 'lay': 'lay', 'chan': 'chahn', 'viec': 'vee-ek', 'vat': 'vaht', 'ho': 'hoh', 'so': 'soh', 'de': 'deh', 'lam': 'lahm', 'ky': 'kee', 'luat': 'loo-at', 'tren': 'chen', 'het': 'heht', 'cong': 'cong', 'chi': 'chee', 'dua': 'zuah', 'may': 'may', 'man': 'mahn', 'giup': 'zup', 'tien': 'tee-an', 'xa': 'sah', 'gap': 'gahp', 'sep': 'sehp', 'chuc': 'chook', 'sinh': 'sing', 'nhat': 'nyaht', 'beo': 'beo', 'thich': 'tik', 'cach': 'kack', 'cai': 'kai', 'tao': 'tow', 'noi': 'noy', 'tai': 'tai', 'dung': 'zoong', 'hong': 'hong', 'gia': 'zah', 'tri': 'chee', 'san': 'sahn', 'lich': 'lik', 'phung': 'foong', 'phi': 'fee', 'ngan': 'ngahn', 'sach': 'sack', 'quoc': 'kwok', 'phong': 'fong', 'dap': 'dahp', 'ung': 'oong', 'vuot': 'vuot', 'qua': 'kwah', 'tieu': 'tew', 'chuan': 'chwan', 'danh': 'zang', 'moi': 'moy', 'quan': 'kwan', 'bao': 'bow', 'chac': 'chack', 'ly': 'lee', 'do': 'doh', 'dac': 'dahk', 'nhiem': 'nyee-am', 'sas': 'sas', 'gioi': 'zoy', 'ngo': 'ngoh', 'huan': 'hwan', 'luyen': 'luyen', 'loi': 'loy', 'khoi': 'koy', 'chay': 'chay'}
 def remove_vietnamese_diacritics(text):
     import unicodedata
@@ -902,7 +948,7 @@ def _get_vieneu_cmd():
 def _trim_ref_audio(path, temp_dir, log_fn, max_dur=18.0):
     try:
         from .utils import run_subprocess
-        r = run_subprocess([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        r = run_subprocess([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         dur = float(r.stdout.strip())
     except Exception:
         return path
@@ -1105,7 +1151,7 @@ def _concat_audio_files(paths, out_path, log_fn=print):
     filt = ''.join((f'''[{k}:a]aresample=48000,aformat=sample_fmts=s16:channel_layouts=mono[a{k}];''' for k in range(n))) + ''.join((f'''[a{k}]''' for k in range(n))) + f'''concat=n={n}:v=0:a=1[out]'''
     cmd += ['-filter_complex', filt, '-map', '[out]', out_path]
     try:
-        r = run_subprocess(cmd, timeout=120, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        r = run_subprocess(cmd, timeout=120, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         if r.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 100:
             return out_path
         log_fn(f'''   [WARN] Ghép audio phân vai lỗi: {(r.stderr or '')[-200:]}''')
@@ -1168,7 +1214,7 @@ def generate_tts_multi_voice(scenes, voice_map, narrator_voice, temp_dir, log_fn
 def _audio_duration(path):
     try:
         from .utils import run_subprocess
-        r = run_subprocess([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        r = run_subprocess([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         return float(r.stdout.strip())
     except Exception:
         return 0.0

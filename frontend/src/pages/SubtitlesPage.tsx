@@ -12,10 +12,34 @@ import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { api, bridge, mediaUrl } from "@/lib/api"
-import { fmtClock } from "@/lib/format"
 import { SimpleSelect } from "./CreatePage"
 
 type Cue = { start: number; end: number; text: string }
+
+const srtTime = (t: number) => {
+  const ms = Math.round(t * 1000)
+  const h = Math.floor(ms / 3_600_000), m = Math.floor(ms / 60_000) % 60, s = Math.floor(ms / 1000) % 60
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms % 1000).padStart(3, "0")}`
+}
+/** "00:01:02,500" · "1:02.5" · "62.5" → giây. Sai định dạng → null. */
+const parseSrtTime = (v: string): number | null => {
+  const t = v.trim().replace(",", ".")
+  if (!t) return null
+  const parts = t.split(":").map(Number)
+  if (parts.some((x) => Number.isNaN(x) || x < 0) || parts.length > 3) return null
+  return parts.reduce((acc, x) => acc * 60 + x, 0)
+}
+
+/** Ô thời gian SRT: gõ tự do, chỉ áp dụng khi rời ô / Enter (không nhảy số khi đang gõ). Sai → trả về giá trị cũ. */
+function SrtTime({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const [text, setText] = useState(srtTime(value))
+  useEffect(() => setText(srtTime(value)), [value])
+  const commit = () => { const v = parseSrtTime(text); if (v === null) setText(srtTime(value)); else if (v !== value) onChange(v) }
+  return (
+    <Input value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === "Enter") commit() }}
+      className="tabular h-8 px-1.5 font-mono text-[11px]" title="giờ:phút:giây,mili-giây — vd 00:01:02,500" />
+  )
+}
 
 export function SubtitlesPage() {
   return (
@@ -25,9 +49,10 @@ export function SubtitlesPage() {
         <TabsTrigger value="burn"><Merge /> Ghép phụ đề</TabsTrigger>
         <TabsTrigger value="edit"><FileText /> Sửa SRT</TabsTrigger>
       </TabsList>
-      <TabsContent value="extract" className="min-h-0 overflow-y-auto"><ExtractTab /></TabsContent>
-      <TabsContent value="burn" className="min-h-0 overflow-y-auto"><BurnTab /></TabsContent>
-      <TabsContent value="edit" className="flex min-h-0 flex-col"><EditTab /></TabsContent>
+      {/* forceMount + ẩn tab không chọn: chuyển tab không mất file / chỉnh sửa đang làm */}
+      <TabsContent forceMount value="extract" className="min-h-0 max-w-4xl overflow-y-auto data-[state=inactive]:hidden"><ExtractTab /></TabsContent>
+      <TabsContent forceMount value="burn" className="min-h-0 max-w-4xl overflow-y-auto data-[state=inactive]:hidden"><BurnTab /></TabsContent>
+      <TabsContent forceMount value="edit" className="flex min-h-0 flex-col data-[state=inactive]:hidden"><EditTab /></TabsContent>
     </Tabs>
   )
 }
@@ -59,7 +84,8 @@ function ExtractTab() {
         <Field label="Bố cục dòng"><SimpleSelect value={cfg.sub_layout} onChange={(v) => set("sub_layout", v)} items={Object.keys(options.sub_layouts)} /></Field>
       </div>
       <ToggleRow label="Dịch sang tiếng Việt" checked={cfg.translate} onChange={(v) => set("translate", v)} desc="Xuất thêm file _vi.srt (Google miễn phí, hoặc AI nếu bật bên dưới)." />
-      <ToggleRow label="Dịch bằng AI (DeepSeek / OpenAI)" checked={cfg.ai_translate} onChange={(v) => set("ai_translate", v)} disabled={!cfg.translate} />
+      <ToggleRow label="Dịch bằng AI (ChatGPT / Gemini)" checked={cfg.ai_translate} onChange={(v) => set("ai_translate", v)} disabled={!cfg.translate}
+        desc={system?.web_ai?.chatgpt || system?.web_ai?.gemini ? "Dịch tự nhiên hơn bằng tài khoản đã đăng nhập trong app." : "Chưa đăng nhập ChatGPT/Gemini (Cài đặt → Tài khoản AI) — sẽ dịch bằng Google."} />
       <Field label="Thư mục xuất"><PathInput value={cfg.out_dir} onChange={(v) => set("out_dir", v)} pick={bridge.pickFolder} /></Field>
       <Button className="self-end" disabled={!inp || busy} onClick={start}>{busy ? <Loader2 className="animate-spin" /> : <Wand2 />} Tách SRT</Button>
     </Section>
@@ -121,12 +147,12 @@ function EditTab() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!loaded && <p className="py-14 text-center text-xs text-muted-foreground">Mở một file SRT để sửa từng dòng.</p>}
         {cues.map((c, i) => (
-          <div key={i} className="group grid grid-cols-[40px_170px_1fr_32px] items-start gap-3 border-b border-border/60 px-4 py-2 last:border-0">
+          <div key={i} className="group grid grid-cols-[40px_210px_1fr_32px] items-start gap-3 border-b border-border/60 px-4 py-2 last:border-0">
             <span className="tabular pt-2 text-xs text-muted-foreground">{i + 1}</span>
             <div className="flex items-center gap-1">
-              <Input type="number" step={0.1} value={c.start.toFixed(2)} onChange={(e) => upd(i, { start: Number(e.target.value) })} className="h-8 px-2 text-xs" title={fmtClock(c.start)} />
+              <SrtTime value={c.start} onChange={(v) => upd(i, { start: v })} />
               <span className="text-muted-foreground">→</span>
-              <Input type="number" step={0.1} value={c.end.toFixed(2)} onChange={(e) => upd(i, { end: Number(e.target.value) })} className="h-8 px-2 text-xs" title={fmtClock(c.end)} />
+              <SrtTime value={c.end} onChange={(v) => upd(i, { end: v })} />
             </div>
             <Textarea value={c.text} rows={1} onChange={(e) => upd(i, { text: e.target.value })} className="min-h-8 py-1.5 text-[13px]" />
             <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100" onClick={() => setCues(cues.filter((_, j) => j !== i))}><Trash2 /></Button>

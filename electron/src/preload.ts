@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("rf", {
   backendUrl,
   platform: process.platform,
   pickFile: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke("rf:pickFile", filters),
+  pickFiles: (filters?: { name: string; extensions: string[] }[]) => ipcRenderer.invoke("rf:pickFiles", filters),
   pickFolder: () => ipcRenderer.invoke("rf:pickFolder"),
   openPath: (p: string) => ipcRenderer.invoke("rf:openPath", p),
   showInFolder: (p: string) => ipcRenderer.invoke("rf:showInFolder", p),
@@ -36,6 +37,10 @@ contextBridge.exposeInMainWorld("rf", {
       ipcRenderer.on("update:state", h)
       return () => { ipcRenderer.removeListener("update:state", h) }
     },
+  },
+  capcut: {
+    login: () => ipcRenderer.invoke("capcut:login"),
+    logout: () => ipcRenderer.invoke("capcut:logout"),
   },
   ai: {
     state: () => ipcRenderer.invoke("ai:state"),

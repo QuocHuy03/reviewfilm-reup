@@ -21,7 +21,10 @@ import { basename, fmtClock, fmtDuration } from "@/lib/format"
 import type { AiEdit, JobDetail, Scene } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { checkScenes, fixDurations, issueLevels, type Issue } from "./checks"
+import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
+import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
+import { confirmAction } from "@/components/ConfirmHost"
 
 type Mixer = { original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean }
 type StepState = "pending" | "running" | "done" | "skip" | "error"
@@ -34,7 +37,8 @@ type AutoRun = { steps: AutoStep[]; running: boolean; backup: Scene[]; summary?:
  */
 export function PostEditor({ job }: { job: JobDetail }) {
   const { play, playing, stop } = useAudio()
-  const [scenes, setScenes] = useState<Scene[]>(job.scenes)
+  const draft = draftFor(job, "preview")
+  const [scenes, setScenes] = useState<Scene[]>(draft?.scenes ?? job.scenes)
   const [regen, setRegen] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<"timeline" | "list">("timeline")
@@ -43,7 +47,9 @@ export function PostEditor({ job }: { job: JobDetail }) {
   const { options, go } = useStore()
   const subLayout = options?.sub_layouts[String((job.config as Record<string, unknown>).sub_layout ?? "")]
   const subChars = subLayout ? subLayout.sub_max_chars_per_chunk * Math.max(1, subLayout.sub_max_lines) : 80
-  const [mixer, setMixer] = useState<Mixer>({ original_volume: 8, bgm_path: "", bgm_volume: 5, audio_ducking: true })
+  const [mixer, setMixer] = useState<Mixer>({ original_volume: 8, bgm_path: "", bgm_volume: 5, audio_ducking: true, ...(draft?.mixer as Partial<Mixer> | undefined) })
+  const saveState = useDraftAutosave(job.id, scenes, mixer as unknown as Record<string, unknown>)
+  useEffect(() => { if (draft) toast.info("Đã mở lại bản đang sửa dở") }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const mode = job.kind === "reup" ? "reup" : "review"
   const player = useTimelinePlayer({ scenes, bgmPath: mixer.bgm_path, bgmVolume: mixer.bgm_volume, originalVolume: mixer.original_volume, mode })
   const [selected, setSelected] = useState<number | null>(player.clips[0]?.index ?? null)
@@ -149,6 +155,16 @@ export function PostEditor({ job }: { job: JobDetail }) {
     setSelected(at)
   }
 
+  // Sửa từ các tab: lưu bản Hoàn tác trước mỗi thay đổi; gõ chữ liên tục trong 1 cảnh gộp thành 1 bước (nghỉ > 1.5s = bước mới)
+  const lastText = useRef<{ i: number; t: number }>({ i: -1, t: 0 })
+  const edit = (i: number, patch: Partial<Scene>) => {
+    const typing = "voiceover" in patch || "subtitle" in patch
+    const now = Date.now()
+    if (!typing || lastText.current.i !== i || now - lastText.current.t > 1500) snapshot()
+    lastText.current = typing ? { i, t: now } : { i: -1, t: 0 }
+    update(i, patch)
+  }
+
   const toggleExcluded = (i: number) => {
     snapshot()
     update(i, { excluded: !scenesRef.current[i].excluded })
@@ -234,7 +250,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
         confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking },
       } : { confirmed })
       toast.success(confirmed ? "Đang dựng video…" : "Đã huỷ job")
-    } catch (e) { toast.error((e as Error).message) } finally { setBusy(false) }
+    } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
   }
 
   const current = player.currentClip
@@ -245,6 +261,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
       <StageHeader title="Hậu kỳ & xác nhận" dot="bg-warning animate-pulse"
         meta={<span className="flex items-center gap-2">
           <span>{player.clips.length}/{scenes.length} cảnh · {fmtDuration(player.total)}</span>
+          <SaveBadge state={saveState} />
           {issues.length > 0 ? (
             <button className={cn("flex items-center gap-1 font-medium", errors ? "text-destructive" : "text-warning")} onClick={() => setTab("checks")}>
               <AlertTriangle className="size-3" /> {issues.length} vấn đề
@@ -261,7 +278,10 @@ export function PostEditor({ job }: { job: JobDetail }) {
             title="Căn hình theo lời + AI (ChatGPT/Gemini) sửa kịch bản + tạo lại giọng — tự động">
             {auto?.running ? <Loader2 className="animate-spin" /> : <Wand2 />} Tự hậu kỳ
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => submit(false)} disabled={busy}>Huỷ job</Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
+            if (await confirmAction({ title: "Huỷ job?", danger: true, action: "Huỷ job", cancel: "Tiếp tục sửa",
+              desc: "Job sẽ dừng và không xuất video. Các chỉnh sửa ở bước này sẽ không được dùng." })) submit(false)
+          }}>Huỷ job</Button>
           <Button size="sm" onClick={() => submit(true)} disabled={busy || regen !== null || player.clips.length === 0}
             title={errors ? "Còn lỗi — vẫn có thể xuất, nhưng nên sửa trước" : undefined}>
             {busy ? <Loader2 className="animate-spin" /> : <Film />} Xuất video
@@ -293,12 +313,12 @@ export function PostEditor({ job }: { job: JobDetail }) {
               <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
                 <TabsContent value="scene">
                   <SceneTab job={job} scenes={scenes} selected={selected} issues={issues} regen={regen}
-                    update={update} regenerate={regenerate} onPlay={(i) => { const c = player.clips.find((x) => x.index === i); stop(); if (c) player.play(c.start) }} />
+                    update={edit} regenerate={regenerate} onPlay={(i) => { const c = player.clips.find((x) => x.index === i); stop(); if (c) player.play(c.start) }} />
                 </TabsContent>
                 <TabsContent value="audio"><AudioTab mixer={mixer} setMixer={setMixer} /></TabsContent>
                 <TabsContent value="checks"><ChecksTab issues={issues} onPick={(i) => { select(i); setTab("scene") }} /></TabsContent>
                 <TabsContent value="ai">
-                  <AiTab job={job} scenes={scenes} regen={regen} update={update} regenerate={regenerate} onPick={select} />
+                  <AiTab job={job} scenes={scenes} regen={regen} update={edit} regenerate={regenerate} onPick={select} />
                 </TabsContent>
               </div>
             </Tabs>
@@ -312,7 +332,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
         </>
       ) : (
         <SceneList scenes={scenes} regen={regen} levels={levels} playing={playing}
-          onPlay={(url) => { player.pause(); play(url) }} update={update} regenerate={(i) => regenerate(i)} />
+          onPlay={(url) => { player.pause(); play(url) }} update={edit} regenerate={(i) => regenerate(i)} />
       )}
     </div>
   )

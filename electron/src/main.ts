@@ -5,6 +5,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { appInfo, releaseNotes, trackVersion } from "./appInfo"
 import * as auth from "./auth"
+import { capcutLogin, capcutLogout } from "./capcut"
 import { backendPort, pickPort, startBackend, stopBackend } from "./backend"
 import { logger, logsDir } from "./logger"
 import { DEV, DEV_URL, FRONTEND_INDEX, ICON, ROOT, userData } from "./paths"
@@ -49,6 +50,28 @@ function shutdown() {
   ai?.stopLocalServer().catch(() => {})
 }
 
+// ---------- Đóng app khi còn job đang chạy ----------
+let allowClose = false
+
+/** Còn job đang chạy / xếp hàng / chờ xác nhận → hỏi trước khi đóng (đóng là dừng backend, video đang dựng bị bỏ dở). */
+async function confirmClose(): Promise<boolean> {
+  let active: { title: string; status: string }[] = []
+  try {
+    const r = await fetch(`http://127.0.0.1:${backendPort}/api/jobs`, { signal: AbortSignal.timeout(1500) })
+    const jobs = (await r.json()) as { title: string; status: string }[]
+    active = jobs.filter((j) => ["running", "queued", "waiting"].includes(j.status))
+  } catch { return true }               // backend không phản hồi → không có gì để giữ
+  if (!active.length || !win) return true
+  const { response } = await dialog.showMessageBox(win, {
+    type: "warning", buttons: ["Ở lại", "Vẫn thoát"], defaultId: 0, cancelId: 0, noLink: true,
+    title: "Còn job đang chạy",
+    message: `Còn ${active.length} job đang chạy / chờ xác nhận`,
+    detail: active.slice(0, 5).map((j) => `• ${j.title}`).join("\n") +
+      "\n\nThoát bây giờ sẽ dừng các job này. Lần sau mở app có thể bấm Tiếp tục để chạy tiếp từ bước đã xong.",
+  })
+  return response === 1
+}
+
 // ---------- Window ----------
 const OVERLAY = {
   dark: { color: "#0f0f11", symbolColor: "#a1a1aa" },
@@ -75,6 +98,11 @@ function createWindow() {
     },
   })
   win.once("ready-to-show", () => win?.show())
+  win.on("close", (e) => {
+    if (allowClose) return
+    e.preventDefault()
+    confirmClose().then((ok) => { if (ok) { allowClose = true; win?.close() } })
+  })
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" } })
   if (DEV) win.loadURL(DEV_URL)
   else win.loadFile(FRONTEND_INDEX)
@@ -84,6 +112,10 @@ function createWindow() {
 ipcMain.handle("rf:pickFile", async (_e, filters?: Electron.FileFilter[]) => {
   const r = await dialog.showOpenDialog(win!, { properties: ["openFile"], filters })
   return r.canceled ? null : r.filePaths[0]
+})
+ipcMain.handle("rf:pickFiles", async (_e, filters?: Electron.FileFilter[]) => {
+  const r = await dialog.showOpenDialog(win!, { properties: ["openFile", "multiSelections"], filters })
+  return r.canceled ? [] : r.filePaths
 })
 ipcMain.handle("rf:pickFolder", async () => {
   const r = await dialog.showOpenDialog(win!, { properties: ["openDirectory", "createDirectory"] })
@@ -100,6 +132,8 @@ ipcMain.handle("rf:setFullScreen", (_e, on: boolean) => { win?.setFullScreen(!!o
 ipcMain.handle("py:status", () => pyStatus)
 
 // ---------- IPC: thông tin app / phiên bản ----------
+ipcMain.handle("capcut:login", () => capcutLogin(win))
+ipcMain.handle("capcut:logout", () => capcutLogout())
 ipcMain.handle("app:info", () => appInfo())
 ipcMain.handle("app:releaseNotes", () => releaseNotes())
 ipcMain.handle("app:openLogs", () => shell.openPath(logsDir()))
@@ -141,6 +175,17 @@ ipcMain.handle("ai:geminiLogout", () => withAi(() => ai.geminiLogout()))
 ipcMain.handle("ai:geminiCheck", () => withAi(() => ai.geminiCheck()))
 
 // ---------- Vòng đời ----------
+// Chỉ 1 cửa sổ app: mở lần 2 → đưa cửa sổ đang mở lên trước (2 backend cùng ghi dữ liệu job sẽ hỏng lịch sử)
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on("second-instance", () => {
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.focus()
+  })
+}
+
 app.whenReady().then(async () => {
   trackVersion()
   log.info(`ReviewFilm Studio v${app.getVersion()} (${app.isPackaged ? "bản cài đặt" : "dev"}) — Electron ${process.versions.electron}`)

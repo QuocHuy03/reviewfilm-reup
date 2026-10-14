@@ -3,7 +3,10 @@
 Video editor: cat clip tu video goc theo timestamp script, ghep voiceover, burn sub.
 Output: 1 video review hoan chinh.
 """
+import hashlib
+import json
 import os
+import functools
 import subprocess
 import shutil
 import sys
@@ -68,16 +71,25 @@ def _escape_ffmpeg_path(path):
     p = p.replace(':', '\\:')
     p = p.replace("'", "'\\\\''")
     return p
+def _move_into(src, dst):
+    """File cuối nằm trong thư mục tạm cùng ổ với thư mục xuất → chuyển (tức thì, không tốn gấp đôi ổ đĩa); khác ổ thì chép."""
+    try:
+        os.replace(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+@functools.lru_cache(maxsize=64)   # gọi cho từng cảnh — cùng 1 file nguồn chỉ ffprobe 1 lần
 def _has_audio(video_path):
     cmd = [FFPROBE_EXE, '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'default=nw=1:nk=1', video_path]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10, creationflags=_HIDE)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, creationflags=_HIDE)
         return 'audio' in r.stdout.lower()
     except Exception:
         return False
 def _stretch_audio_to_duration(src, target_dur, out):
     try:
-        r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', src], capture_output=True, text=True, timeout=10, creationflags=_HIDE)
+        r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', src], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, creationflags=_HIDE)
         src_dur = float(r.stdout.strip())
     except Exception:
         src_dur = 0.0
@@ -100,11 +112,11 @@ def _check_nvenc():
     if _NVENC_AVAILABLE is not None:
         return _NVENC_AVAILABLE
     try:
-        r = subprocess.run([FFMPEG_EXE, '-hide_banner', '-encoders'], capture_output=True, text=True, creationflags=_HIDE, timeout=10)
+        r = subprocess.run([FFMPEG_EXE, '-hide_banner', '-encoders'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, timeout=10)
         _NVENC_AVAILABLE = 'h264_nvenc' in r.stdout
         if _NVENC_AVAILABLE:
             # Encoder co the duoc liet ke nhung driver qua cu -> thu encode 1 frame that
-            t = subprocess.run([FFMPEG_EXE, '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.1', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'], capture_output=True, text=True, creationflags=_HIDE, timeout=20)
+            t = subprocess.run([FFMPEG_EXE, '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.1', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, timeout=20)
             _NVENC_AVAILABLE = t.returncode == 0
     except Exception:
         _NVENC_AVAILABLE = False
@@ -159,7 +171,7 @@ def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
     vf = f'''scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps}'''
     probe_cmd = [FFPROBE_EXE, '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', src_path]
     try:
-        probe_r = subprocess.run(probe_cmd, capture_output=True, text=True, creationflags=_HIDE, timeout=10)
+        probe_r = subprocess.run(probe_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, timeout=10)
         has_audio_track = bool(probe_r.stdout.strip())
     except Exception:
         has_audio_track = True
@@ -167,7 +179,7 @@ def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
         cmd = [FFMPEG_EXE, '-y', '-i', src_path, '-vf', vf, *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), target_path]
     else:
         cmd = [FFMPEG_EXE, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-i', src_path, '-vf', vf, '-map', '1:v', '-map', '0:a', *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), '-shortest', target_path]
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_HIDE)
+    r = run_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r.returncode == 0:
         if os.path.exists(target_path):
             if os.path.getsize(target_path) > 0:
@@ -178,7 +190,7 @@ def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
         cmd_fb = [FFMPEG_EXE, '-y', '-i', src_path, '-vf', vf, *cpu_enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), target_path]
     else:
         cmd_fb = [FFMPEG_EXE, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-i', src_path, '-vf', vf, '-map', '1:v', '-map', '0:a', *cpu_enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), '-shortest', target_path]
-    r2 = subprocess.run(cmd_fb, capture_output=True, text=True, creationflags=_HIDE)
+    r2 = subprocess.run(cmd_fb, capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
     if r2.returncode != 0:
         log_fn(f'''   [WARN] _standardize_clip that bai: {r2.stderr[slice(-300, None, None)]}''')
     return r2.returncode == 0 and os.path.getsize(target_path) > 0
@@ -273,6 +285,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
             s['out_end'] = accumulated_time + tts_dur
             accumulated_time += real_clip_dur
     final_srt_path = os.path.splitext(output_path)[0] + '.srt'
+    should_stop = kwargs.pop('should_stop', None)        # callable → True khi job bị huỷ
     sub_source_mode = kwargs.get('sub_source_mode', 'prefer_voiceover')
     try:
         speech_scenes = [s for s in scenes if _resolve_subtitle_text(s, sub_source_mode)]
@@ -299,12 +312,32 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         workers = 1
     if use_nvenc:
         workers = min(workers, 3)
+    # Dấu vân tay mỗi clip = nội dung cảnh + mọi tuỳ chọn dựng → cảnh không đổi thì dùng lại clip đã dựng
+    # (tự sửa / hậu kỳ lại chỉ dựng lại cảnh thay đổi; đổi thứ tự cảnh cũng không phải dựng lại).
+    _render_opts = json.dumps({'src': [source_video, os.path.getsize(source_video) if os.path.isfile(source_video) else 0],
+                               'res': target_resolution, 'fps': fps, 'vol': original_volume, 'burn': burn_subtitles, 'font': font_path,
+                               'nvenc': use_nvenc, 'rm_sub': remove_old_sub, 'cover_h': sub_cover_height, 'wm': watermark_path,
+                               'ai_sub': ai_sub_box, 'ai_logo': ai_logo_box, 'rm_logo': remove_old_logo, 'logo': [manual_logo_corner, manual_logo_size],
+                               'wm_pos': [watermark_corner, watermark_size_pct, watermark_margin_x_pct, watermark_margin_y_pct, watermark_opacity],
+                               'blur': blur_boxes, 'kw': kwargs}, sort_keys=True, default=str)
+
+    def _clip_path(i, scene):
+        sc = {k: v for (k, v) in scene.items() if not str(k).startswith('_')}
+        sig = hashlib.md5(json.dumps([sc, _render_opts, bool(mirror_video) and i % 2 == 0], sort_keys=True, default=str).encode()).hexdigest()[:20]
+        return os.path.join(clips_dir, f'clip_{sig}.mp4')
+
+    reused = [0]
     log_fn(f'''   Cat va xu ly {len(scenes)} clip (song song {workers} FFmpeg)...''')
     results = {}
     done_count = [0]
     def _render_one(args):
         (i, scene) = args
-        clip_out = os.path.join(clips_dir, f'''clip_{i:04d}.mp4''')
+        clip_out = _clip_path(i, scene)
+        if os.path.isfile(clip_out) and os.path.getsize(clip_out) > 1000:
+            reused[0] += 1
+            return (i, clip_out)
+        if should_stop and should_stop():
+            return (i, None)
         try:
             ok = _process_one_scene(source_video, scene, clip_out, target_resolution, fps, original_volume, burn_subtitles, log_fn, i, font_path, video_total_duration, use_nvenc=use_nvenc, remove_old_sub=remove_old_sub, sub_cover_height=sub_cover_height, mirror_video=bool(mirror_video) and i % 2 == 0, watermark_path=watermark_path, ai_sub_box=ai_sub_box, ai_logo_box=ai_logo_box, remove_old_logo=remove_old_logo, manual_logo_corner=manual_logo_corner, manual_logo_size=manual_logo_size, watermark_corner=watermark_corner, watermark_size_pct=watermark_size_pct, watermark_margin_x_pct=watermark_margin_x_pct, watermark_margin_y_pct=watermark_margin_y_pct, watermark_opacity=watermark_opacity, blur_boxes=blur_boxes, **kwargs)
         except Exception as e:
@@ -323,6 +356,11 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
             n = done_count[0]
             if n % 5 == 0 or n == len(scenes):
                 log_fn(f'''   Tien do cat clip: {n}/{len(scenes)}''')
+    if should_stop and should_stop():
+        log_fn('   [DỪNG] Đã huỷ khi đang dựng video.')
+        return
+    if reused[0]:
+        log_fn(f'   Dùng lại {reused[0]}/{len(scenes)} clip đã dựng trước đó (cảnh không đổi) — chỉ dựng {len(scenes) - reused[0]} cảnh')
     final_clips = [results[k] for k in sorted(results)]
     if not final_clips:
         log_fn('   [LOI] Khong dung duoc clip nao')
@@ -362,12 +400,12 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         log_fn(f'''   Đang chỉnh tốc độ toàn bộ video lên {_final_speed:.2f}x...''')
         speed_output = os.path.join(temp_dir, 'speed_output.mp4')
         cmd_speed = [FFMPEG_EXE, '-y', '-i', concat_output, '-filter_complex', f'''[0:v]setpts={1.0 / _final_speed:.4f}*PTS[v];[0:a]atempo={_final_speed:.4f}[a]''', '-map', '[v]', '-map', '[a]', *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), speed_output]
-        r_speed = run_subprocess_heartbeat(cmd_speed, log_fn=log_fn, label=f'''Đang chỉnh tốc độ video {_final_speed:.2f}x''', text=True)
+        r_speed = run_subprocess_heartbeat(cmd_speed, log_fn=log_fn, label=f'''Đang chỉnh tốc độ video {_final_speed:.2f}x''', text=True, encoding='utf-8', errors='replace')
         if r_speed.returncode != 0 and use_nvenc:
             cmd_speed_cpu = [x for x in cmd_speed]
             _ei = cmd_speed_cpu.index(enc[0])
             cmd_speed_cpu[_ei:_ei + len(enc)] = _video_encode_args(False)
-            r_speed = run_subprocess_heartbeat(cmd_speed_cpu, log_fn=log_fn, label=f'''Đang chỉnh tốc độ video {_final_speed:.2f}x (CPU)''', text=True)
+            r_speed = run_subprocess_heartbeat(cmd_speed_cpu, log_fn=log_fn, label=f'''Đang chỉnh tốc độ video {_final_speed:.2f}x (CPU)''', text=True, encoding='utf-8', errors='replace')
         if r_speed.returncode == 0 and os.path.exists(speed_output):
             concat_output = speed_output
             log_fn(f'''   Chỉnh tốc độ {_final_speed:.2f}x thành công!''')
@@ -387,9 +425,9 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         ok2 = _mix_multi_audio(audio_src, music_clips, output_path, log_fn, mute_music=mute_music, mute_sfx=mute_sfx)
         if not ok2:
             log_fn('   [WARN] Trộn Nhạc/SFX từ Timeline thất bại (hoặc không còn đoạn nào dùng được sau khi lọc mute) — giữ nguyên audio trước đó')
-            shutil.copy2(audio_src, output_path)
+            _move_into(audio_src, output_path)
     else:
-        shutil.copy2(audio_src, output_path)
+        _move_into(audio_src, output_path)
     log_fn(f'''   Da xuat video: {output_path}''')
     try:
         _rep = recap_length_report(scenes, _safe_duration(output_path))
@@ -403,7 +441,7 @@ def _mix_bgm(video_in, bgm_path, video_out, bgm_volume, log_fn=print, audio_duck
     else:
         filter_str = f'''[1:a]volume={bgm_volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[a]'''
     cmd = [FFMPEG_EXE, '-y', '-i', video_in, '-stream_loop', '-1', '-i', bgm_path, '-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
-    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Trộn nhạc nền (BGM)', text=True)
+    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Trộn nhạc nền (BGM)', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         log_fn(f'''   [WARN] Mix BGM loi: {r.stderr[slice(-300, None, None)]}''')
         return False
@@ -441,7 +479,7 @@ def _mix_multi_audio(video_in, clips, video_out, log_fn=print, mute_music=False,
     n_inputs = len(usable) + 1
     filter_str = ';'.join(chains) + f''';[0:a]{''.join(labels)}amix=inputs={n_inputs}:duration=first:dropout_transition=0[a]'''
     cmd += ['-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
-    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label=f'''Trộn {len(usable)} đoạn Nhạc/SFX''', text=True)
+    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label=f'''Trộn {len(usable)} đoạn Nhạc/SFX''', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         log_fn(f'''   [WARN] Mix nhieu am thanh loi: {r.stderr[slice(-300, None, None)]}''')
         return False
@@ -715,7 +753,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 cmd.append('-i')
                 cmd.append(watermark_path)
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=_HIDE)
+    r = run_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         fc_fb = f'''[0:v]{vf}[vbase]'''
         last_fb = 'vbase'
@@ -737,7 +775,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 cmd_fb.append('-i')
                 cmd_fb.append(watermark_path)
         cmd_fb.extend(['-filter_complex', filter_complex_fb, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
-        r2 = subprocess.run(cmd_fb, capture_output=True, text=True, creationflags=_HIDE)
+        r2 = run_subprocess(cmd_fb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         if r2.returncode != 0:
             log_fn(f'''   [WARN] FFmpeg loi clip {i + 1}: {r2.stderr[slice(-300, None, None)]}''')
             _cleanup_files(subtitle_files)
@@ -758,11 +796,11 @@ def _concat_clips(clips, output_path, temp_dir, log_fn):
             safe = c.replace('\\', '/').replace("'", "\\'")
             f.write(f'''file \'{safe}\'\n''')
     cmd = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
-    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Ghép clip cuối', text=True)
+    r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Ghép clip cuối', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         log_fn('   Concat copy/re-encode audio that bai, tien hanh re-encode toan bo...')
         cmd2 = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
-        r2 = run_subprocess_heartbeat(cmd2, log_fn=log_fn, label='Ghép clip cuối (re-encode toàn bộ)', text=True)
+        r2 = run_subprocess_heartbeat(cmd2, log_fn=log_fn, label='Ghép clip cuối (re-encode toàn bộ)', text=True, encoding='utf-8', errors='replace')
         if r2.returncode != 0:
             log_fn(f'''   [LOI] Concat: {r2.stderr[slice(None, 300, None)]}''')
             return False

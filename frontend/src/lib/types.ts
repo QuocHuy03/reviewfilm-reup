@@ -1,4 +1,4 @@
-export type JobKind = "review" | "reup" | "srt" | "burn"
+export type JobKind = "review" | "reup" | "srt" | "burn" | "download"
 export type JobStatus = "queued" | "running" | "waiting" | "done" | "error" | "cancelled"
 
 export type Scene = {
@@ -23,6 +23,27 @@ export type JobResult = {
   vi_srt?: string
   qa?: QaReport
   qa_fixes?: QaFix[]
+  publish?: PublishPack
+  items?: DownloadItem[]      // job tải video
+  out_dir?: string
+}
+
+/** Bài đăng AI theo nền tảng (backend jobs/publish.py). */
+export type PublishPost = {
+  title?: string
+  body: string
+  text: string            // văn bản dán thẳng lên nền tảng (mô tả + chương + hashtag)
+  hashtags: string[]
+  chapters?: { t: string; title: string }[]
+  tags?: string[]
+}
+export type PublishPack = {
+  platforms: Partial<Record<"youtube" | "shorts" | "tiktok" | "facebook" | "instagram", PublishPost>>
+  thumbnail_texts: string[]
+  thumbnails: { path: string; time: number; text: string; v?: number }[]
+  dir: string
+  tone: string
+  at: string
 }
 
 /** Kết quả kiểm tra chất lượng video đã xuất (backend jobs/qa.py). */
@@ -49,9 +70,22 @@ export type JobSummary = {
   resume_from: string
 }
 
+export type ProbeInfo = {
+  url: string; platform: string; platform_label: string; title?: string; duration?: number; thumbnail?: string
+  uploader?: string; width?: number; height?: number; source?: string; size?: number; error?: string
+}
+export type DownloadStatus = { version: string; platforms: { key: string; label: string }[] }
+export type DownloadItem = { url: string; platform: string; path?: string; size?: number; error?: string }
+
+export type Preset = { name: string; mode: string; cfg: Record<string, unknown> }
+
+export type JobDraft = { waiting: "script" | "preview"; scenes: Scene[]; mixer?: Record<string, unknown> | null; at: number }
+
 export type JobDetail = JobSummary & {
   config: Record<string, unknown>
   scenes: Scene[]
+  /** Bản nháp đang sửa ở bước chờ — chỉ dùng khi draft.waiting trùng bước hiện tại */
+  draft?: JobDraft | Record<string, never>
   logs?: LogLine[]
   log_cursor?: number
 }
@@ -64,7 +98,8 @@ export type Voice = {
   group: string
   gender: "male" | "female" | "neutral"
   sample: string
-  clone: boolean
+  /** free: dùng ngay · key: cần API key · install: cần cài thêm trên máy */
+  tier: "free" | "key" | "install"
   free: boolean
   /** false: máy chưa đủ điều kiện (thiếu key / Model Pack) — khi tạo giọng sẽ tự đổi sang Edge TTS */
   available: boolean

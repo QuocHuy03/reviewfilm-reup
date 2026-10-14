@@ -42,6 +42,31 @@ def get_keys():
     return config.get_api_keys_masked()
 
 
+class PresetBody(BaseModel):
+    name: str
+    mode: str = 'review'
+    cfg: dict = {}
+
+
+@router.get('/presets')
+def list_presets():
+    return config.load_presets()
+
+
+@router.put('/presets')
+def put_preset(body: PresetBody):
+    from fastapi import HTTPException
+    try:
+        return config.save_preset(body.name, body.mode, body.cfg)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete('/presets/{name}')
+def remove_preset(name: str):
+    return config.delete_preset(name)
+
+
 @router.get('/fonts')
 def list_fonts(refresh: bool = False):
     """Font dùng được cho phụ đề: hệ thống + font người dùng thêm. vi=False → thiếu dấu tiếng Việt."""
@@ -84,7 +109,7 @@ def _gpu_name():
     name = ''
     if exe:
         try:
-            r = subprocess.run([exe, '--query-gpu=name', '--format=csv,noheader'], capture_output=True, text=True,
+            r = subprocess.run([exe, '--query-gpu=name', '--format=csv,noheader'], capture_output=True, text=True, encoding='utf-8', errors='replace',
                                timeout=5, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             name = r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else ''
         except Exception:

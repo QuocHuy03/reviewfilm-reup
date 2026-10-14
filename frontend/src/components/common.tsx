@@ -74,7 +74,7 @@ export function Segmented<T extends string>({ value, onChange, items, size = "de
   value: T; onChange: (v: T) => void; items: { value: T; label: string; icon?: ReactNode }[]; size?: "default" | "sm"
 }) {
   return (
-    <div className="inline-flex shrink-0 rounded-lg border border-border bg-muted/50 p-0.5">
+    <div className="inline-flex w-fit max-w-full shrink-0 flex-wrap rounded-lg border border-border bg-muted/50 p-0.5">
       {items.map((it) => (
         <button key={it.value} onClick={() => onChange(it.value)}
           className={cn("flex items-center gap-1.5 rounded-md text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors [&_svg]:size-3.5",
@@ -84,6 +84,16 @@ export function Segmented<T extends string>({ value, onChange, items, size = "de
         </button>
       ))}
     </div>
+  )
+}
+
+/** Cờ Việt Nam vẽ bằng SVG — Windows không hiển thị emoji cờ (🇻🇳 thành chữ "VN"). */
+export function VnFlag({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 30 20" className={cn("inline-block h-[0.85em] w-auto shrink-0 rounded-[2px] align-[-0.08em]", className)} aria-label="Tiếng Việt">
+      <rect width="30" height="20" fill="#DA251D" />
+      <polygon fill="#FFFF00" points="15,4 16.76,9.42 22.47,9.42 17.85,12.77 19.62,18.19 15,14.84 10.38,18.19 12.15,12.77 7.53,9.42 13.24,9.42" />
+    </svg>
   )
 }
 
@@ -105,7 +115,7 @@ export function StatusBadge({ status, queuePos }: { status: JobStatus; queuePos?
 /** Tiêu đề job là "<Loại> · <tên file>" — bỏ phần loại khi đã có cột/nhãn loại riêng. */
 export const jobFileName = (title: string) => title.split(" · ").slice(1).join(" · ") || title
 
-export const KIND_LABEL: Record<JobKind, string> = { review: "Review", reup: "Dịch & Reup", srt: "Tách SRT", burn: "Ghép phụ đề" }
+export const KIND_LABEL: Record<JobKind, string> = { review: "Review", reup: "Dịch & Reup", srt: "Tách SRT", burn: "Ghép phụ đề", download: "Tải video" }
 
 export function EmptyState({ icon, title, desc, action, className }: { icon: ReactNode; title: string; desc: string; action?: ReactNode; className?: string }) {
   return (

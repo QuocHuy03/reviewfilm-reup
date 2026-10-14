@@ -222,7 +222,7 @@ def _parse_analysis_json(text, log_fn=print):
 def _get_duration(video_path):
     cmd = [FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, creationflags=_HIDE)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, creationflags=_HIDE)
         return float(r.stdout.strip())
     except Exception:
         return 0.0
@@ -252,62 +252,3 @@ def _make_transcript_sample(transcript, max_chars=8000):
     step = max(1, len(lines) // 200)
     sampled = lines[slice(None, None, step)]
     return '\n'.join(sampled)[slice(None, max_chars, None)]
-def scan_video_for_sub_and_watermark(video_path, gemini_key, temp_dir, log_fn=print, openai_key=''):
-    openai_key = ((openai_key or '')).strip()
-    if not openai_key:
-        log_fn('   [LOI] Chua co OPENAI_API_KEY de quet AI.')
-        return
-    duration = _get_duration(video_path)
-    if duration <= 0:
-        log_fn('   [LOI] Khong doc duoc thoi luong video')
-        return
-    frames_dir = os.path.join(temp_dir, 'scan_frames')
-    os.makedirs(frames_dir, exist_ok=True)
-    log_fn('   Trich xuat 3 keyframes de quet Sub/Logo cu...')
-    frames = []
-    milestones = [0.15 * duration, 0.5 * duration, 0.85 * duration]
-    for (i, ts) in enumerate(milestones):
-        out_path = os.path.join(frames_dir, f'''scan_frame_{i}.jpg''')
-        cmd = [FFMPEG_EXE, '-y', '-ss', str(ts), '-i', video_path, '-frames:v', '1', '-q:v', '3', '-vf', 'scale=640:-1', out_path]
-        r = subprocess.run(cmd, capture_output=True, creationflags=_HIDE)
-        if r.returncode == 0 and os.path.exists(out_path):
-            frames.append((ts, out_path))
-    if not frames:
-        log_fn('   [LOI] Khong trich xuat duoc khung hinh de quet.')
-        return
-    prompt = '''Bạn là chuyên gia phân tích video. Tôi gửi cho bạn 3 khung hình được cắt từ các mốc thời gian khác nhau của một video.
-Hãy phân tích kỹ các khung hình này để phát hiện xem video có chứa:
-1. Phụ đề cứng (hardsub/subtitle) tiếng Trung, tiếng Anh hoặc tiếng Việt cũ chạy ở phần dưới của video hay không.
-2. Logo, watermark, hoặc icon của kênh cũ ở các góc của video hay không.
-
-Nếu có, hãy trả về tọa độ chính xác dưới dạng tỷ lệ phần trăm (từ 0.0 đến 1.0) của chiều rộng (W) và chiều cao (H) của video.
-
-Yêu cầu trả về JSON chính xác theo cấu trúc sau (chỉ trả về JSON thuần túy, không thêm markdown code block hay từ giải thích nào khác):
-{
-  "has_subtitle": true hoặc false,
-  "subtitle_y_range": [y_start, y_end],
-  "has_watermark": true hoặc false,
-  "watermark_box": [y_min, x_min, y_max, x_max]
-}
-Ví dụ subtitle_y_range [0.82, 0.95] nếu phụ đề nằm từ 82% đến 95% chiều cao video từ trên xuống; để null nếu không có.
-Ví dụ watermark_box [0.02, 0.85, 0.12, 0.98] nếu logo nằm ở góc trên bên phải; để null nếu không có.
-'''
-    text = _vision_dispatch(prompt, frames, gemini_key, openai_key, log_fn, detail='high', temperature=0.1, max_tokens=800)
-    if not text:
-        log_fn('   [WARN] Khong nhan duoc ket qua quet AI.')
-        return
-    text = re.sub('^```(?:json)?\\s*', '', text)
-    text = re.sub('\\s*```$', '', text).strip()
-    try:
-        data = json.loads(text)
-    except Exception:
-        m = re.search('\\{.*\\}', text, re.DOTALL)
-        if not m:
-            log_fn('   [WARN] Khong parse duoc JSON quet Sub/Logo.')
-            return
-        try:
-            data = json.loads(m.group(0))
-        except Exception:
-            return
-    log_fn(f'''   [AI Quet] Xong! Phu de: {data.get('has_subtitle')}, Watermark: {data.get('has_watermark')}''')
-    return data

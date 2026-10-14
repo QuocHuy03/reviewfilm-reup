@@ -5,7 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Timeline } from "@/components/timeline/Timeline"
+import { PublishSummary } from "./PublishPanel"
+import { ReeditButton } from "./ReeditButton"
+import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
+import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
 import { layoutClips } from "@/components/timeline/useTimelinePlayer"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -14,6 +18,7 @@ import { api, bridge, mediaUrl } from "@/lib/api"
 import { basename, fmtClock, fmtDuration } from "@/lib/format"
 import type { JobDetail, LogLine, QaFix, QaReport, Scene } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { confirmAction } from "@/components/ConfirmHost"
 
 const NO_MUTE = { video: false, voice: false, music: false }
 const noop = () => {}
@@ -141,7 +146,8 @@ const KIND_TEXT: Record<string, string> = { review: "Review phim", reup: "Dịch
 
 /* ═══════════════════════════════ Sửa kịch bản ═══════════════════════════════ */
 export function ScriptStage({ job }: { job: JobDetail }) {
-  const [scenes, setScenes] = useState<Scene[]>(job.scenes)
+  const [scenes, setScenes] = useState<Scene[]>(() => draftFor(job, "script")?.scenes ?? job.scenes)
+  const saveState = useDraftAutosave(job.id, scenes)
   const [busy, setBusy] = useState(false)
   const tl = useStaticTimeline(scenes)
   const video = useRef<HTMLVideoElement | null>(null)
@@ -161,14 +167,17 @@ export function ScriptStage({ job }: { job: JobDetail }) {
     try {
       await api.confirm(job.id, confirmed ? { confirmed, scenes } : { confirmed })
       toast.success(confirmed ? "Đã xác nhận — bắt đầu lồng tiếng" : "Đã huỷ job")
-    } catch (e) { toast.error((e as Error).message) } finally { setBusy(false) }
+    } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
   }
 
   return (
     <StageShell title={job.kind === "review" ? "Sửa kịch bản thuyết minh" : "Sửa bản dịch"} dot="bg-warning animate-pulse"
-      meta={`${scenes.length} câu · ${words.toLocaleString("vi-VN")} từ · bấm cảnh trên timeline để tới câu đó`}
+      meta={<span className="flex items-center gap-2">{scenes.length} câu · {words.toLocaleString("vi-VN")} từ · bấm cảnh trên timeline để tới câu đó <SaveBadge state={saveState} /></span>}
       actions={<>
-        <Button variant="ghost" size="sm" onClick={() => submit(false)} disabled={busy}>Huỷ job</Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
+            if (await confirmAction({ title: "Huỷ job?", danger: true, action: "Huỷ job", cancel: "Tiếp tục sửa",
+              desc: "Job sẽ dừng và không xuất video. Các chỉnh sửa ở bước này sẽ không được dùng." })) submit(false)
+          }}>Huỷ job</Button>
         <Button size="sm" onClick={() => submit(true)} disabled={busy || scenes.length === 0}>
           {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} Xác nhận & lồng tiếng
         </Button>
@@ -236,7 +245,10 @@ export function DoneStage({ job }: { job: JobDetail }) {
 
   return (
     <StageShell title="Hoàn thành" dot="bg-success" meta={`${tl.clips.length} cảnh · ${fmtDuration(tl.total)} · xong sau ${fmtDuration(job.elapsed)}`}
-      actions={job.result.output_path && <Button size="sm" variant="outline" onClick={() => bridge.open(job.result.output_path!)}><Film /> Mở video</Button>}
+      actions={<>
+        {(job.kind === "review" || job.kind === "reup") && job.scenes.length > 0 && <ReeditButton job={job} />}
+        {job.result.output_path && <Button size="sm" variant="outline" onClick={() => bridge.open(job.result.output_path!)}><Film /> Mở video</Button>}
+      </>}
       monitor={<VideoMonitor path={job.result.output_path} videoRef={attach} placeholder={<><CheckCircle2 className="size-6 text-success" /> Hoàn thành</>} />}
       side={
         <div className="flex flex-col gap-5 p-4">
@@ -256,7 +268,10 @@ export function DoneStage({ job }: { job: JobDetail }) {
               ))}
             </div>
           </section>
-          {(job.kind === "review" || job.kind === "reup") && job.result.output_path && <QaPanel jobId={job.id} initial={job.result.qa} fixes={job.result.qa_fixes} />}
+          {(job.kind === "review" || job.kind === "reup") && job.result.output_path && <>
+            <PublishSummary jobId={job.id} initial={job.result.publish} />
+            <QaPanel jobId={job.id} initial={job.result.qa} fixes={job.result.qa_fixes} />
+          </>}
           <section className="min-h-0">
             <h4 className="mb-2 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">Kịch bản · {tl.clips.length} câu</h4>
             <div className="flex flex-col gap-0.5">

@@ -104,10 +104,12 @@ class Job:
         self.finished = 0.0
         self.temp_dir = ''
         self.checkpoint = {}            # trạng thái sau bước cuối đã xong — để tiếp tục khi lỗi (pipelines.py)
+        self.draft = {}                 # bản nháp chỉnh sửa ở bước chờ (script/preview) — rời màn hình / tắt app không mất
         self.cancelled = False
         self._event = threading.Event()
         self._reply = None
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()   # log() được gọi từ nhiều luồng (dựng song song, API) — ghi file lần lượt
         self._last_save = 0.0
 
     # ---------- log / progress ----------
@@ -156,6 +158,7 @@ class Job:
         return reply
 
     def resolve(self, payload):
+        self.draft = {}                 # đã xác nhận → bản nháp hết tác dụng
         self._reply = payload
         self._event.set()
 
@@ -184,6 +187,7 @@ class Job:
         d = self.summary()
         d['config'] = self.config
         d['scenes'] = self.scenes
+        d['draft'] = self.draft
         if with_logs:
             d['logs'] = self.logs[-3000:]
             d['log_cursor'] = self.log_offset + len(self.logs)
@@ -195,22 +199,26 @@ class Job:
         return round((self.finished or time.time()) - self.started, 1)
 
     def save(self, throttle=False):
-        now = time.time()
-        if throttle and now - self._last_save < 2.0:
-            return
-        self._last_save = now
-        data = self.detail()
-        data['logs'] = self.logs[-1500:]
-        data['temp_dir'] = self.temp_dir
-        data['checkpoint'] = self.checkpoint
-        path = os.path.join(JOBS_DIR, f'{self.id}.json')
-        tmp = path + '.tmp'
-        try:
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False)
-            os.replace(tmp, path)
-        except OSError:
-            pass
+        with self._save_lock:
+            now = time.time()
+            if throttle and now - self._last_save < 2.0:
+                return
+            self._last_save = now
+            data = self.detail()
+            data['logs'] = self.logs[-1500:]
+            data['temp_dir'] = self.temp_dir
+            data['checkpoint'] = self.checkpoint
+            path = os.path.join(JOBS_DIR, f'{self.id}.json')
+            tmp = f'{path}.{threading.get_ident()}.tmp'
+            try:
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False)
+                os.replace(tmp, path)
+            except (OSError, TypeError, ValueError):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
     @classmethod
     def from_file(cls, path):
@@ -231,6 +239,7 @@ class Job:
         j.logs = d.get('logs', [])
         j.temp_dir = d.get('temp_dir', '')
         j.checkpoint = d.get('checkpoint') or {}
+        j.draft = d.get('draft') or {}
         j._saved_elapsed = d.get('elapsed', 0)
         j.created_at = d.get('created_at', j.created_at)
         j.updated_at = d.get('updated_at', j.updated_at)
@@ -242,9 +251,16 @@ class JobManager:
         self.jobs = {}
         self._lock = threading.Lock()
         self._load()
+        threading.Thread(target=self._cleanup_stale, daemon=True, name='temp-cleanup').start()
 
     def _load(self):
         for name in os.listdir(JOBS_DIR):
+            if name.endswith('.tmp'):          # file ghi dở khi app tắt đột ngột
+                try:
+                    os.remove(os.path.join(JOBS_DIR, name))
+                except OSError:
+                    pass
+                continue
             if not name.endswith('.json'):
                 continue
             try:
@@ -252,6 +268,44 @@ class JobManager:
                 self.jobs[j.id] = j
             except Exception:
                 continue
+
+    def _cleanup_stale(self, max_age_days=1):
+        """Dọn thư mục tạm cũ không job nào còn dùng (job lỗi/huỷ đã xoá, app tắt giữa chừng…) + giọng thử cũ.
+        Mỗi thư mục tạm có thể chứa cả bộ phim tải về — để lâu ngày đầy ổ."""
+        import shutil
+        keep = {os.path.normcase(os.path.abspath(j.temp_dir)) for j in list(self.jobs.values()) if j.temp_dir}
+        cutoff = time.time() - max_age_days * 86400
+        roots = set()
+        for d in ('C', 'D', 'E', 'F', 'G'):
+            r = os.path.join(f'{d}:' + os.sep, 'ReviewFilm_Temp')
+            if os.path.isdir(r):
+                roots.add(r)
+        freed, n = 0, 0
+        for root in roots:
+            for name in os.listdir(root):
+                path = os.path.join(root, name)
+                try:
+                    if not name.startswith('_temp_') or os.path.normcase(path) in keep or os.path.getmtime(path) > cutoff:
+                        continue
+                    size = sum(os.path.getsize(os.path.join(a, f)) for (a, _, fs) in os.walk(path) for f in fs)
+                    shutil.rmtree(path, ignore_errors=True)
+                    freed, n = freed + size, n + 1
+                except OSError:
+                    continue
+        preview = os.path.join(os.path.dirname(JOBS_DIR), 'voice_preview')
+        if os.path.isdir(preview):
+            for name in os.listdir(preview):
+                path = os.path.join(preview, name)
+                try:
+                    if os.path.getmtime(path) < cutoff:
+                        shutil.rmtree(path, ignore_errors=True)
+                except OSError:
+                    pass
+        if n:
+            try:
+                print(f'[don dep] da xoa {n} thu muc tam cu ({freed / 1_048_576:.0f} MB)', flush=True)
+            except Exception:
+                pass
 
     def list(self):
         return sorted(self.jobs.values(), key=lambda j: j.created_at, reverse=True)
@@ -265,6 +319,16 @@ class JobManager:
     def start(self, kind, config, runner, title=''):
         """Tạo job và xếp hàng. Job chạy khi tới lượt (xem WorkSlot)."""
         job = Job(kind, config, title)
+        with self._lock:
+            self.jobs[job.id] = job
+        return self._launch(job, runner)
+
+    def start_seeded(self, kind, config, runner, title, scenes, checkpoint, result=None):
+        """Tạo job mới đã có sẵn kịch bản + checkpoint → pipeline bỏ qua các bước đã xong (dùng cho "Mở lại hậu kỳ")."""
+        job = Job(kind, config, title)
+        job.scenes = scenes
+        job.checkpoint = checkpoint
+        job.result = dict(result or {})
         with self._lock:
             self.jobs[job.id] = job
         return self._launch(job, runner)

@@ -84,7 +84,7 @@ export function AiAccounts() {
       <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-4 text-primary" />
-          <span className="flex-1 text-[13px] font-medium">Gemini <span className="text-xs font-normal text-muted-foreground">— Vision xem phim (bắt buộc cho Review nếu không có OpenAI key)</span></span>
+          <span className="flex-1 text-[13px] font-medium">Gemini <span className="text-xs font-normal text-muted-foreground">— xem hình ảnh phim (cần cho chế độ Review)</span></span>
           {gem?.loggedIn ? (
             <>
               <StatusBadge status={gem.status || "ok"} error={gem.errorMsg} />

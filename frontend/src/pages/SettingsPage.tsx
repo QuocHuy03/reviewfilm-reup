@@ -1,4 +1,4 @@
-import { Bot, CheckCircle2, Laptop, Moon, Palette, Sun, Eye, EyeOff, KeyRound, Loader2, Monitor, Save, SlidersHorizontal, XCircle } from "lucide-react"
+import { Bot, CheckCircle2, Eye, EyeOff, KeyRound, Laptop, Loader2, LogIn, Monitor, Moon, Palette, Save, SlidersHorizontal, Sun, XCircle } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
@@ -17,6 +17,14 @@ import { api, bridge } from "@/lib/api"
 import type { ApiKey, Settings } from "@/lib/types"
 import { SimpleSelect } from "./CreatePage"
 
+const SETTING_TABS = [
+  { value: "ai", label: "Tài khoản AI", desc: "ChatGPT / Gemini viết kịch bản, dịch", icon: <Bot /> },
+  { value: "voice", label: "Giọng đọc", desc: "Key FPT, Viettel… · tài khoản CapCut", icon: <KeyRound /> },
+  { value: "defaults", label: "Mặc định", desc: "Thư mục xuất, Whisper, giọng mặc định", icon: <SlidersHorizontal /> },
+  { value: "look", label: "Giao diện", desc: "Sáng/tối, màu nhấn, cỡ chữ", icon: <Palette /> },
+  { value: "system", label: "Hệ thống & cập nhật", desc: "Phiên bản, cập nhật, nhật ký", icon: <Monitor /> },
+]
+
 export function SettingsPage() {
   const { options, settings, setSettings, system, refreshSystem } = useStore()
   const [keys, setKeys] = useState<ApiKey[]>([])
@@ -27,6 +35,23 @@ export function SettingsPage() {
 
   useEffect(() => { api.keys().then(setKeys).catch(() => {}) }, [])
   useEffect(() => { setForm(settings) }, [settings])
+
+  const [capcutBusy, setCapcutBusy] = useState(false)
+  const capcutLogin = async () => {
+    setCapcutBusy(true)
+    try {
+      const cookie = await window.rf!.capcut.login()
+      setKeys(await api.saveKeys({ CAPCUT_COOKIE: cookie })); refreshSystem()
+      toast.success("Đã đăng nhập CapCut — cookie đã lưu tự động")
+    } catch (e) { toast.error("Chưa lấy được cookie CapCut", { description: (e as Error).message }) }
+    finally { setCapcutBusy(false) }
+  }
+  const capcutLogout = async () => {
+    await window.rf?.capcut.logout()
+    setKeys(await api.saveKeys({ CAPCUT_COOKIE: "" })); refreshSystem()
+    toast("Đã đăng xuất CapCut — giọng CapCut vẫn dùng được (không cookie)")
+  }
+
   if (!options || !form) return null
 
   const saveKeys = async () => {
@@ -41,13 +66,17 @@ export function SettingsPage() {
   }
 
   return (
-    <Tabs defaultValue="ai" className="flex flex-col gap-4 pb-8">
-      <TabsList className="w-fit">
-        <TabsTrigger value="ai"><Bot /> Tài khoản AI</TabsTrigger>
-        <TabsTrigger value="look"><Palette /> Giao diện</TabsTrigger>
-        <TabsTrigger value="voice"><KeyRound /> Key giọng đọc</TabsTrigger>
-        <TabsTrigger value="defaults"><SlidersHorizontal /> Mặc định</TabsTrigger>
-        <TabsTrigger value="system"><Monitor /> Hệ thống & cập nhật</TabsTrigger>
+    <Tabs defaultValue="ai" orientation="vertical" className="grid grid-cols-[230px_minmax(0,1fr)] items-start gap-6 pb-8">
+      <TabsList className="sticky top-0 w-full items-stretch gap-0.5 bg-transparent p-0">
+        {SETTING_TABS.map((t) => (
+          <TabsTrigger key={t.value} value={t.value} className="h-auto items-start gap-2.5 rounded-lg px-3 py-2 text-left data-active:bg-muted">
+            <span className="mt-0.5 [&_svg]:size-4">{t.icon}</span>
+            <span className="flex flex-col">
+              <span className="text-[13px] font-medium text-foreground">{t.label}</span>
+              <span className="text-[11px] font-normal whitespace-normal text-muted-foreground">{t.desc}</span>
+            </span>
+          </TabsTrigger>
+        ))}
       </TabsList>
 
       <TabsContent value="ai" className="max-w-3xl"><AiAccounts /></TabsContent>
@@ -55,16 +84,24 @@ export function SettingsPage() {
       <TabsContent value="look" className="max-w-3xl"><AppearancePanel /></TabsContent>
 
       <TabsContent value="voice" className="max-w-3xl">
-        <Section title="API key giọng đọc" icon={<KeyRound />} desc="Tuỳ chọn — chỉ cần khi dùng giọng FPT.AI / ElevenLabs / Viettel. Lưu cục bộ trên máy"
+        <Section title="API key giọng đọc" icon={<KeyRound />} desc="Tuỳ chọn — chỉ cần khi dùng giọng FPT.AI / ElevenLabs / Viettel / CapCut. Lưu cục bộ trên máy"
           action={<Button size="sm" onClick={saveKeys} disabled={saving || Object.keys(draft).length === 0}>{saving ? <Loader2 className="animate-spin" /> : <Save />} Lưu key</Button>}>
           {keys.map((k) => (
-            <Field key={k.name} label={k.label} hint={<span className="font-mono">{k.name}</span>}>
+            <Field key={k.name} label={k.label} hint={k.name === "CAPCUT_COOKIE"
+              ? <><b>Không bắt buộc</b> — giọng CapCut chạy được cả khi chưa đăng nhập. Bấm <b>Đăng nhập CapCut</b>: đăng nhập xong app tự lấy cookie (dùng khi CapCut bắt đăng nhập).</>
+              : <span className="font-mono">{k.name}</span>}>
               <div className="flex gap-2">
                 <Input type={show[k.name] ? "text" : "password"} className="font-mono text-xs placeholder:font-sans"
                   placeholder={k.set ? `Đã lưu: ${k.masked} — nhập để thay, để trống + Xoá để gỡ` : "Chưa cấu hình"}
                   value={draft[k.name] ?? ""} onChange={(e) => setDraft({ ...draft, [k.name]: e.target.value })} />
                 <Button variant="ghost" size="icon" onClick={() => setShow({ ...show, [k.name]: !show[k.name] })}>{show[k.name] ? <EyeOff /> : <Eye />}</Button>
-                {k.set && <Button variant="ghost" onClick={() => setDraft({ ...draft, [k.name]: "" })}>Xoá</Button>}
+                {k.name === "CAPCUT_COOKIE" && window.rf?.capcut && (
+                  <Button variant="outline" disabled={capcutBusy} title="Mở capcut.com, đăng nhập xong app tự lấy và lưu cookie" onClick={capcutLogin}>
+                    {capcutBusy ? <Loader2 className="animate-spin" /> : <LogIn />} {k.set ? "Đăng nhập lại" : "Đăng nhập CapCut"}
+                  </Button>
+                )}
+                {k.set && <Button variant="ghost" onClick={() => (k.name === "CAPCUT_COOKIE" ? capcutLogout() : setDraft({ ...draft, [k.name]: "" }))}>
+                  {k.name === "CAPCUT_COOKIE" ? "Đăng xuất" : "Xoá"}</Button>}
               </div>
             </Field>
           ))}

@@ -37,7 +37,7 @@ export function startBackend(extraEnv: Record<string, string>, report: (s: Pytho
     }
     const env: Record<string, string | undefined> = {
       ...process.env, ...extraEnv,
-      PYTHONIOENCODING: "utf-8", PYTHONUNBUFFERED: "1",
+      PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1", PYTHONUNBUFFERED: "1",   // UTF-8 mode: đọc output ffmpeg có tên file tiếng Việt/Trung không lỗi
       RF_APP_VERSION: app.getVersion(),
       ...(app.isPackaged ? { RF_DATA_DIR: userDataDir("data") } : {}),
     }
