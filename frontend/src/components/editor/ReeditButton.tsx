@@ -13,7 +13,7 @@ import type { JobDetail } from "@/lib/types"
  * "Mở lại hậu kỳ": job mới dùng lại kịch bản đã duyệt → đọc lại giọng (có thể đổi giọng) → dừng ở Xem trước.
  * Bỏ qua Whisper + Vision AI + viết kịch bản.
  */
-export function ReeditButton({ job }: { job: JobDetail }) {
+export function ReeditButton({ job, label = "Mở lại hậu kỳ" }: { job: JobDetail; label?: string }) {
   const { openJob } = useStore()
   const oldVoice = String(job.config.voice ?? "")
   const [open, setOpen] = useState(false)
@@ -35,7 +35,7 @@ export function ReeditButton({ job }: { job: JobDetail }) {
   return (
     <>
       <Button size="sm" variant="outline" onClick={() => setOpen(true)} title="Sửa tiếp & xuất lại — dùng lại kịch bản, không chạy lại Whisper / AI">
-        <Wand2 /> Mở lại hậu kỳ
+        <Wand2 /> {label}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-md">

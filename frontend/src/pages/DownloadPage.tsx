@@ -90,7 +90,7 @@ export function DownloadPage() {
   const okCount = infos.filter((i) => !i.error).length
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_340px] gap-5">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px] gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
       <div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1 pb-6">
         <Section title="Dán link video" icon={<Link2 />} desc="Mỗi dòng 1 link — dán nguyên đoạn chia sẻ Douyin / TikTok cũng được, app tự lấy link"
           action={<Segmented size="sm" value={quality} onChange={setQuality} items={QUALITIES} />}>

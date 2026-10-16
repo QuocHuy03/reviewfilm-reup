@@ -28,7 +28,7 @@ def build_scene_plan(plot_beats, real_cuts, video_duration, target_minutes, log_
     video_duration = _safe_float(video_duration, 0.0)
     cuts = sorted({round(_safe_float(c), 1) for c in real_cuts or [] if 0.0 < _safe_float(c) < video_duration})
     if not cuts:
-        log_fn('   [SceneV2] Khong co diem cat canh that -> dung thuat toan chia canh cu.')
+        log_fn('   [SceneV2] Không có điểm cắt cảnh thật -> dùng thuật toán chia cảnh cũ.')
         return _build_scenes_from_beats(plot_beats, video_duration, target_minutes)
     if video_duration <= 0:
         raise ValueError(f'''video_duration khong hop le ({video_duration}) — khong the tao scenes.''')
@@ -51,7 +51,7 @@ def build_scene_plan(plot_beats, real_cuts, video_duration, target_minutes, log_
             continue
         desc = _describe_segment(start, end, beats)
         scenes.append({'clip_start': start, 'clip_end': end, 'description': desc or f'''Canh {len(scenes) + 1}'''})
-    log_fn(f'''   [SceneV2] {len(cuts)} diem cat that -> {len(scenes)} chuong canh phu kin toan phim (muc tieu {min_scenes}, tran {scene_cap}).''')
+    log_fn(f'''   [SceneV2] {len(cuts)} điểm cắt thật -> {len(scenes)} chương cảnh phủ kín toàn phim (mục tiêu {min_scenes}, trần {scene_cap}).''')
     return scenes
 def _thin_bounds(bounds, min_gap):
     if len(bounds) <= 2:
@@ -96,7 +96,7 @@ def _describe_segment(start, end, beats):
 def analyze_scenes_with_vision(scenes_meta, video_path, openai_key, temp_dir, log_fn=print, quality='standard', film_context='', char_glossary=None):
     from .gemini_analyzer import _vision_dispatch, _clean_json_newlines, vision_available
     if not vision_available('', openai_key):
-        log_fn('   [Map] Chua co key Vision / tai khoan Gemini web -> khong the phan tich Vision AI rieng tung chuong, giu outline/summary cu (chat luong nhu ban V1).')
+        log_fn('   [Map] Chưa có key Vision / tài khoản Gemini web -> không thể phân tích Vision AI riêng từng chương, giữ dàn ý/tóm tắt cũ (chất lượng như bản V1).')
         return ''
     if not scenes_meta:
         return ''
@@ -113,7 +113,7 @@ def analyze_scenes_with_vision(scenes_meta, video_path, openai_key, temp_dir, lo
     fail_count = 0
     outline_parts = []
     recent_summaries = []
-    log_fn(f'''   [Map] Bat dau phan tich Vision AI rieng cho {n} chuong canh (Map-Reduce)...''')
+    log_fn(f'''   [Map] Bắt đầu phân tích Vision AI riêng cho {n} chương cảnh (Map-Reduce)...''')
     for (i, scene) in enumerate(scenes_meta):
         cs = scene['clip_start']
         ce = scene['clip_end']
@@ -121,7 +121,7 @@ def analyze_scenes_with_vision(scenes_meta, video_path, openai_key, temp_dir, lo
         n_frames = 2 if dur <= 20 else 3 if dur <= 45 else 4
         frames = _extract_chapter_frames(video_path, frames_dir, cs, ce, n_frames, i, log_fn)
         if not frames:
-            log_fn(f'''   [Map] [WARN] Chuong {i + 1}/{n} ({cs:.1f}s-{ce:.1f}s): khong trich duoc frame -> giu mo ta cu.''')
+            log_fn(f'''   [Map] [WARN] Chương {i + 1}/{n} ({cs:.1f}s-{ce:.1f}s): không trích được khung hình -> giữ mô tả cũ.''')
             fail_count += 1
             outline_parts.append(scene.get('description', ''))
             continue
@@ -141,15 +141,15 @@ def analyze_scenes_with_vision(scenes_meta, video_path, openai_key, temp_dir, lo
                 recent_summaries.append(desc)
             ok_count += 1
         else:
-            log_fn(f'''   [Map] [WARN] Chuong {i + 1}/{n} ({cs:.1f}s-{ce:.1f}s): Vision AI khong tra ve duoc mo ta -> giu mo ta cu.''')
+            log_fn(f'''   [Map] [WARN] Chương {i + 1}/{n} ({cs:.1f}s-{ce:.1f}s): Vision AI không trả về được mô tả -> giữ mô tả cũ.''')
             fail_count += 1
             outline_parts.append(scene.get('description', ''))
         if (i + 1) % 5 == 0 or i == n - 1:
-            log_fn(f'''   [Map] Da phan tich {i + 1}/{n} chuong canh...''')
+            log_fn(f'''   [Map] Đã phân tích {i + 1}/{n} chương cảnh...''')
     if ok_count == 0:
-        log_fn('   [Map] Khong chuong nao phan tich Vision AI thanh cong -> giu outline/summary cu.')
+        log_fn('   [Map] Không chương nào phân tích Vision AI thành công -> giữ dàn ý/tóm tắt cũ.')
         return ''
-    log_fn(f'''   [Map-Reduce] Da phan tich Vision AI rieng cho {ok_count}/{n} chuong canh -> gop thanh outline day du cho ca phim.''' + (f''' ({fail_count} chuong loi, da giu mo ta cu.)''' if fail_count else ''))
+    log_fn(f'''   [Map-Reduce] Đã phân tích Vision AI riêng cho {ok_count}/{n} chương cảnh -> gộp thành dàn ý đầy đủ cho cả phim.''' + (f''' ({fail_count} chương lỗi, đã giữ mô tả cũ.)''' if fail_count else ''))
     return '\n'.join((p for p in outline_parts if p))
 def _parse_chapter_summary(text, clean_json_newlines):
     if not text:

@@ -21,13 +21,13 @@ def detect_scene_cuts(video_path, log_fn=print, threshold=27.0):
     try:
         from scenedetect import detect, ContentDetector
     except Exception as e:
-        log_fn(f'''   [WARN] Khong nap duoc PySceneDetect ({str(e)[slice(None, 80, None)]}) — bo qua cat canh that, dung timestamp Gemini nhu cu.''')
+        log_fn(f'''   [WARN] Không nạp được PySceneDetect ({str(e)[slice(None, 80, None)]}) — bỏ qua cắt cảnh thật, dùng timestamp Gemini như cũ.''')
         LAST_FALLBACK_REASON = 'missing_lib'
         return []
     try:
         scene_list = detect(video_path, ContentDetector(threshold=threshold))
     except Exception as e:
-        log_fn(f'''   [WARN] PySceneDetect loi khi phan tich video ({str(e)[slice(None, 100, None)]}) — dung timestamp Gemini nhu cu.''')
+        log_fn(f'''   [WARN] PySceneDetect lỗi khi phân tích video ({str(e)[slice(None, 100, None)]}) — dùng timestamp Gemini như cũ.''')
         LAST_FALLBACK_REASON = 'detect_error'
         return []
     cuts = []
@@ -37,13 +37,13 @@ def detect_scene_cuts(video_path, log_fn=print, threshold=27.0):
             if s > 0.05:
                 cuts.append(round(s, 2))
     except Exception as e:
-        log_fn(f'''   [WARN] Loc diem cat canh loi ({str(e)[slice(None, 80, None)]}) — dung timestamp Gemini nhu cu.''')
+        log_fn(f'''   [WARN] Lọc điểm cắt cảnh lỗi ({str(e)[slice(None, 80, None)]}) — dùng timestamp Gemini như cũ.''')
         LAST_FALLBACK_REASON = 'detect_error'
         return []
     cuts = sorted(set(cuts))
     if cuts:
-        log_fn(f'''   [SceneCut] PySceneDetect tim duoc {len(cuts)} diem cat canh that.''')
+        log_fn(f'''   [SceneCut] PySceneDetect tìm được {len(cuts)} điểm cắt cảnh thật.''')
     else:
-        log_fn('   [SceneCut] Khong tim thay cat canh ro rang (video phang/tinh) — se dung timestamp Gemini.')
+        log_fn('   [SceneCut] Không tìm thấy điểm cắt cảnh rõ ràng (video phẳng/tĩnh) — sẽ dùng timestamp Gemini.')
         LAST_FALLBACK_REASON = 'no_cuts'
     return cuts

@@ -162,7 +162,7 @@ def _web_ai():
 # ═════════════════════════════════════════════════════════════════ bước dùng chung
 def _resolve_video(job, inp, temp_dir):
     if not _is_url(inp):
-        job.log(f'[1] File video: {os.path.basename(inp)}', 'info')
+        job.log(f'[1] Tệp video: {os.path.basename(inp)}', 'info')
         return inp
     from core.downloader import download_video
     job.log('[1] Tải video từ URL...', 'info')
@@ -213,23 +213,38 @@ def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False):
     return transcript, lang
 
 
-def _translate(job, segments, lang, cfg, video_path, cost=None):
+def _translate(job, segments, lang, cfg, video_path):
     """Dịch + Việt hoá phụ đề. AI khi bật ai_translate và có engine; không thì Google miễn phí."""
     from core.translator import translate_and_localize_transcript
     use_ai = bool(cfg.get('ai_translate')) and _web_ai().available()
     job.log(f"   Dịch phụ đề ({'AI — tài khoản web' if use_ai else 'Google miễn phí'})...", 'info')
     return translate_and_localize_transcript(
-        segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, cost_acc=cost, user_context=(cfg.get('film_context') or '').strip(),
+        segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=(cfg.get('film_context') or '').strip(),
         video_filename=os.path.basename(video_path), allow_web=use_ai)
+
+
+def voice_in_use(job):
+    """Giọng để tạo lại câu: giọng đã đọc thật cho video (khác giọng đã chọn khi CapCut lỗi phải đọc bằng Edge)."""
+    return job.result.get('voice_fallback') or job.config.get('voice', '')
+
+
+def _note_voice_fallback(job, rendered):
+    """Đã chọn CapCut mà cả video phải đọc bằng Edge → nhớ lại để tạo lại câu không bị lẫn 2 giọng."""
+    voice = _voice_id(job.config.get('voice', ''))
+    if not str(voice).lower().startswith('capcut-') or not rendered:
+        return
+    if all(s.get('_tts_engine_used') == 'edge' for s in rendered):
+        from core.capcut_tts import edge_fallback
+        job.result['voice_fallback'] = edge_fallback(voice[len('capcut-'):])
+        job.log('   Video đã đọc bằng Edge thay CapCut — các câu tạo lại sau này cũng dùng Edge cho đồng đều giọng', 'warn')
+    else:
+        job.result.pop('voice_fallback', None)
 
 
 def synthesize(scenes, voice_label, out_dir, log, strict=False):
     from core.tts_engine import generate_tts_per_scene
     voice = _voice_id(voice_label)
-    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log,
-                                  fptai_key=get_key('FPT_API_KEY'), openai_key=NO_KEY,
-                                  elevenlabs_key=get_key('ELEVENLABS_API_KEY'),
-                                  viettel_key=get_key('VIETTEL_AI_TOKEN'), strict_voice=strict)
+    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=strict)
 
 
 # ═════════════════════════════════════════════════════════════════ review / reup
@@ -240,7 +255,6 @@ class Run:
     cfg: dict
     out_dir: str
     temp_dir: str
-    cost: object
     is_review: bool
     video_path: str = ''
     base: str = ''
@@ -302,24 +316,18 @@ def _restore_checkpoint(run):
 
 
 def run_video_pipeline(job):
-    from core.cost_tracker import CostAccumulator, _cost_tls
     cfg = job.config
     out_dir = _out_dir(cfg)
-    cost = CostAccumulator()
-    _cost_tls.acc = cost
-    try:
-        with _workspace(job, out_dir, resumable=True) as temp_dir:
-            run = Run(job, cfg, out_dir, temp_dir, cost, is_review=cfg.get('mode', 'review') == 'review',
-                      layout=_layout(cfg))
-            funcs = _step_funcs(run)
-            start = _restore_checkpoint(run)
-            for (key, _) in VIDEO_STEPS[start:]:
-                funcs[key](run)
-                job.check()
-                _save_checkpoint(run, key)
-        job.checkpoint = {}
-    finally:
-        _cost_tls.acc = None
+    with _workspace(job, out_dir, resumable=True) as temp_dir:
+        run = Run(job, cfg, out_dir, temp_dir, is_review=cfg.get('mode', 'review') == 'review',
+                  layout=_layout(cfg))
+        funcs = _step_funcs(run)
+        start = _restore_checkpoint(run)
+        for (key, _) in VIDEO_STEPS[start:]:
+            funcs[key](run)
+            job.check()
+            _save_checkpoint(run, key)
+    job.checkpoint = {}
 
 
 def _step_source(run):
@@ -392,7 +400,7 @@ def _step_translate(run):
     """Reup: dịch phụ đề gốc sang tiếng Việt."""
     run.job.set_progress(30, 'Dịch phụ đề')
     run.log('[3] Dịch phụ đề...', 'info')
-    scenes = _translate(run.job, run.transcript['segments'], run.lang, run.cfg, run.video_path, cost=run.cost)
+    scenes = _translate(run.job, run.transcript['segments'], run.lang, run.cfg, run.video_path)
     if not scenes:
         raise RuntimeError('Dịch phụ đề thất bại.')
     run.job.scenes = [_clean_scene(s) for s in scenes]
@@ -428,7 +436,8 @@ def _step_voice(run):
         rendered = synthesize([dict(s) for s in job.scenes], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False))
     if not rendered:
         raise RuntimeError('Tạo giọng đọc thất bại.')
-    rendered = _fill_missing_voices(job, rendered, voice_label, audio_dir, cfg)
+    _note_voice_fallback(job, rendered)
+    rendered = _fill_missing_voices(job, rendered, voice_in_use(job), audio_dir, cfg)
     job.scenes = [_clean_scene(s) for s in rendered]
 
 
@@ -485,6 +494,7 @@ def _step_autopost(run):
             edits = []
             run.log(f'   [WARN] AI hậu kỳ bỏ qua: {e}', 'warn')
         multi = bool(cfg.get('multi_voice'))
+        (to_voice, old_text) = ([], {})
         for e in edits:
             sc = scenes[e['id']]
             if e.get('exclude'):
@@ -496,17 +506,27 @@ def _step_autopost(run):
             if e.get('subtitle'):
                 sc['subtitle'] = e['subtitle']
             if e.get('voiceover'):
+                old_text[e['id']] = (sc.get('voiceover'), sc.get('subtitle'))
                 sc['voiceover'] = e['voiceover']
                 if run.is_review:
                     sc['subtitle'] = e['voiceover']
-                out_dir = os.path.join(run.temp_dir, 'audio', f"autopost_{e['id']}")
-                rendered = synthesize([dict(sc)], cfg.get('voice', ''), out_dir, job.log, strict=cfg.get('strict_voice', False))
-                if rendered and rendered[0].get('tts_path'):
-                    sc.update({k: v for (k, v) in rendered[0].items() if k.startswith('tts_') or k == '_tts_engine_used'})
+                to_voice.append(e['id'])
+            ai_count += 1
+        if to_voice:
+            job.check()
+            run.log(f'   Tạo lại giọng {len(to_voice)} câu đã sửa (một lượt, song song)...', 'step')
+            batch = [{**scenes[i], '_original_index': i} for i in to_voice]
+            out_dir = os.path.join(run.temp_dir, 'audio', f'autopost_{uuid.uuid4().hex[:6]}')
+            rendered = synthesize(batch, voice_in_use(job), out_dir, job.log, strict=cfg.get('strict_voice', False))
+            by_idx = {int(r['_original_index']): r for r in rendered or [] if r.get('tts_path') and '_original_index' in r}
+            for i in to_voice:
+                if i in by_idx:
+                    scenes[i].update({k: v for (k, v) in by_idx[i].items() if k.startswith('tts_') or k == '_tts_engine_used'})
                     regen_ok += 1
                 else:
+                    # lời mới chưa đọc được → giữ nguyên lời + phụ đề cũ cho khớp giọng cũ
+                    (scenes[i]['voiceover'], scenes[i]['subtitle']) = old_text[i]
                     regen_fail += 1
-            ai_count += 1
     else:
         run.log('   (Chưa kết nối ChatGPT/Gemini — chỉ căn hình theo lời đọc)', 'info')
     fixed |= set(fix_durations(scenes, vdur))
@@ -526,6 +546,20 @@ def _step_preview(run):
     if reply.get('scenes') is not None:
         job.scenes = [s for s in reply['scenes'] if not s.get('excluded')]
     run.mixer = reply.get('mixer') or {}
+    # Vùng che sub gốc / vị trí phụ đề mới chỉnh ở Hậu kỳ → ghi vào cấu hình job (tự sửa lỗi, hậu kỳ lại dùng tiếp)
+    cover = run.mixer.pop('cover', None) or {}
+    if 'cover_boxes' in cover:
+        boxes = [[float(v) for v in b][:4] for b in cover['cover_boxes'] if isinstance(b, (list, tuple)) and len(b) >= 4]
+        run.cfg['cover_boxes'] = boxes
+        run.cfg['remove_old_sub'] = bool(cover.get('remove_old_sub', True)) and bool(boxes)
+    if cover.get('sub_margin_pct') is not None:
+        run.cfg['sub_margin_pct'] = max(1.0, min(60.0, float(cover['sub_margin_pct'])))
+    # Hiệu ứng / chuyển cảnh chọn ở Hậu kỳ (job tạo trước khi có tuỳ chọn này vẫn bật được)
+    fx = run.mixer.pop('fx', None) or {}
+    for (key, conv) in (('transition', str), ('transition_duration', float), ('color_preset', str),
+                        ('ken_burns', bool), ('ken_burns_zoom', float), ('vignette', bool)):
+        if key in fx:
+            run.cfg[key] = conv(fx[key])
     if not job.scenes:
         raise RuntimeError('Không còn câu nào được chọn để xuất video.')
 
@@ -549,6 +583,15 @@ def _render_options(cfg, mixer):
     for key in ('intro_path', 'outro_path'):
         if cfg.get(key) and os.path.isfile(cfg[key]):
             opts[key] = cfg[key]
+    # Hiệu ứng: màu, zoom chậm, tối viền, chuyển cảnh (tắt hết → giống bản cũ, dùng lại clip đã dựng)
+    if cfg.get('color_preset', 'none') != 'none':
+        opts['color_preset'] = cfg['color_preset']
+    if cfg.get('ken_burns'):
+        opts.update(ken_burns=True, ken_burns_zoom=float(cfg.get('ken_burns_zoom', 0.08)))
+    if cfg.get('vignette'):
+        opts['vignette'] = True
+    if cfg.get('transition', 'none') != 'none':
+        opts.update(transition=cfg['transition'], transition_duration=float(cfg.get('transition_duration', 0.5)))
     return opts
 
 
@@ -560,10 +603,6 @@ def _step_render(run):
     out_path = _unique_path(os.path.join(run.out_dir, run.base + ('_review.mp4' if run.is_review else '_reup.mp4')))
     _render(run, out_path)
     _write_job_srt(run)
-    try:
-        run.log(f'[CHI PHÍ] {run.cost.summary()}', 'info')
-    except Exception:
-        pass
     run.log(f'[OK] Video: {out_path}', 'ok')
     job.set_progress(96, 'Kiểm tra video')
     try:
@@ -634,7 +673,7 @@ def _auto_fix(run, qa):
 
     def synth(scene, tag):
         job.check()
-        rendered = synthesize([scene], cfg.get('voice', ''), os.path.join(run.temp_dir, 'audio', tag), job.log, strict=cfg.get('strict_voice', False))
+        rendered = synthesize([scene], voice_in_use(job), os.path.join(run.temp_dir, 'audio', tag), job.log, strict=cfg.get('strict_voice', False))
         if rendered and rendered[0].get('tts_path'):
             return _clean_scene({**scene, **rendered[0]})
         return None
@@ -697,7 +736,7 @@ def regenerate_scene(job, idx, text, scene=None):
     if scene.get('subtitle') in (None, '') or job.config.get('mode') == 'review':
         scene['subtitle'] = text
     out_dir = os.path.join(job.temp_dir, 'audio', f'regen_{uuid.uuid4().hex[:6]}')
-    rendered = synthesize([scene], job.config.get('voice', ''), out_dir, job.log, strict=job.config.get('strict_voice', False))
+    rendered = synthesize([scene], voice_in_use(job), out_dir, job.log, strict=job.config.get('strict_voice', False))
     if not rendered or not rendered[0].get('tts_path'):
         raise RuntimeError('Không tạo được giọng cho câu này.')
     new = _clean_scene({**scene, **rendered[0]})

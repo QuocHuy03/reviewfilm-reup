@@ -1,4 +1,4 @@
-"""Tải video: xem trước link, trạng thái bộ tải + tài khoản nền tảng, cập nhật yt-dlp."""
+"""Tải video: xem trước link (nhiều link song song) và ảnh bìa qua backend (tránh trang gốc chặn hotlink)."""
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
@@ -43,19 +43,3 @@ def thumb(url: str):
             _THUMBS.clear()
         _THUMBS[url] = hit
     return Response(content=hit[0], media_type=hit[1], headers={'Cache-Control': 'max-age=3600'})
-
-
-@router.get('/status')
-def status():
-    from core.downloader import PLATFORMS, tool_version
-    return {'version': tool_version(), 'platforms': [{'key': k, 'label': v[0]} for (k, v) in PLATFORMS.items()]}
-
-
-@router.post('/update')
-def update():
-    from fastapi import HTTPException
-    from core.downloader import update_tool
-    ok, msg, version = update_tool()
-    if not ok:
-        raise HTTPException(500, f'Cập nhật thất bại: {msg}')
-    return {'version': version}

@@ -132,8 +132,10 @@ def reedit_job(job_id: str, req: ReeditRequest):
         old = manager.get(job_id)
     except KeyError as e:
         raise HTTPException(404, str(e))
-    if old.kind not in ('review', 'reup') or old.status != 'done' or not old.scenes:
-        raise HTTPException(409, 'Chỉ mở lại được job Review / Reup đã hoàn thành.')
+    # Job lỗi / huỷ mà mất thư mục tạm (không "Tiếp tục" được) nhưng đã có kịch bản → vẫn dùng lại được kịch bản
+    has_script = any((s.get('voiceover') or '').strip() for s in old.scenes or [])
+    if old.kind not in ('review', 'reup') or old.status not in ('done', 'error', 'cancelled') or not has_script:
+        raise HTTPException(409, 'Chỉ mở lại được job Review / Reup đã có kịch bản.')
     video = old.result.get('video_path') or (old.config.get('inp') if os.path.isfile(old.config.get('inp', '')) else '')
     if not video or not os.path.isfile(video):
         raise HTTPException(409, 'Không còn file video gốc (video tải từ link đã bị dọn cùng thư mục tạm) — hãy Chạy lại từ đầu.')

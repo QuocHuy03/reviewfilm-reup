@@ -22,6 +22,7 @@ import { confirmAction } from "@/components/ConfirmHost"
 
 const NO_MUTE = { video: false, voice: false, music: false }
 const noop = () => {}
+const boundVideos = new WeakSet<HTMLVideoElement>()
 
 /* ═══════════════════════════════ Khung chung ═══════════════════════════════ */
 /** Bố cục dùng cho MỌI bước: tiêu đề · (màn hình | bảng bên phải) · timeline. */
@@ -54,7 +55,18 @@ function useStaticTimeline(scenes: Scene[]) {
   const { clips, total } = useMemo(() => layoutClips(scenes), [scenes])
   const [time, setTime] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
-  return { clips, total, time, setTime, selected, setSelected }
+  const [playing, setPlaying] = useState(false)
+  /** Gắn thẻ <video> vào ref + theo dõi phát/dừng → nút Phát/Dừng trên timeline đổi icon đúng trạng thái. */
+  const bindVideo = useCallback((ref: { current: HTMLVideoElement | null }) => (el: HTMLVideoElement | null) => {
+    ref.current = el
+    if (!el || boundVideos.has(el)) return
+    boundVideos.add(el)
+    setPlaying(!el.paused)
+    el.addEventListener("play", () => setPlaying(true))
+    el.addEventListener("pause", () => setPlaying(false))
+    el.addEventListener("ended", () => setPlaying(false))
+  }, [])
+  return { clips, total, time, setTime, selected, setSelected, playing, bindVideo }
 }
 
 /* ═══════════════════════════════ Đang chạy ═══════════════════════════════ */
@@ -90,7 +102,7 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
   return (
     <StageShell title={queued ? `Đang xếp hàng${job.queue_pos ? ` #${job.queue_pos}` : ""}` : job.stage || "Đang xử lý…"} dot="bg-primary animate-pulse"
       meta={<span>{job.progress}% · {fmtDuration(job.elapsed)} · có thể chuyển trang, job vẫn chạy nền</span>}
-      monitor={<VideoMonitor path={source} videoRef={(el) => { video.current = el }}
+      monitor={<VideoMonitor path={source} videoRef={tl.bindVideo(video)}
         placeholder={<><Loader2 className="size-6 animate-spin" /> Đang tải video…</>} />}
       actions={<>
         <ol className="flex items-center gap-1">
@@ -133,7 +145,7 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
           </Tooltip>
         )}
       </>}
-      timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={false} selected={tl.selected}
+      timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
         emptyHint={job.kind === "srt" || job.kind === "burn" ? "Job này không dựng cảnh — chỉ xuất phụ đề" : "Các cảnh sẽ hiện ở đây khi có kịch bản / bản dịch"}
         onSeek={tl.setTime} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
@@ -182,7 +194,7 @@ export function ScriptStage({ job }: { job: JobDetail }) {
           {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} Xác nhận & lồng tiếng
         </Button>
       </>}
-      monitor={<VideoMonitor path={job.result.video_path} videoRef={(el) => { video.current = el }} placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
+      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
       side={scenes.map((s, i) => (
         <div key={i} ref={(el) => { items.current[i] = el }} onClick={() => pick(i)}
           className={cn("group grid cursor-pointer grid-cols-[40px_1fr_28px] gap-2 border-b border-border/60 px-3 py-2.5", tl.selected === i && "bg-primary/5")}>
@@ -199,7 +211,7 @@ export function ScriptStage({ job }: { job: JobDetail }) {
             onClick={(e) => { e.stopPropagation(); setScenes(scenes.filter((_, j) => j !== i)) }}><Trash2 /></Button>
         </div>
       ))}
-      timeline={<Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={false} selected={tl.selected}
+      timeline={<Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
         onSeek={tl.setTime} onSelect={pick} onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop}
         onReorder={(from, to) => setScenes((prev) => moveItem(prev, from, to))}
@@ -386,6 +398,8 @@ export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () 
     finally { setBusy("") }
   }
 
+  // Mất thư mục tạm nhưng đã có kịch bản → dùng lại kịch bản (job mới đọc lại giọng, dừng ở Hậu kỳ)
+  const canReuse = !job.resumable && (job.kind === "review" || job.kind === "reup") && job.scenes.some((x) => (x.voiceover || "").trim())
   return (
     <StageShell title={isError ? `Job bị lỗi${job.stage ? ` ở bước: ${job.stage}` : ""}` : "Job đã huỷ"} dot={isError ? "bg-destructive" : "bg-muted-foreground"}
       meta="Chi tiết đầy đủ trong Nhật ký"
@@ -395,11 +409,12 @@ export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () 
             {busy === "resume" ? <Loader2 className="animate-spin" /> : <StepForward />} Tiếp tục từ “{job.resume_from}”
           </Button>
         )}
-        <Button size="sm" variant={job.resumable ? "outline" : "default"} onClick={retry} disabled={!!busy}>
+        {canReuse && <ReeditButton job={job} label="Dùng lại kịch bản" />}
+        <Button size="sm" variant={job.resumable || canReuse ? "outline" : "default"} onClick={retry} disabled={!!busy}>
           {busy === "retry" ? <Loader2 className="animate-spin" /> : <RotateCcw />} Chạy lại từ đầu
         </Button>
       </>}
-      monitor={<VideoMonitor path={job.result.video_path} videoRef={(el) => { video.current = el }} placeholder={<><Film className="size-6" /> Không có video</>} />}
+      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} placeholder={<><Film className="size-6" /> Không có video</>} />}
       side={
         <div className="flex flex-col gap-3 p-4">
           <div className="flex items-center gap-2">
@@ -409,13 +424,16 @@ export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () 
           {job.error && <pre className="max-h-72 overflow-y-auto rounded-md bg-destructive/5 p-3 text-xs whitespace-pre-wrap text-destructive">{job.error}</pre>}
           {job.resumable ? (
             <p className="text-xs text-muted-foreground">Các bước đã xong được giữ lại — “Tiếp tục” chạy tiếp từ bước hỏng, không làm lại từ đầu.</p>
+          ) : canReuse ? (
+            <p className="text-xs text-muted-foreground">Không tiếp tục được (thư mục tạm đã bị dọn), nhưng kịch bản {job.scenes.length} cảnh vẫn còn — <b>Dùng lại kịch bản</b> để đọc lại giọng & dựng lại, bỏ qua Whisper và bước viết kịch bản.</p>
           ) : (job.kind === "review" || job.kind === "reup") && (
             <p className="text-xs text-muted-foreground">Job này không tiếp tục được (lỗi trước khi xong bước đầu, hoặc chạy từ bản cũ) — chạy lại từ đầu với cùng cấu hình.</p>
           )}
         </div>
       }
-      timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={false} selected={tl.selected}
+      timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false} emptyHint="Job dừng trước khi có kịch bản"
+        readOnlyHint={job.resumable ? `Bấm "Tiếp tục" để quay lại bước ${job.resume_from || "đang dở"} — ở đó kéo đổi thứ tự / cắt cảnh được.` : undefined}
         onSeek={tl.setTime} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
         onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop} />}
     />

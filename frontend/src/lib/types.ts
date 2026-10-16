@@ -74,7 +74,6 @@ export type ProbeInfo = {
   url: string; platform: string; platform_label: string; title?: string; duration?: number; thumbnail?: string
   uploader?: string; width?: number; height?: number; source?: string; size?: number; error?: string
 }
-export type DownloadStatus = { version: string; platforms: { key: string; label: string }[] }
 export type DownloadItem = { url: string; platform: string; path?: string; size?: number; error?: string }
 
 export type Preset = { name: string; mode: string; cfg: Record<string, unknown> }

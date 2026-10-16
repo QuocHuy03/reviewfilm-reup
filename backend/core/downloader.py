@@ -80,8 +80,9 @@ def dtk_resolve(url):
         except ValueError:
             raise RuntimeError(f'HTTP {r.status_code}')
         if not d.get('success'):
-            err = d.get('error') or {}
-            raise RuntimeError(str(err.get('message') if isinstance(err, dict) else err)[:150] or f'HTTP {r.status_code}')
+            err = d.get('error')
+            msg = (err.get('message') if isinstance(err, dict) else err) or d.get('title') or ''
+            raise RuntimeError(f'HTTP {r.status_code}' + (f' — {str(msg)[:120]}' if msg else '') + (' (máy chủ đang quá tải/lỗi, thử lại sau)' if r.status_code >= 500 else ''))
         data = d.get('data') or {}
         if data.get('kind') != 'video':
             raise RuntimeError('link này là bài ảnh, không phải video')
@@ -164,6 +165,10 @@ def _friendly(err, url):
         return 'Link này chưa được hỗ trợ (kiểm tra lại link, hoặc mở link trên trình duyệt xem còn xem được không).'
     if 'private' in e or 'deleted' in e or 'removed' in e or 'unavailable' in e:
         return 'Video riêng tư / đã bị xoá / không còn xem được.'
+    if 'no video formats found' in e:
+        # trang tải được nhưng không có luồng video: thường do video chỉ phát cho khu vực khác / bị ẩn
+        return (f'{label} không trả về video cho link này — thường do video chỉ cho xem ở khu vực khác (vd kênh nước ngoài), '
+                'bị ẩn hoặc giới hạn. Mở link trên trình duyệt kiểm tra; nếu bị chặn khu vực thì cần VPN.')
     last = [l for l in (err or '').strip().split('\n') if l.strip()]
     return (last[-1] if last else 'Lỗi không rõ')[:240]
 

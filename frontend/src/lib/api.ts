@@ -1,5 +1,5 @@
 import type {
-  AiEdit, ApiKey, FontInfo, JobDetail, DownloadStatus, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, Voice,
+  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, Voice,
 } from "./types"
 
 export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
@@ -66,8 +66,6 @@ export const api = {
     request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles }),
   downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
   thumbUrl: (url: string) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}`,
-  downloadStatus: () => request<DownloadStatus>("GET", "/api/download/status"),
-  downloadUpdate: () => request<{ version: string }>("POST", "/api/download/update"),
   recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),
   reedit: (id: string, voice?: string) => request<JobSummary>("POST", `/api/jobs/${id}/reedit`, { voice }),
   retry: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/retry`),

@@ -79,11 +79,11 @@ export function SettingsPage() {
         ))}
       </TabsList>
 
-      <TabsContent value="ai" className="max-w-3xl"><AiAccounts /></TabsContent>
+      <TabsContent value="ai"><AiAccounts /></TabsContent>
 
-      <TabsContent value="look" className="max-w-3xl"><AppearancePanel /></TabsContent>
+      <TabsContent value="look"><AppearancePanel /></TabsContent>
 
-      <TabsContent value="voice" className="max-w-3xl">
+      <TabsContent value="voice">
         <Section title="API key giọng đọc" icon={<KeyRound />} desc="Tuỳ chọn — chỉ cần khi dùng giọng FPT.AI / ElevenLabs / Viettel / CapCut. Lưu cục bộ trên máy"
           action={<Button size="sm" onClick={saveKeys} disabled={saving || Object.keys(draft).length === 0}>{saving ? <Loader2 className="animate-spin" /> : <Save />} Lưu key</Button>}>
           {keys.map((k) => (
@@ -108,7 +108,7 @@ export function SettingsPage() {
         </Section>
       </TabsContent>
 
-      <TabsContent value="defaults" className="max-w-3xl">
+      <TabsContent value="defaults">
         <Section title="Mặc định" icon={<SlidersHorizontal />} desc="Giá trị điền sẵn khi tạo job mới"
           action={<Button size="sm" onClick={saveDefaults}><Save /> Lưu</Button>}>
           <Field label="Thư mục xuất"><PathInput value={form.output_dir} onChange={(v) => setForm({ ...form, output_dir: v })} pick={bridge.pickFolder} /></Field>
@@ -124,7 +124,7 @@ export function SettingsPage() {
         </Section>
       </TabsContent>
 
-      <TabsContent value="system" className="grid max-w-5xl grid-cols-2 items-start gap-4">
+      <TabsContent value="system" className="grid grid-cols-2 items-start gap-4">
         <div className="flex flex-col gap-4">
           <UpdatePanel />
           <Section title="Hệ thống" icon={<Monitor />}>

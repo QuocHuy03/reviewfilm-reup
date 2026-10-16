@@ -45,6 +45,13 @@ class VideoJobRequest(SubtitleOptions):
     watermark_opacity: float = Field(0.92, ge=0.1, le=1)
     intro_path: str = ''
     outro_path: str = ''
+    # Hiệu ứng hình & chuyển cảnh
+    color_preset: Literal['none', 'cinematic', 'warm', 'cool', 'vivid', 'vintage', 'bw'] = 'none'
+    ken_burns: bool = False
+    ken_burns_zoom: float = Field(0.08, ge=0.02, le=0.2)
+    vignette: bool = False
+    transition: str = 'none'       # none | random | fade | dissolve | fadeblack | slideleft | wipeleft | zoomin | circleopen | smoothleft | radial | pixelize
+    transition_duration: float = Field(0.5, ge=0.2, le=1.5)
 
 
 class SrtJobRequest(BaseModel):

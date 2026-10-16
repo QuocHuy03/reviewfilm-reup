@@ -132,7 +132,7 @@ def _run(cmd, timeout):
 
 def _probe(path):
     from core.utils import FFPROBE_EXE
-    r = _run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate',
+    r = _run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate,duration',
               '-of', 'json', path], 60)
     data = json.loads(r.stdout or '{}')
     v = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), {})
@@ -140,7 +140,8 @@ def _probe(path):
     num, _, den = (v.get('r_frame_rate') or '0/1').partition('/')
     fps = float(num) / float(den or 1) if float(den or 1) else 0
     return {'duration': float(data.get('format', {}).get('duration') or 0), 'width': v.get('width', 0), 'height': v.get('height', 0),
-            'fps': round(fps, 2), 'has_audio': a is not None}
+            'fps': round(fps, 2), 'has_audio': a is not None,
+            'v_duration': float(v.get('duration') or 0), 'a_duration': float((a or {}).get('duration') or 0)}
 
 
 def _scan(path, duration, has_audio):
@@ -199,6 +200,14 @@ def check_video(output_path, scenes=None, cfg=None, srt_path=''):
     add('file', 'File video', 'ok' if dur > 0 else 'fail',
         f"{_fmt(dur)} · {info['width']}×{info['height']} · {info['fps']:.0f} fps · {os.path.getsize(output_path) / 1_048_576:.1f} MB")
 
+    # Luồng hình phải dài bằng luồng tiếng — ghép lỗi có thể làm hình dừng sớm còn tiếng chạy tiếp (video "đứng" ở giữa)
+    (vd, ad) = (info['v_duration'], info['a_duration'])
+    if vd > 0 and ad > 0:
+        gap = ad - vd
+        add('av_length', 'Hình chạy hết video', 'ok' if gap <= 1.0 else 'fail',
+            f'Hình {_fmt(vd)} · tiếng {_fmt(ad)}' + ('' if gap <= 1.0 else f' — mất hình từ {_fmt(vd)} tới hết video (chỉ còn tiếng)'),
+            video=round(vd, 2), audio=round(ad, 2))
+
     # Khung hình đúng lựa chọn
     want = str(cfg.get('target_resolution') or '1920x1080')
     try:
@@ -209,8 +218,8 @@ def check_video(output_path, scenes=None, cfg=None, srt_path=''):
     except ValueError:
         pass
 
-    # Độ dài so với lời đọc (+ intro/outro)
-    if scenes:
+    # Độ dài so với lời đọc (+ intro/outro). Reup giữ trọn phim gốc (đoạn không thoại để im lời) → không so được với lời đọc
+    if scenes and cfg.get('mode', 'review') == 'review':
         expected = sum(float(s.get('tts_duration') or 0) for s in scenes)
         extra = media_duration(cfg.get('intro_path')) + media_duration(cfg.get('outro_path'))
         expected += extra

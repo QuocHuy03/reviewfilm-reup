@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils"
 
 type Action = { page: Page; title: string; desc: string; icon: ReactNode; mode?: "review" | "reup" }
 const ACTIONS: Action[] = [
-  { page: "download", title: "Tải video", desc: "Douyin, TikTok, Bilibili, Kuaishou, YouTube… tải về rồi làm video luôn.", icon: <Download /> },
+  { page: "download", title: "Tải video", desc: "Douyin, TikTok, Bilibili, Weibo, YouTube… tải về rồi làm video luôn.", icon: <Download /> },
   { page: "create", mode: "review", title: "Tạo review phim", desc: "AI xem phim, viết kịch bản, lồng tiếng, dựng video và viết bài đăng.", icon: <Clapperboard /> },
   { page: "create", mode: "reup", title: "Dịch & Reup", desc: "Nhận dạng lời thoại, dịch sang tiếng Việt, lồng tiếng thuyết minh.", icon: <Languages /> },
   { page: "subtitles", title: "Phụ đề", desc: "Tách SRT bằng Whisper, sửa phụ đề, ghép phụ đề vào video.", icon: <Captions /> },

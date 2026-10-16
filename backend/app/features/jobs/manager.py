@@ -303,7 +303,7 @@ class JobManager:
                     pass
         if n:
             try:
-                print(f'[don dep] da xoa {n} thu muc tam cu ({freed / 1_048_576:.0f} MB)', flush=True)
+                print(f'[dọn dẹp] đã xóa {n} thư mục tạm cũ ({freed / 1_048_576:.0f} MB)', flush=True)
             except Exception:
                 pass
 

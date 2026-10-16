@@ -66,11 +66,6 @@ def _create_silent_wav(path, duration, sr=44100):
         w.setsampwidth(2)
         w.setframerate(sr)
         w.writeframes(data.tobytes())
-def _escape_ffmpeg_path(path):
-    p = path.replace('\\', '/')
-    p = p.replace(':', '\\:')
-    p = p.replace("'", "'\\\\''")
-    return p
 def _move_into(src, dst):
     """File cuối nằm trong thư mục tạm cùng ổ với thư mục xuất → chuyển (tức thì, không tốn gấp đôi ổ đĩa); khác ổ thì chép."""
     try:
@@ -184,7 +179,7 @@ def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
         if os.path.exists(target_path):
             if os.path.getsize(target_path) > 0:
                 return True
-    log_fn('   [Branding] NVENC fallback CPU encode cho clip standardize...')
+    log_fn('   [Branding] NVENC lỗi, chuyển sang encode bằng CPU cho clip chuẩn hóa...')
     cpu_enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
     if has_audio_track:
         cmd_fb = [FFMPEG_EXE, '-y', '-i', src_path, '-vf', vf, *cpu_enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), target_path]
@@ -192,7 +187,7 @@ def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
         cmd_fb = [FFMPEG_EXE, '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-i', src_path, '-vf', vf, '-map', '1:v', '-map', '0:a', *cpu_enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), '-shortest', target_path]
     r2 = subprocess.run(cmd_fb, capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
     if r2.returncode != 0:
-        log_fn(f'''   [WARN] _standardize_clip that bai: {r2.stderr[slice(-300, None, None)]}''')
+        log_fn(f'''   [WARN] _standardize_clip thất bại: {r2.stderr[slice(-300, None, None)]}''')
     return r2.returncode == 0 and os.path.getsize(target_path) > 0
 def recap_length_report(scenes, output_duration_sec):
     n = len(scenes or [])
@@ -225,10 +220,10 @@ def _safe_duration(path):
         return 0.0
 def build_review_video(scenes, source_video, output_path, temp_dir, target_resolution='1920x1080', fps=30, original_volume=0.08, burn_subtitles=True, bgm_path='', bgm_volume=0.05, log_fn=print, is_reup=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, speed_up_video=False, video_speed=1.0, audio_ducking=True, watermark_path='', intro_path='', outro_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, music_clips=None, mute_music=False, mute_sfx=False, **kwargs):
     if not scenes:
-        log_fn('   [LOI] Khong co canh nao de dung video')
+        log_fn('   [LỖI] Không có cảnh nào để dựng video')
         return
     if is_reup:
-        log_fn('   [Reup Mode] Tien hanh phan tich va cat ghep video theo phuong an B (co gian video)...')
+        log_fn('   [Reup Mode] Tiến hành phân tích và cắt ghép video theo phương án B (co giãn video)...')
         video_dur = _safe_duration(source_video)
         has_audio = _has_audio(source_video)
         continuous_scenes = []
@@ -290,14 +285,14 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     try:
         speech_scenes = [s for s in scenes if _resolve_subtitle_text(s, sub_source_mode)]
         _generate_srt_file(speech_scenes, final_srt_path, sub_max_chars_per_chunk=kwargs.get('sub_max_chars_per_chunk', 56), sub_max_lines=kwargs.get('sub_max_lines', 2), sub_source_mode=sub_source_mode)
-        log_fn(f'''   Da tao file phu de SRT dong bo: {final_srt_path}''')
+        log_fn(f'''   Đã tạo file phụ đề SRT đồng bộ: {final_srt_path}''')
     except Exception as e:
-        log_fn(f'''   [WARN] Loi tao file phu de SRT: {e}''')
+        log_fn(f'''   [WARN] Lỗi tạo file phụ đề SRT: {e}''')
     use_nvenc = _check_nvenc()
     if use_nvenc:
-        log_fn('   GPU NVIDIA NVENC phat hien — encode bang GPU (nhanh 5-10x)')
+        log_fn('   Phát hiện GPU NVIDIA NVENC — encode bằng GPU (nhanh gấp 5-10 lần)')
     else:
-        log_fn('   Encode bang CPU x264 (cai NVIDIA GPU de nhanh hon)')
+        log_fn('   Encode bằng CPU x264 (cài GPU NVIDIA để nhanh hơn)')
     clips_dir = os.path.join(temp_dir, 'clips')
     os.makedirs(clips_dir, exist_ok=True)
     sub_font_name = kwargs.get('sub_font_name', 'Segoe UI')
@@ -307,6 +302,9 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     else:
         font_path = _find_system_font(sub_font_name)
     video_total_duration = _safe_duration(source_video)
+    # chuyển cảnh chỉ dùng lúc ghép → tách khỏi kwargs để đổi kiểu chuyển cảnh không phải dựng lại clip
+    transition = str(kwargs.pop('transition', 'none') or 'none')
+    transition_duration = kwargs.pop('transition_duration', 0.5)
     workers = max(1, min(4, (os.cpu_count() or 2) // 2))
     if kwargs.get('low_memory_mode'):
         workers = 1
@@ -327,7 +325,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         return os.path.join(clips_dir, f'clip_{sig}.mp4')
 
     reused = [0]
-    log_fn(f'''   Cat va xu ly {len(scenes)} clip (song song {workers} FFmpeg)...''')
+    log_fn(f'''   Cắt và xử lý {len(scenes)} clip (song song {workers} FFmpeg)...''')
     results = {}
     done_count = [0]
     def _render_one(args):
@@ -341,7 +339,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         try:
             ok = _process_one_scene(source_video, scene, clip_out, target_resolution, fps, original_volume, burn_subtitles, log_fn, i, font_path, video_total_duration, use_nvenc=use_nvenc, remove_old_sub=remove_old_sub, sub_cover_height=sub_cover_height, mirror_video=bool(mirror_video) and i % 2 == 0, watermark_path=watermark_path, ai_sub_box=ai_sub_box, ai_logo_box=ai_logo_box, remove_old_logo=remove_old_logo, manual_logo_corner=manual_logo_corner, manual_logo_size=manual_logo_size, watermark_corner=watermark_corner, watermark_size_pct=watermark_size_pct, watermark_margin_x_pct=watermark_margin_x_pct, watermark_margin_y_pct=watermark_margin_y_pct, watermark_opacity=watermark_opacity, blur_boxes=blur_boxes, **kwargs)
         except Exception as e:
-            log_fn(f'''   [LOI] Canh {i + 1} gap loi: {e}''')
+            log_fn(f'''   [LỖI] Cảnh {i + 1} gặp lỗi: {e}''')
             ok = False
         return (i, clip_out if ok else None)
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -352,10 +350,10 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
             if clip_path:
                 results[i] = clip_path
             else:
-                log_fn(f'''   [WARN] Bo qua canh {i + 1}''')
+                log_fn(f'''   [WARN] Bỏ qua cảnh {i + 1}''')
             n = done_count[0]
             if n % 5 == 0 or n == len(scenes):
-                log_fn(f'''   Tien do cat clip: {n}/{len(scenes)}''')
+                log_fn(f'''   Tiến độ cắt clip: {n}/{len(scenes)}''')
     if should_stop and should_stop():
         log_fn('   [DỪNG] Đã huỷ khi đang dựng video.')
         return
@@ -363,7 +361,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         log_fn(f'   Dùng lại {reused[0]}/{len(scenes)} clip đã dựng trước đó (cảnh không đổi) — chỉ dựng {len(scenes) - reused[0]} cảnh')
     final_clips = [results[k] for k in sorted(results)]
     if not final_clips:
-        log_fn('   [LOI] Khong dung duoc clip nao')
+        log_fn('   [LỖI] Không dựng được clip nào')
         return
     if intro_path and os.path.exists(intro_path):
         intro_std = os.path.join(temp_dir, 'intro_std.mp4')
@@ -382,8 +380,14 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         else:
             log_fn('   [WARN] Đồng bộ Video Outro thất bại, bỏ qua.')
     concat_output = os.path.join(temp_dir, 'concat_output.mp4')
-    log_fn(f'''   Ghep {len(final_clips)} clip thanh video cuoi...''')
-    ok = _concat_clips(final_clips, concat_output, temp_dir, log_fn)
+    log_fn(f'''   Ghép {len(final_clips)} clip thành video cuối...''')
+    ok = False
+    if transition != 'none' and len(final_clips) > 1:
+        ok = _concat_with_transitions(final_clips, concat_output, temp_dir, log_fn, transition, transition_duration, fps, use_nvenc)
+        if not ok:
+            log_fn('   [WARN] Ghép có chuyển cảnh lỗi — ghép thường (không chuyển cảnh)')
+    if not ok:
+        ok = _concat_clips(final_clips, concat_output, temp_dir, log_fn)
     if not ok:
         log_fn('   [LOI] Ghép nối các phân cảnh video thất bại')
         return
@@ -428,7 +432,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
             _move_into(audio_src, output_path)
     else:
         _move_into(audio_src, output_path)
-    log_fn(f'''   Da xuat video: {output_path}''')
+    log_fn(f'''   Đã xuất video: {output_path}''')
     try:
         _rep = recap_length_report(scenes, _safe_duration(output_path))
         log_fn(f'''   [ĐO ĐỘ DÀI] {_rep['n_scenes']} cảnh | giọng đọc {_rep['total_tts_sec'] / 60:.1f}′ | lát gạch nguồn {_rep['total_tile_sec'] / 60:.1f}′ | video xuất {_rep['output_sec'] / 60:.1f}′ | {_rep['total_words']} từ (~{_rep['implied_tts_wpm']:.0f} từ/phút thực).''')
@@ -443,7 +447,7 @@ def _mix_bgm(video_in, bgm_path, video_out, bgm_volume, log_fn=print, audio_duck
     cmd = [FFMPEG_EXE, '-y', '-i', video_in, '-stream_loop', '-1', '-i', bgm_path, '-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Trộn nhạc nền (BGM)', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
-        log_fn(f'''   [WARN] Mix BGM loi: {r.stderr[slice(-300, None, None)]}''')
+        log_fn(f'''   [WARN] Trộn nhạc nền (BGM) lỗi: {r.stderr[slice(-300, None, None)]}''')
         return False
     return os.path.exists(video_out) and os.path.getsize(video_out) > 0
 def _mix_multi_audio(video_in, clips, video_out, log_fn=print, mute_music=False, mute_sfx=False):
@@ -481,7 +485,7 @@ def _mix_multi_audio(video_in, clips, video_out, log_fn=print, mute_music=False,
     cmd += ['-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label=f'''Trộn {len(usable)} đoạn Nhạc/SFX''', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
-        log_fn(f'''   [WARN] Mix nhieu am thanh loi: {r.stderr[slice(-300, None, None)]}''')
+        log_fn(f'''   [WARN] Trộn nhiều âm thanh lỗi: {r.stderr[slice(-300, None, None)]}''')
         return False
     return os.path.exists(video_out) and os.path.getsize(video_out) > 0
 def _process_one_scene(source_video, scene, out_path, resolution, fps, original_volume, burn_subtitles, log_fn, i=0, font_path=None, video_total_duration=0, use_nvenc=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, watermark_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, **kwargs):
@@ -595,7 +599,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             if w_pct > 0.01:
                 if h_pct > 0.01:
                     vf += f''',drawbox=x=iw*{xmin:.4f}:y=ih*{ymin:.4f}:w=iw*{w_pct:.4f}:h=ih*{h_pct:.4f}:color=black:t=fill'''
-    vf += ',eq=brightness=0.02:saturation=1.06'
+    vf += ',' + COLOR_PRESETS.get(str(kwargs.get('color_preset') or 'none'), COLOR_PRESETS['none'])
     vf += f''',crop=iw*0.97:ih*0.97,scale={w}:{h}'''
     if not is_reup:
         if clip_duration < tts_duration:
@@ -617,7 +621,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     subtitle_files = []
     sub_filters = []
     if burn_subtitles and subtitle and not font_path:
-        log_fn('   [WARN] Khong tim thay font Unicode, bo qua burn subtitle canh nay')
+        log_fn('   [WARN] Không tìm thấy font Unicode, bỏ qua burn phụ đề cảnh này')
         burn_subtitles = False
     if burn_subtitles and subtitle:
         if True:
@@ -706,6 +710,11 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     if blur_chain:
         fc += ';' + blur_chain
         last = blur_last
+    # zoom chậm / tối viền: sau lớp che sub cũ (vùng che khớp chữ gốc), trước phụ đề mới (phụ đề không zoom theo)
+    _fx = _scene_fx_filter(kwargs, i, w, h, fps, tts_duration)
+    if _fx:
+        fc += f'; [{last}]{_fx}[vfx]'
+        last = 'vfx'
     for (si, sub_filter) in enumerate(sub_filters):
         out_lbl = f'''vsub{si}'''
         fc += f'''; [{last}]{sub_filter}[{out_lbl}]'''
@@ -760,6 +769,9 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         if blur_chain:
             fc_fb += ';' + blur_chain
             last_fb = blur_last
+        if _fx:
+            fc_fb += f'; [{last_fb}]{_fx}[vfx_fb]'
+            last_fb = 'vfx_fb'
         for (si_fb, sf_fb) in enumerate(sub_filters):
             out_lbl_fb = f'''vsub_fb{si_fb}'''
             fc_fb += f'''; [{last_fb}]{sf_fb}[{out_lbl_fb}]'''
@@ -777,7 +789,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         cmd_fb.extend(['-filter_complex', filter_complex_fb, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
         r2 = run_subprocess(cmd_fb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         if r2.returncode != 0:
-            log_fn(f'''   [WARN] FFmpeg loi clip {i + 1}: {r2.stderr[slice(-300, None, None)]}''')
+            log_fn(f'''   [WARN] FFmpeg lỗi clip {i + 1}: {r2.stderr[slice(-300, None, None)]}''')
             _cleanup_files(subtitle_files)
             return False
     _cleanup_files(subtitle_files)
@@ -789,6 +801,146 @@ def _cleanup_files(paths):
                 os.remove(sf)
         except OSError:
             pass
+# ── Hiệu ứng hình ──
+COLOR_PRESETS = {
+    'none': 'eq=brightness=0.02:saturation=1.06',
+    'cinematic': 'eq=contrast=1.08:saturation=0.92:brightness=-0.01,colorbalance=rs=-0.04:bs=0.05:rh=0.06:bh=-0.05',
+    'warm': 'colorbalance=rm=0.07:gm=0.02:bm=-0.07:rh=0.04:bh=-0.03,eq=saturation=1.08',
+    'cool': 'colorbalance=rm=-0.05:bm=0.07:rh=-0.03:bh=0.05,eq=saturation=0.98',
+    'vivid': 'eq=contrast=1.06:saturation=1.32:brightness=0.01',
+    'vintage': 'curves=preset=vintage,eq=saturation=0.9',
+    'bw': 'hue=s=0,eq=contrast=1.12',
+}
+
+
+def _scene_fx_filter(kwargs, idx, w, h, fps, duration):
+    """Zoom chậm (Ken Burns — cảnh chẵn zoom vào, lẻ zoom ra) + tối viền. '' nếu không bật."""
+    parts = []
+    if kwargs.get('ken_burns'):
+        amount = max(0.02, min(0.2, float(kwargs.get('ken_burns_zoom', 0.08) or 0.08)))
+        frames = max(1, int(round(float(duration) * float(fps))))
+        prog = f'min(on/{frames}\\,1)'
+        z = f'1+{amount:.4f}*{prog}' if idx % 2 == 0 else f'{1 + amount:.4f}-{amount:.4f}*{prog}'
+        # phóng 2 lần trước zoompan → toạ độ cắt mịn hơn, đỡ rung hình
+        parts.append(f"scale={int(w) * 2}:{int(h) * 2}:flags=bicubic,zoompan=z='{z}':d=1"
+                     f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={w}x{h}:fps={fps}")
+    if kwargs.get('vignette'):
+        parts.append('vignette=angle=PI/5')
+    return ','.join(parts)
+
+
+TRANSITIONS = ('fade', 'dissolve', 'fadeblack', 'slideleft', 'wipeleft', 'zoomin', 'circleopen', 'smoothleft', 'radial', 'pixelize')
+_RANDOM_POOL = ('fade', 'dissolve', 'slideleft', 'wipeleft', 'zoomin', 'circleopen', 'smoothleft', 'radial')
+
+
+_XFADE_GROUP = 24          # số clip tối đa trong 1 lệnh ffmpeg (mỗi clip 1 luồng giải mã — 147 luồng 1080p cùng lúc dễ hỏng)
+
+
+def _xfade_pass(inputs, lens, pads, kinds, d, fps, use_nvenc, output_path, temp_dir, tag, log_fn):
+    """1 lệnh ffmpeg: nối `inputs` bằng xfade. `lens` = độ dài HÌNH từng input; tiếng mỗi input được cắt/độn cho bằng
+    đúng độ dài hình (chênh vài ms do hình làm tròn theo khung) → không lệch cộng dồn qua hàng trăm clip.
+    Input k kéo dài thêm pads[k] giây bằng khung hình cuối để có hình cho chuyển cảnh; chuyển cảnh k bắt đầu đúng lúc
+    input k hết (mốc cộng dồn `lens`) → clip sau bắt đầu đúng thời điểm như ghép thường."""
+    n = len(inputs)
+    fc = []
+    for k in range(n):
+        pad = f',tpad=stop_mode=clone:stop_duration={pads[k]:.3f}' if pads[k] > 0 else ''
+        fc.append(f'[{k}:v]fps={fps},format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS{pad}[v{k}]')
+    (last, t) = ('v0', 0.0)
+    for k in range(1, n):
+        t += lens[k - 1]
+        fc.append(f'[{last}][v{k}]xfade=transition={kinds[k - 1]}:duration={d:.3f}:offset={t:.3f}[x{k}]')
+        last = f'x{k}'
+    for k in range(n):
+        fc.append(f'[{k}:a]aresample=44100,apad,atrim=duration={lens[k]:.6f},asetpts=N/SR/TB[a{k}]')
+    fc.append(''.join(f'[a{k}]' for k in range(n)) + f'concat=n={n}:v=0:a=1[a]')
+    script = os.path.join(temp_dir, f'xfade_{tag}.txt')
+    with open(script, 'w', encoding='utf-8') as f:
+        f.write(';\n'.join(fc))
+    args = []
+    for c in inputs:
+        args += ['-i', c]
+
+    def _run(enc):
+        cmd = [FFMPEG_EXE, '-y', *args, '-/filter_complex', script, '-map', f'[{last}]', '-map', '[a]', *enc,
+               '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), output_path]
+        return run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Ghép clip + chuyển cảnh', text=True, encoding='utf-8', errors='replace')
+    r = _run(_video_encode_args(use_nvenc))
+    if r.returncode != 0 and use_nvenc:
+        r = _run(_video_encode_args(False))
+    if r.returncode != 0 or not os.path.exists(output_path):
+        log_fn(f'   [WARN] xfade: {(r.stderr or "")[-300:]}')
+        return False
+    return True
+
+
+def _concat_with_transitions(clips, output_path, temp_dir, log_fn, transition, duration, fps, use_nvenc):
+    """Ghép có chuyển cảnh (xfade) mà KHÔNG làm ngắn video.
+
+    xfade chồng 2 clip lên nhau d giây → video ngắn đi, lời đọc/phụ đề lệch dần. Nên mỗi clip (trừ clip cuối)
+    được kéo dài d giây bằng khung hình cuối, chuyển cảnh bắt đầu đúng lúc clip cũ hết → clip sau vẫn bắt đầu
+    đúng thời điểm như ghép thường; âm thanh ghép nối tiếp không đổi.
+    Nhiều clip → ghép theo nhóm ≤ 24 clip rồi nối các nhóm (cũng có chuyển cảnh ở chỗ nối), mỗi lệnh ffmpeg mở ít luồng.
+    """
+    import random
+    # mốc theo độ dài HÌNH (chính xác theo khung); tiếng từng clip được căn bằng đúng độ dài này trong _xfade_pass
+    lens = [(_stream_duration(c, 'v:0') or _safe_duration(c)) for c in clips]
+    if any(not L or L <= 0 for L in lens):
+        return False
+    d = max(0.2, min(1.5, float(duration or 0.5)))
+    d = min(d, min(lens) * 0.45)            # có clip quá ngắn → rút ngắn chuyển cảnh
+    if d < 0.1:
+        return False
+    n = len(clips)
+    rnd = random.Random(n)                  # cố định theo số cảnh → dựng lại ra cùng kết quả
+    kinds = [rnd.choice(_RANDOM_POOL) if transition == 'random' else (transition if transition in TRANSITIONS else 'fade') for _ in range(n - 1)]
+    log_fn(f'   Ghép {n} clip có chuyển cảnh ({transition}, {d:.2f}s)...')
+    if n <= _XFADE_GROUP:
+        ok = _xfade_pass(clips, lens, [d] * (n - 1) + [0], kinds, d, fps, use_nvenc, output_path, temp_dir, 'all', log_fn)
+    else:
+        # Lượt 1: từng nhóm. Clip cuối mỗi nhóm (trừ nhóm cuối) cũng kéo dài d → còn hình cho chuyển cảnh nối nhóm.
+        groups = [list(range(i, min(n, i + _XFADE_GROUP))) for i in range(0, n, _XFADE_GROUP)]
+        (parts, plens) = ([], [])
+        for (gi, g) in enumerate(groups):
+            final = gi == len(groups) - 1
+            part = os.path.join(temp_dir, f'xfade_part{gi:02d}.mp4')
+            pads = [d] * len(g)
+            if final:
+                pads[-1] = 0
+            log_fn(f'   Chuyển cảnh nhóm {gi + 1}/{len(groups)} ({len(g)} clip)...')
+            if not _xfade_pass([clips[k] for k in g], [lens[k] for k in g], pads, [kinds[k] for k in g[:-1]], d, fps, use_nvenc,
+                               part, temp_dir, f'g{gi:02d}', log_fn):
+                return False
+            parts.append(part)
+            plens.append(sum(lens[k] for k in g))   # = độ dài tiếng của nhóm (hình dư thêm d ở cuối)
+        # Lượt 2: nối các nhóm — hình mỗi nhóm đã dư d giây ở cuối nên không kéo thêm
+        joins = [kinds[g[-1]] for g in groups[:-1]]
+        ok = _xfade_pass(parts, plens, [0] * len(parts), joins, d, fps, use_nvenc, output_path, temp_dir, 'join', log_fn)
+        for pth in parts:
+            try:
+                os.remove(pth)
+            except OSError:
+                pass
+    if not ok:
+        return False
+    # Chốt chặn: ghép xong mà luồng hình ngắn hơn luồng tiếng (hình dừng giữa chừng) → báo hỏng để ghép thường
+    (vd, ad) = (_stream_duration(output_path, 'v:0'), _stream_duration(output_path, 'a:0'))
+    if vd > 0 and ad > 0 and ad - vd > 1.0:
+        log_fn(f'   [WARN] Ghép chuyển cảnh lỗi: hình chỉ dài {vd:.1f}s / tiếng {ad:.1f}s — ghép lại kiểu thường')
+        return False
+    return True
+
+
+def _stream_duration(path, stream):
+    """Độ dài 1 luồng (v:0 / a:0) theo ffprobe; 0 nếu không đọc được."""
+    try:
+        r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', stream, '-show_entries', 'stream=duration', '-of', 'csv=p=0', path],
+                           capture_output=True, text=True, timeout=60, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return float((r.stdout or '').strip().splitlines()[0])
+    except Exception:
+        return 0.0
+
+
 def _concat_clips(clips, output_path, temp_dir, log_fn):
     list_file = os.path.join(temp_dir, 'concat_list.txt')
     with open(list_file, 'w', encoding='utf-8') as f:
@@ -798,19 +950,13 @@ def _concat_clips(clips, output_path, temp_dir, log_fn):
     cmd = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Ghép clip cuối', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
-        log_fn('   Concat copy/re-encode audio that bai, tien hanh re-encode toan bo...')
+        log_fn('   Ghép nối (copy video/re-encode audio) thất bại, tiến hành re-encode toàn bộ...')
         cmd2 = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
         r2 = run_subprocess_heartbeat(cmd2, log_fn=log_fn, label='Ghép clip cuối (re-encode toàn bộ)', text=True, encoding='utf-8', errors='replace')
         if r2.returncode != 0:
-            log_fn(f'''   [LOI] Concat: {r2.stderr[slice(None, 300, None)]}''')
+            log_fn(f'''   [LỖI] Concat: {r2.stderr[slice(None, 300, None)]}''')
             return False
     return os.path.exists(output_path)
-def _escape_drawtext(text):
-    text = text.replace('\\', '\\\\')
-    text = text.replace("'", '’')
-    text = text.replace(':', '\\:')
-    text = text.replace('%', '\\%')
-    return text
 def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None):
     if not boxes:
         return ('', in_label)

@@ -74,7 +74,16 @@ export async function ensurePython(report: Report): Promise<string> {
   if (!app.isPackaged) {
     if (process.env.RF_PYTHON) return process.env.RF_PYTHON
     const devVenv = venvPython(path.join(BACKEND_DIR, ".venv"))
-    return fs.existsSync(devVenv) ? devVenv : "python"
+    if (fs.existsSync(devVenv)) return devVenv
+    if (versionOf("python")) return "python"
+    // PATH không có `python` (vd mở từ terminal khác) → lấy đường dẫn thật qua py launcher
+    const sys = findSystemPython()
+    if (sys) {
+      const r = spawnSync(sys.cmd, [...sys.args, "-c", "import sys;print(sys.executable)"], { encoding: "utf8", windowsHide: true, timeout: 15000 })
+      const exe = (r.stdout || "").trim()
+      if (r.status === 0 && exe) return exe
+    }
+    throw new Error("Không tìm thấy Python ≥ 3.10 (PATH / py launcher). Cài Python hoặc đặt biến RF_PYTHON.")
   }
 
   const venv = userDataDir("python-env")

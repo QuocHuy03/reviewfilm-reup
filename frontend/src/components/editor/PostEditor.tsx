@@ -1,12 +1,12 @@
 import {
-  AlertTriangle, Check, CheckCircle2, Circle, Clapperboard, Eye, EyeOff, Film, List as ListIcon, Loader2, Minus, Music, Pause, Play, Plus,
-  Redo2, RefreshCw, Scissors, Settings, Sparkles, Undo2, Wand2, X, XCircle,
+  AlertTriangle, Check, CheckCircle2, Circle, Clapperboard, Eye, EyeOff, Film, List as ListIcon, Loader2, Minus, Move, Music, Pause, Play, Plus,
+  Redo2, RefreshCw, Scissors, Settings, Sparkles, SquareDashed, Trash2, Undo2, Wand2, X, XCircle,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { PathInput, Segmented, ToggleRow } from "@/components/common"
-import { Monitor, subtitleChunk } from "@/components/timeline/Monitor"
+import { Monitor, subtitleChunk, type CoverBox } from "@/components/timeline/Monitor"
 import { Timeline } from "@/components/timeline/Timeline"
 import { useTimelinePlayer } from "@/components/timeline/useTimelinePlayer"
 import { Button } from "@/components/ui/button"
@@ -25,8 +25,21 @@ import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
 import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
 import { confirmAction } from "@/components/ConfirmHost"
+import { DEFAULT_FX, FxPicker, fxSummary, type Fx } from "@/components/FxPicker"
 
-type Mixer = { original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean }
+/** Che sub gốc: vùng mờ (% khung hình xuất) + vị trí phụ đề mới (cách đáy %). */
+type Cover = { remove_old_sub: boolean; cover_boxes: CoverBox[]; sub_margin_pct: number }
+type Mixer = { original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean; cover?: Cover; fx?: Fx }
+const DEFAULT_BOX: CoverBox = [10, 84, 80, 10]
+
+/** Chạy fn cho từng phần tử, tối đa `limit` việc cùng lúc. Tạo giọng mỗi câu tốn ~1 phút chờ máy chủ → chạy song song thay vì lần lượt. */
+async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>) {
+  let next = 0
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++])
+  }))
+}
+const REGEN_PARALLEL = 8
 type StepState = "pending" | "running" | "done" | "skip" | "error"
 type AutoStep = { label: string; state: StepState; detail?: string }
 type AutoRun = { steps: AutoStep[]; running: boolean; backup: Scene[]; summary?: string; needLogin?: boolean }
@@ -48,6 +61,19 @@ export function PostEditor({ job }: { job: JobDetail }) {
   const subLayout = options?.sub_layouts[String((job.config as Record<string, unknown>).sub_layout ?? "")]
   const subChars = subLayout ? subLayout.sub_max_chars_per_chunk * Math.max(1, subLayout.sub_max_lines) : 80
   const [mixer, setMixer] = useState<Mixer>({ original_volume: 8, bgm_path: "", bgm_volume: 5, audio_ducking: true, ...(draft?.mixer as Partial<Mixer> | undefined) })
+  // Che sub gốc: lấy từ cấu hình lúc tạo job, sửa ở tab "Che sub" (lưu cùng bản nháp mixer)
+  const jcfg = job.config as Record<string, unknown>
+  const cover: Cover = mixer.cover ?? {
+    remove_old_sub: Boolean(jcfg.remove_old_sub),
+    cover_boxes: Array.isArray(jcfg.cover_boxes) && jcfg.cover_boxes.length ? (jcfg.cover_boxes as CoverBox[]) : [[...DEFAULT_BOX]],
+    sub_margin_pct: typeof jcfg.sub_margin_pct === "number" ? jcfg.sub_margin_pct : 6,
+  }
+  const setCover = (patch: Partial<Cover>) => setMixer((m) => ({ ...m, cover: { ...cover, ...(m.cover ?? {}), ...patch } }))
+  const [coverEdit, setCoverEdit] = useState(false)
+  // Hiệu ứng: lấy từ cấu hình lúc tạo job, chỉnh ở tab "Hiệu ứng" (job cũ chưa có tuỳ chọn này vẫn bật được)
+  const fx: Fx = mixer.fx ?? Object.fromEntries(Object.entries(DEFAULT_FX).map(([k, v]) => [k, jcfg[k] ?? v])) as Fx
+  const setFx = (patch: Partial<Fx>) => setMixer((m) => ({ ...m, fx: { ...fx, ...(m.fx ?? {}), ...patch } }))
+  const [rw, rh] = String(jcfg.target_resolution || "1920x1080").split("x").map(Number)
   const saveState = useDraftAutosave(job.id, scenes, mixer as unknown as Record<string, unknown>)
   useEffect(() => { if (draft) toast.info("Đã mở lại bản đang sửa dở") }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const mode = job.kind === "reup" ? "reup" : "review"
@@ -225,11 +251,11 @@ export function PostEditor({ job }: { job: JobDetail }) {
     }
 
     set(2, { state: voiceChanged.length ? "running" : "skip", detail: voiceChanged.length ? `0/${voiceChanged.length}` : "Không có câu cần tạo lại" })
-    let ok = 0
-    for (const [k, v] of voiceChanged.entries()) {
+    let ok = 0, n = 0
+    await runPool(voiceChanged, REGEN_PARALLEL, async (v) => {
       if (await regenerate(v.i, v.text, false)) ok++
-      set(2, { detail: `${k + 1}/${voiceChanged.length}` })
-    }
+      set(2, { detail: `${++n}/${voiceChanged.length}` })
+    })
     if (voiceChanged.length) set(2, { state: ok === voiceChanged.length ? "done" : "error", detail: `${ok}/${voiceChanged.length} câu` })
 
     set(3, { state: "running" })
@@ -247,7 +273,8 @@ export function PostEditor({ job }: { job: JobDetail }) {
     stop(); player.pause(); setBusy(true)
     try {
       await api.confirm(job.id, confirmed ? {
-        confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking },
+        confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking,
+          cover: mixer.cover ? { ...cover, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [] } : undefined, fx: mixer.fx },
       } : { confirmed })
       toast.success(confirmed ? "Đang dựng video…" : "Đã huỷ job")
     } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
@@ -298,11 +325,16 @@ export function PostEditor({ job }: { job: JobDetail }) {
               subtitle={subVisible && currentScene && current
                 ? subtitleChunk(currentScene.subtitle || currentScene.voiceover || "", player.time - current.start, current.dur, subChars)
                 : ""}
-              label={current ? `Cảnh ${player.clips.indexOf(current) + 1}/${player.clips.length}` : ""} />
+              label={current ? `Cảnh ${player.clips.indexOf(current) + 1}/${player.clips.length}` : ""}
+              aspect={rw && rh ? rw / rh : 16 / 9} subMarginPct={cover.sub_margin_pct}
+              cover={cover.remove_old_sub || coverEdit ? cover.cover_boxes : undefined} coverEdit={coverEdit && tab === "cover"}
+              onCoverChange={(b) => setCover({ cover_boxes: b, remove_old_sub: true })} />
 
             <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-col gap-0 border-l border-border">
-              <TabsList className="m-2 grid w-auto grid-cols-4">
+              <TabsList className="m-2 grid w-auto grid-cols-6 [&>button]:gap-1 [&>button]:px-0.5 [&>button]:text-[12px] [&>button>svg]:hidden">
                 <TabsTrigger value="scene"><Scissors /> Cảnh</TabsTrigger>
+                <TabsTrigger value="cover"><SquareDashed /> Che sub</TabsTrigger>
+                <TabsTrigger value="fx" className="gap-1"><Sparkles /> Hiệu ứng{fxSummary(fx) && <span className="size-1.5 rounded-full bg-primary" />}</TabsTrigger>
                 <TabsTrigger value="audio"><Music /> Âm thanh</TabsTrigger>
                 <TabsTrigger value="checks" className="gap-1">
                   <AlertTriangle /> Kiểm tra
@@ -314,6 +346,15 @@ export function PostEditor({ job }: { job: JobDetail }) {
                 <TabsContent value="scene">
                   <SceneTab job={job} scenes={scenes} selected={selected} issues={issues} regen={regen}
                     update={edit} regenerate={regenerate} onPlay={(i) => { const c = player.clips.find((x) => x.index === i); stop(); if (c) player.play(c.start) }} />
+                </TabsContent>
+                <TabsContent value="cover">
+                  <CoverTab cover={cover} setCover={setCover} editing={coverEdit} setEditing={(v) => { setCoverEdit(v); if (v) player.pause() }} />
+                </TabsContent>
+                <TabsContent value="fx">
+                  <div className="flex flex-col gap-4 pt-1">
+                    <p className="text-[11px] text-muted-foreground">Áp dụng khi bấm <b>Xuất video</b>. Độ dài video giữ nguyên — lời đọc và phụ đề không bị lệch.</p>
+                    <FxPicker fx={fx} onChange={setFx} compact />
+                  </div>
                 </TabsContent>
                 <TabsContent value="audio"><AudioTab mixer={mixer} setMixer={setMixer} /></TabsContent>
                 <TabsContent value="checks"><ChecksTab issues={issues} onPick={(i) => { select(i); setTab("scene") }} /></TabsContent>
@@ -328,6 +369,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
             mode={mode} videoDuration={Number.isFinite(player.videoDuration) ? player.videoDuration : undefined}
             onTrim={(i, patch) => update(i, patch)} onEditStart={snapshot} onPeek={player.peek} onReorder={reorder}
             subtitleVisible={subVisible} onToggleSubtitle={() => setSubVisible((v) => !v)}
+            onUndo={undo} onRedo={redo} canUndo={past.current.length > 0} canRedo={future.current.length > 0} onToggleExcluded={toggleExcluded}
             onSeek={player.seek} onSelect={setSelected} onToggle={() => { stop(); player.toggle() }} onToggleMute={player.toggleMute} />
         </>
       ) : (
@@ -470,6 +512,54 @@ function TimeField({ label, value, onNudge, onSet }: { label: string; value: num
 }
 
 /* ─────────────────────────────── Tab: Âm thanh ─────────────────────────────── */
+/* ─────────── Tab Che sub: vùng làm mờ phụ đề cứng của video gốc + đặt phụ đề mới ─────────── */
+function CoverTab({ cover, setCover, editing, setEditing }: {
+  cover: Cover; setCover: (p: Partial<Cover>) => void; editing: boolean; setEditing: (v: boolean) => void
+}) {
+  const boxes = cover.cover_boxes
+  const setBox = (i: number, k: number, v: number) => setCover({ cover_boxes: boxes.map((b, j) => (j === i ? b.map((x, n) => (n === k ? v : x)) : b)) })
+  /** Phụ đề mới đè đúng vùng sub cũ: đáy chữ mới = đáy vùng che (nền chữ phủ luôn phần còn sót). */
+  const alignToBox = (b: CoverBox) => setCover({ sub_margin_pct: Math.max(1, Math.round((100 - b[1] - b[3]) * 10) / 10) })
+  useEffect(() => () => setEditing(false), []) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="flex flex-col gap-4 pt-1">
+      <ToggleRow label="Che phụ đề gốc / logo" checked={cover.remove_old_sub} onChange={(v) => setCover({ remove_old_sub: v })}
+        desc="Làm mờ chữ cứng có sẵn trong video gốc. Màn xem trước hiện mờ y như lúc xuất." />
+      <Button variant={editing ? "default" : "outline"} onClick={() => setEditing(!editing)}>
+        <Move /> {editing ? "Xong — thoát sửa vùng che" : "Sửa vùng che trên màn hình"}
+      </Button>
+      {editing && <p className="-mt-2 text-[11px] text-muted-foreground">Kéo khung để dời · kéo ô vàng góc phải-dưới để đổi cỡ. Tua timeline tới cảnh có chữ gốc để căn cho khít.</p>}
+
+      {boxes.map((b, i) => (
+        <div key={i} className={cn("flex flex-col gap-2 rounded-lg border border-border p-3", !cover.remove_old_sub && "opacity-50")}>
+          <div className="flex items-center justify-between">
+            <span className="text-[12px] font-medium">Vùng {i + 1}</span>
+            <div className="flex gap-1">
+              <Button size="xs" variant="outline" title="Đặt phụ đề mới đè lên đúng vùng này" onClick={() => alignToBox(b)}>Đặt phụ đề vào đây</Button>
+              {boxes.length > 1 && <Button size="icon-xs" variant="ghost" title="Xoá vùng" onClick={() => setCover({ cover_boxes: boxes.filter((_, j) => j !== i) })}><Trash2 /></Button>}
+            </div>
+          </div>
+          {(["Ngang", "Dọc", "Rộng", "Cao"] as const).map((name, k) => (
+            <div key={name} className="grid grid-cols-[44px_1fr_44px] items-center gap-2 text-[11px] text-muted-foreground">
+              {name}
+              <Slider value={[b[k]]} min={k >= 2 ? 2 : 0} max={100 - (k >= 2 ? b[k - 2] : b[k + 2])} step={0.5} onValueChange={([v]) => setBox(i, k, v)} />
+              <span className="tabular text-right">{b[k].toFixed(1)}%</span>
+            </div>
+          ))}
+        </div>
+      ))}
+      <Button variant="ghost" size="sm" className="self-start" onClick={() => setCover({ cover_boxes: [...boxes, [70, 4, 26, 10]], remove_old_sub: true })}>
+        <Plus /> Thêm vùng (logo, chữ góc…)
+      </Button>
+
+      <Group label="Phụ đề mới cách đáy" hint={`${cover.sub_margin_pct}%`}>
+        <Slider value={[cover.sub_margin_pct]} min={1} max={60} step={0.5} onValueChange={([v]) => setCover({ sub_margin_pct: v })} />
+      </Group>
+      <p className="text-[11px] text-muted-foreground">Mẹo: vùng che phủ kín chữ gốc rồi bấm <b>Đặt phụ đề vào đây</b> — phụ đề tiếng Việt nằm đè đúng chỗ, nền chữ che nốt phần còn sót.</p>
+    </div>
+  )
+}
+
 function AudioTab({ mixer, setMixer }: { mixer: Mixer; setMixer: (m: Mixer) => void }) {
   return (
     <div className="flex flex-col gap-5">
@@ -550,7 +640,7 @@ function AiTab({ job, scenes, regen, update, regenerate, onPick }: {
   const applyAll = async () => {
     setApplying(true)
     let ok = 0
-    for (const e of edits ?? []) if (!done.has(e.id) && (await apply(e))) ok++
+    await runPool((edits ?? []).filter((e) => !done.has(e.id)), REGEN_PARALLEL, async (e) => { if (await apply(e)) ok++ })
     setApplying(false)
     toast.success(`Đã áp dụng ${ok} đề xuất`)
   }

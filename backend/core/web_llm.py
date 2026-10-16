@@ -52,9 +52,6 @@ def gemini_ready():
     return status()['gemini']
 
 
-def prefer_web():
-    """Tài khoản web luôn đứng đầu chuỗi engine (app không còn dùng API key AI)."""
-    return True
 
 
 def with_web(engines):
@@ -150,6 +147,8 @@ def gemini_files(prompt, files, log_fn=print, timeout=900):
             log_fn(f'   [WARN] Gemini web lỗi (lần {attempt + 1}/2): {str(e)[:150]}')
         time.sleep(5)
     return ''
+
+
 
 
 def _err_msg(r):

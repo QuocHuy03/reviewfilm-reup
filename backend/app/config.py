@@ -21,8 +21,6 @@ os.makedirs(JOBS_DIR, exist_ok=True)
 # AI (Vision, viết kịch bản, dịch, phân vai) chạy bằng tài khoản ChatGPT/Gemini đăng nhập trong app — không cần key.
 API_KEYS = {
     'FPT_API_KEY': 'FPT.AI (giọng cao cấp)',
-    'ELEVENLABS_API_KEY': 'ElevenLabs',
-    'VIETTEL_AI_TOKEN': 'Viettel AI',
     'CAPCUT_COOKIE': 'Tài khoản CapCut (tuỳ chọn)',
 }
 

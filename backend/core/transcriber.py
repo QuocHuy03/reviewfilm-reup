@@ -288,8 +288,13 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             else:
                 raise e
 
+        # CPU: beam 1 nhanh ~1.8 lần beam 5 mà số đoạn nhận được gần như nhau (đo trên phim 3 phút: 120s vs 220s).
+        # GPU nhanh sẵn → giữ beam gốc cho chính xác.
+        beams = max(1, int(beam_size or 5)) if device == 'cuda' else 1
+        if device != 'cuda':
+            log_fn('   CPU: nhận dạng chế độ nhanh (beam 1)')
         kwargs = {
-            'beam_size': max(1, int(beam_size or 5)),
+            'beam_size': beams,
             'vad_filter': True,
             'vad_parameters': {'min_silence_duration_ms': 500},
             'condition_on_previous_text': False,

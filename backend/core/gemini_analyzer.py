@@ -1,26 +1,16 @@
 
 
 """
-Vision analyzer: phan tich noi dung phim qua keyframes + ngu canh.
-Ban van giu ten module/chu ky ham cu de tuong thich nguoc, nhung runtime da chuyen sang OpenAI Vision.
+Phân tích nội dung phim qua khung hình chính + lời thoại.
+Giữ tên module / chữ ký hàm cũ cho tương thích; chạy bằng tài khoản Gemini đăng nhập trong app.
 """
 import os
 import subprocess
-import time
 import json
 import re
 import sys
-import base64
-import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.utils import FFMPEG_EXE, FFPROBE_EXE, _HIDE
-try:
-    from core.cost_tracker import _cost_tls
-except Exception:
-    import threading as _threading
-    _cost_tls = _threading.local()
-OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
-VISION_MODEL = 'gpt-4o-mini'
 def _clean_json_newlines(s):
     result = []
     in_quotes = False
@@ -43,114 +33,30 @@ def _clean_json_newlines(s):
             continue
         result.append(c)
     return ''.join(result)
-def _img_to_data_url(path):
-    with open(path, 'rb') as f:
-        b64 = base64.b64encode(f.read()).decode('ascii')
-    return f'''data:image/jpeg;base64,{b64}'''
-def _openai_vision_call(prompt, frames, api_key, log_fn, detail='low', temperature=0.3, max_tokens=4000, model=None):
-    model = model or VISION_MODEL
-    content = [{'type': 'text', 'text': prompt}]
-    for (idx, item) in enumerate(frames):
-        ts = item[0] if isinstance(item, (tuple, list)) else idx
-        fp = item[1] if isinstance(item, (tuple, list)) else item
-        try:
-            content.append({'type': 'text', 'text': f'''\n--- [Khung hình thứ {idx + 1} trích xuất tại mốc thời gian {ts:.1f} giây] ---'''})
-            content.append({'type': 'image_url', 'image_url': {'url': _img_to_data_url(fp), 'detail': detail}})
-        except Exception:
-            pass
-    payload = {'model': model, 'messages': [{'role': 'user', 'content': content}], 'temperature': temperature, 'max_tokens': max_tokens, 'response_format': {'type': 'json_object'}}
-    headers = {'Authorization': f'''Bearer {api_key}''', 'Content-Type': 'application/json'}
-    for attempt in range(3):
-        try:
-            r = requests.post(OPENAI_URL, headers=headers, json=payload, timeout=180)
-            if r.status_code == 200:
-                rj = r.json()
-                try:
-                    _acc = getattr(_cost_tls, 'acc', None)
-                    if _acc is not None:
-                        u = rj.get('usage', {}) or {}
-                        _acc.add_openai(u.get('prompt_tokens', 0), u.get('completion_tokens', 0), label='OpenAI Vision')
-                except Exception:
-                    pass
-                return ((rj['choices'][0]['message']['content'] or '')).strip()
-            log_fn(f'''   [WARN] OpenAI Vision HTTP {r.status_code} (lan {attempt + 1}/3): {r.text[slice(None, 160, None)]}''')
-            if r.status_code in (401, 403):
-                log_fn('   [LOI] OpenAI API key sai hoac het han — kiem tra lai key.')
-                return ''
-        except Exception as e:
-            log_fn(f'''   [WARN] OpenAI Vision loi (lan {attempt + 1}/3): {str(e)[slice(None, 120, None)]}''')
-        time.sleep(2)
-    return ''
-def _gemini_vision_call(prompt, frames, api_key, log_fn, temperature=0.3, max_tokens=6000):
-    try:
-        import google.generativeai as genai
-    except Exception:
-        return ''
-    parts = [prompt]
-    for (idx, item) in enumerate(frames):
-        ts = item[0] if isinstance(item, (tuple, list)) else idx
-        fp = item[1] if isinstance(item, (tuple, list)) else item
-        try:
-            with open(fp, 'rb') as f:
-                data = f.read()
-        except OSError:
-            continue
-        parts.append(f'--- [Khung hình thứ {idx + 1} trích xuất tại mốc thời gian {ts:.1f} giây] ---')
-        parts.append({'mime_type': 'image/jpeg', 'data': data})
-    for key in [k.strip() for k in str(api_key or '').split(',') if k.strip()]:
-        try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            resp = model.generate_content(parts, generation_config={'temperature': temperature, 'max_output_tokens': min(max_tokens, 65536), 'response_mime_type': 'application/json'})
-            txt = ((getattr(resp, 'text', '') or '')).strip()
-            if txt:
-                return txt
-        except Exception as e:
-            log_fn(f'''   [WARN] Gemini Vision (...{key[-6:]}) loi: {str(e)[:120]}''')
-    return ''
 def _vision_dispatch(prompt, frames, gemini_key, openai_key, log_fn, detail='low', temperature=0.3, max_tokens=6000, quality='standard'):
+    """Phân tích khung hình = tài khoản Gemini đăng nhập trong app."""
     from core import web_llm
-    okey = ((openai_key or '')).strip()
-    gkey = ((gemini_key or os.environ.get('GEMINI_API_KEY', ''))).strip()
-    order = [e for (e, ok) in (('openai', okey), ('gemini', gkey)) if ok]
-    if web_llm.gemini_ready():
-        order = ['web'] + order if web_llm.prefer_web() else order + ['web']
-    for (i, eng) in enumerate(order):
-        if eng == 'openai':
-            if quality == 'deep':
-                log_fn('   [CHUYÊN SÂU] Dùng GPT-4o Vision (chất lượng cao)...')
-                text = _openai_vision_call(prompt, frames, okey, log_fn, detail, temperature, max_tokens, model='gpt-4o')
-            else:
-                text = _openai_vision_call(prompt, frames, okey, log_fn, detail, temperature, max_tokens)
-        elif eng == 'gemini':
-            text = _gemini_vision_call(prompt, frames, gkey, log_fn, temperature, max_tokens)
-        else:
-            text = web_llm.gemini_vision(prompt, frames, log_fn)
-        if text:
-            return text
-        if i + 1 < len(order):
-            log_fn(f'''   [FALLBACK] Vision '{eng}' khong tra ket qua -> thu '{order[i + 1]}'...''')
-    return ''
+    return web_llm.gemini_vision(prompt, frames, log_fn) if web_llm.gemini_ready() else ''
 def vision_available(gemini_key='', openai_key=''):
     from core import web_llm
-    return bool(((openai_key or '')).strip() or ((gemini_key or os.environ.get('GEMINI_API_KEY', ''))).strip() or web_llm.gemini_ready())
+    return web_llm.gemini_ready()
 def analyze_video(video_path, transcript, gemini_key, temp_dir, max_frames=16, log_fn=print, openai_key='', quality='standard', film_context=''):
     openai_key = ((openai_key or '')).strip()
     if not vision_available(gemini_key, openai_key):
-        log_fn('   [LOI] Chua co OPENAI_API_KEY / GEMINI_API_KEY hoac tai khoan Gemini web de phan tich phim')
+        log_fn('   [LỖI] Chưa có OPENAI_API_KEY / GEMINI_API_KEY hoặc tài khoản Gemini web để phân tích phim')
         return
     frames_dir = os.path.join(temp_dir, 'frames')
     os.makedirs(frames_dir, exist_ok=True)
     duration = _get_duration(video_path)
     if duration <= 0:
-        log_fn('   [LOI] Khong doc duoc thoi luong video')
+        log_fn('   [LỖI] Không đọc được thời lượng video')
         return
-    log_fn(f'''   Trich {max_frames} keyframes tu video ({duration:.0f}s)...''')
+    log_fn(f'''   Trích {max_frames} khung hình chính từ video ({duration:.0f}s)...''')
     frames = _extract_keyframes(video_path, frames_dir, duration, max_frames, log_fn)
     if not frames:
-        log_fn('   [LOI] Khong trich duoc keyframes')
+        log_fn('   [LỖI] Không trích được khung hình chính')
         return
-    log_fn(f'''   Da co {len(frames)} keyframes. Goi Vision AI de phan tich...''')
+    log_fn(f'''   Đã có {len(frames)} khung hình chính. Gọi Vision AI để phân tích...''')
     transcript_sample = _make_transcript_sample(transcript, max_chars=8000)
     film_context = ((film_context or '')).strip()
     _ctx_block = ''
@@ -160,7 +66,7 @@ def analyze_video(video_path, transcript, gemini_key, temp_dir, max_frames=16, l
     max_tok = min(16000, 3000 + len(frames) * 120)
     text = _vision_dispatch(prompt, frames, gemini_key, openai_key, log_fn, detail='low', temperature=0.3, max_tokens=max_tok, quality=quality)
     if not text:
-        log_fn('   [LOI] Vision AI khong tra ve ket qua phan tich.')
+        log_fn('   [LỖI] Vision AI không trả về kết quả phân tích.')
         return
     data = _parse_analysis_json(text, log_fn)
     if not data:
@@ -176,7 +82,7 @@ def analyze_video(video_path, transcript, gemini_key, temp_dir, max_frames=16, l
             data['_vi_title_src'] = src_t
     except Exception:
         pass
-    log_fn(f'''   Phan tich xong. The loai: {data.get('genre', '?')} | Phim: {data.get('title_guess', '?')}''')
+    log_fn(f'''   Phân tích xong. Thể loại: {data.get('genre', '?')} | Phim: {data.get('title_guess', '?')}''')
     return data
 def _parse_analysis_json(text, log_fn=print):
     text = re.sub('^```(?:json)?\\s*', '', text)
@@ -215,9 +121,9 @@ def _parse_analysis_json(text, log_fn=print):
             plot_beats.append({'timestamp': float(ts), 'description': desc.strip().replace('\\n', '\n').replace('\\"', '"')})
     mapping['plot_beats'] = plot_beats
     if plot_beats or mapping.get('summary') not in ('', 'Không xác định') or mapping.get('title_guess') not in ('', 'Không xác định'):
-        log_fn(f'''   [WARN] JSON phan tich phim bi loi dinh dang -> da khoi phuc bang regex ({len(plot_beats)} plot beats).''')
+        log_fn(f'''   [WARN] JSON phân tích phim bị lỗi định dạng -> đã khôi phục bằng regex ({len(plot_beats)} plot beats).''')
         return mapping
-    log_fn('   [WARN] Khong parse duoc JSON phan tich phim.')
+    log_fn('   [WARN] Không phân tích được JSON kết quả phân tích phim.')
     return {}
 def _get_duration(video_path):
     cmd = [FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]

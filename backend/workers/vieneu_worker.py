@@ -159,7 +159,7 @@ def main():
     except Exception as e:
         print(f"[VIENEU_WORKER] Lỗi khởi tạo: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"[VIENEU_WORKER] Model đã sẵn sàng, bắt đầu xử lý từng cảnh...")
+    print("[VIENEU_WORKER] Model đã sẵn sàng, bắt đầu xử lý từng cảnh...")
     sys.stdout.flush()
 
     total = len(batch)

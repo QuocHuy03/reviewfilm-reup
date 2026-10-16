@@ -47,6 +47,11 @@ export function startBackend(extraEnv: Record<string, string>, report: (s: Pytho
     log.info(`khởi động: ${python} main.py --port ${backendPort} (v${app.getVersion()})`)
     proc.stdout?.on("data", (d) => backendLog(String(d)))
     proc.stderr?.on("data", (d) => backendLog(String(d)))
+    proc.on("error", (e) => {                     // vd không chạy được file python → báo ra thay vì im lặng
+      log.error("không chạy được backend:", e)
+      report({ phase: "error", message: "Không khởi động được backend", detail: e.message })
+      proc = null
+    })
     proc.on("exit", (code) => {
       log.info(`backend thoát, mã ${code}`)
       proc = null

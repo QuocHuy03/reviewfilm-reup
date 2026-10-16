@@ -12,7 +12,7 @@ const TITLES: Record<Page, { title: string; sub: string }> = {
   create: { title: "Tạo video", sub: "Review phim bằng AI hoặc Dịch & Reup" },
   studio: { title: "Studio", sub: "Tiến trình, kịch bản và xem trước" },
   subtitles: { title: "Phụ đề", sub: "Tách SRT · Ghép phụ đề vào video" },
-  download: { title: "Tải video", sub: "Douyin · TikTok · Bilibili · Kuaishou · YouTube… — tải về rồi làm Review / Reup" },
+  download: { title: "Tải video", sub: "Douyin · TikTok · Bilibili · Weibo · YouTube… — tải về rồi làm Review / Reup" },
   voices: { title: "Giọng đọc", sub: "Nghe mẫu và tạo thử giọng" },
   jobs: { title: "Lịch sử", sub: "Các job đã chạy và file xuất" },
   settings: { title: "Cài đặt", sub: "API key, mặc định, hệ thống" },
@@ -28,8 +28,8 @@ export function AppHeader({ activeJob }: { activeJob: JobSummary | null }) {
       <div className="flex min-w-0 items-center gap-2.5">
         <LogoWordmark />
         <span className="text-muted-foreground/40">/</span>
-        <h1 className="text-[13px] font-medium tracking-tight">{t.title}</h1>
-        <span className="hidden truncate text-xs text-muted-foreground xl:inline">{t.sub}</span>
+        <h1 className="shrink-0 text-[13px] font-medium tracking-tight whitespace-nowrap">{t.title}</h1>
+        <span className="hidden min-w-0 truncate text-xs text-muted-foreground xl:inline">{t.sub}</span>
       </div>
 
       <div className="flex-1" />

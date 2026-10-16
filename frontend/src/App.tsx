@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { AuthGate } from "@/app/auth"
 import { StoreProvider, useStore } from "@/app/store"
@@ -15,13 +15,17 @@ import { api } from "@/lib/api"
 import type { JobSummary } from "@/lib/types"
 import { CreatePage } from "@/pages/CreatePage"
 import { HomePage } from "@/pages/HomePage"
-import { JobsPage } from "@/pages/JobsPage"
-import { SettingsPage } from "@/pages/SettingsPage"
-import { StudioPage } from "@/pages/StudioPage"
-import { SubtitlesPage } from "@/pages/SubtitlesPage"
-import { VoicesPage } from "@/pages/VoicesPage"
 import { ConfirmHost } from "@/components/ConfirmHost"
-import { DownloadPage } from "@/pages/DownloadPage"
+import { Loader2 } from "lucide-react"
+
+// Trang nặng chỉ nạp khi mở tới → app khởi động nhanh hơn (Trang chủ + Tạo video nạp sẵn)
+const StudioPage = lazy(() => import("@/pages/StudioPage").then((m) => ({ default: m.StudioPage })))
+const DownloadPage = lazy(() => import("@/pages/DownloadPage").then((m) => ({ default: m.DownloadPage })))
+const SubtitlesPage = lazy(() => import("@/pages/SubtitlesPage").then((m) => ({ default: m.SubtitlesPage })))
+const VoicesPage = lazy(() => import("@/pages/VoicesPage").then((m) => ({ default: m.VoicesPage })))
+const JobsPage = lazy(() => import("@/pages/JobsPage").then((m) => ({ default: m.JobsPage })))
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
+const PageLoading = () => <div className="flex h-full items-center justify-center text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
 
 function useActiveJob(enabled: boolean) {
   const [job, setJob] = useState<JobSummary | null>(null)
@@ -75,6 +79,7 @@ function Shell() {
           {!backendReady ? (
             <BackendBoot />
           ) : (
+            <Suspense fallback={<PageLoading />}>
             <div key={page} className="h-full animate-in duration-200 fade-in">
               {page === "home" && <div className="h-full overflow-y-auto"><HomePage /></div>}
               {page === "create" && <CreatePage />}
@@ -85,6 +90,7 @@ function Shell() {
               {page === "jobs" && <JobsPage />}
               {page === "settings" && <div className="h-full overflow-y-auto"><SettingsPage /></div>}
             </div>
+            </Suspense>
           )}
         </main>
       </div>

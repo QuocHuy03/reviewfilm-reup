@@ -1,6 +1,4 @@
-import {
-  AlertTriangle, Captions, Clapperboard, FileVideo, FolderOpen, FolderOutput, Languages, Link2, ListPlus, Loader2, Mic2, Rocket, Settings2, Wand2,
-} from "lucide-react"
+import { AlertTriangle, Captions, Clapperboard, FileVideo, FolderOpen, FolderOutput, Languages, Link2, ListPlus, Loader2, Mic2, Rocket, Settings2, Sparkles, Wand2 } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
@@ -19,6 +17,7 @@ import { api, bridge, mediaUrl } from "@/lib/api"
 import { fmtClock } from "@/lib/format"
 import { CoverBoxEditor, DEFAULT_SUB_BOX } from "@/components/CoverBoxEditor"
 import { PresetBar } from "@/components/PresetBar"
+import { FxPicker, fxSummary } from "@/components/FxPicker"
 import { cn } from "@/lib/utils"
 
 type Mode = "review" | "reup"
@@ -45,16 +44,29 @@ const DEFAULT_CFG = {
   script_edit: true, scene_preview: true, out_dir: "",
   auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080",
   watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, intro_path: "", outro_path: "",
+  color_preset: "none", ken_burns: false, ken_burns_zoom: 0.08, vignette: false, transition: "none", transition_duration: 0.5,
+}
+
+
+/** Whisper trên CPU tốn bao lâu so với độ dài phim (đo thật trên Xeon 2.4GHz, chế độ nhanh beam 1). */
+const CPU_RATIO: Record<string, number> = { tiny: 0.04, base: 0.11, small: 0.3, medium: 0.8, large: 1.6, "large-v2": 1.6, "large-v3": 1.6 }
+function whisperHint(model: string, device: string) {
+  if (device.startsWith("GPU")) return "base nhanh · medium/large chính xác hơn (GPU: vài phút cho phim dài)"
+  const r = CPU_RATIO[model]
+  if (!r) return "base nhanh · medium/large chính xác hơn"
+  const min = Math.max(1, Math.round(r * 40))
+  return `CPU: ~${min} phút cho phim 40 phút${r >= 0.5 ? " — chọn small/base để nhanh hơn nhiều" : ""}`
 }
 
 /** Danh sách video hàng loạt: mỗi dòng 1 nguồn, bỏ dòng trống / trùng. */
 const batchItems = (v: string) => Array.from(new Set(v.split(/\r?\n/).map((x) => x.trim().replace(/^"|"$/g, "")).filter(Boolean)))
 
-type Tab = "script" | "voice" | "subs" | "post" | "output"
+type Tab = "script" | "voice" | "subs" | "fx" | "post" | "output"
 const TABS: { value: Tab; label: string; icon: ReactNode; desc: string }[] = [
   { value: "script", label: "Kịch bản", icon: <Clapperboard />, desc: "Độ dài, bối cảnh phim" },
   { value: "voice", label: "Giọng đọc", icon: <Mic2 />, desc: "Giọng, tốc độ, phân vai" },
   { value: "subs", label: "Phụ đề", icon: <Captions />, desc: "Kiểu chữ, che phụ đề gốc" },
+  { value: "fx", label: "Hiệu ứng", icon: <Sparkles />, desc: "Chuyển cảnh, màu, zoom chậm" },
   { value: "post", label: "Hậu kỳ", icon: <Wand2 />, desc: "Tự sửa lỗi, bài đăng, logo, intro/outro" },
   { value: "output", label: "Quy trình & xuất", icon: <FolderOutput />, desc: "Dừng xem lại ở đâu, nơi lưu video" },
 ]
@@ -95,6 +107,7 @@ export function CreatePage() {
   const tabDot: Record<Tab, boolean> = {
     script: !!cfg.film_context.trim() || cfg.scene_accurate,
     voice: cfg.strict_voice || cfg.multi_voice || !cfg.video_speed.startsWith("1.0x"),
+    fx: cfg.color_preset !== "none" || cfg.ken_burns || cfg.vignette || cfg.transition !== "none",
     subs: !cfg.burn_subtitles || cfg.remove_old_sub || Object.keys(cfg.sub_custom).length > 0,
     post: !!cfg.watermark_path || !!cfg.intro_path || !!cfg.outro_path || cfg.mirror_video || cfg.target_resolution !== "1920x1080",
     output: !cfg.script_edit || !cfg.scene_preview,
@@ -214,7 +227,7 @@ export function CreatePage() {
               <Field label="Ngôn ngữ video gốc">
                 <SimpleSelect value={cfg.source_lang} onChange={(v) => set("source_lang", v)} items={options.languages} />
               </Field>
-              <Field label="Whisper model" hint="base nhanh · medium/large chính xác hơn">
+              <Field label="Whisper model" hint={whisperHint(cfg.whisper_model, cfg.device)}>
                 <SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} />
               </Field>
               <Field label="Thiết bị xử lý">
@@ -310,6 +323,12 @@ export function CreatePage() {
               </Section>
             )}
 
+            {tab === "fx" && (
+              <Section title="Hiệu ứng & chuyển cảnh" icon={<Sparkles />} desc="Không làm lệch lời đọc / phụ đề — độ dài video giữ nguyên">
+              <FxPicker fx={cfg} onChange={(p) => setCfg((c) => ({ ...c, ...p }))} />
+              </Section>
+            )}
+
             {tab === "post" && (
               <Section title="Hậu kỳ & thương hiệu" icon={<Wand2 />} desc="Tự hậu kỳ, kiểm tra lỗi, bài đăng AI · khung hình, logo, intro/outro">
               <ToggleRow label="Tự hậu kỳ sau khi lồng tiếng" checked={cfg.auto_post} onChange={(v) => set("auto_post", v)}
@@ -379,6 +398,7 @@ export function CreatePage() {
             <dt className="text-muted-foreground">Whisper</dt><dd className="text-right">{cfg.whisper_model} · {cfg.device.startsWith("GPU") ? "GPU" : "CPU"}</dd>
             <dt className="text-muted-foreground">Phụ đề</dt><dd className="truncate text-right">{cfg.burn_subtitles ? cfg.sub_style : "Không ghép"}</dd>
             <dt className="text-muted-foreground">Khung hình</dt><dd className="text-right">{cfg.target_resolution === "1080x1920" ? "9:16 dọc" : cfg.target_resolution === "1280x720" ? "720p" : "1080p"}</dd>
+            <dt className="text-muted-foreground">Hiệu ứng</dt><dd className="truncate text-right">{fxSummary(cfg) || "Không"}</dd>
             <dt className="text-muted-foreground">Hậu kỳ</dt><dd className="text-right">{[cfg.auto_post && "Tự hậu kỳ", cfg.auto_fix && "Tự sửa lỗi", cfg.auto_publish && "Bài đăng AI", !cfg.script_edit && !cfg.scene_preview && "Tự động hoàn toàn", cfg.watermark_path && "Logo", (cfg.intro_path || cfg.outro_path) && "Intro/Outro"].filter(Boolean).join(" · ") || "Thủ công"}</dd>
           </dl>
         </div>

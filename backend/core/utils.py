@@ -7,8 +7,6 @@ import shutil
 import subprocess
 import threading
 import time
-import uuid
-from pathlib import Path
 _HIDE = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
 def _ffmpeg_base_dirs():
     dirs = []
@@ -97,61 +95,18 @@ def run_subprocess_heartbeat(cmd, log_fn=print, label='', heartbeat_sec=8.0, tim
                     (stdout, stderr) = proc.communicate()
                     break
                 if label:
-                    log_fn(f'''   ... {label} (van dang chay, {elapsed}s, chua bi treo)''')
+                    log_fn(f'''   ... {label} (vẫn đang chạy, {elapsed}s, chưa bị treo)''')
         return subprocess.CompletedProcess(args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr)
     finally:
         unregister_process(proc)
-def format_time(seconds):
-    seconds = max(0.0, float(seconds))
-    h = int(seconds // 3600)
-    m = int(seconds % 3600 // 60)
-    s = int(seconds % 60)
-    ms = int(round((seconds - int(seconds)) * 1000))
-    return f'''{h:02d}:{m:02d}:{s:02d},{ms:03d}'''
 def get_video_duration(video_path):
     cmd = [FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
     try:
         r = run_subprocess(cmd, timeout=30, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         return float(r.stdout.strip())
     except Exception as e:
-        print(f'''[LOI] ffprobe khong doc duoc thoi luong video \'{video_path}\': {e}''')
+        print(f'''[LỖI] ffprobe không đọc được thời lượng video \'{video_path}\': {e}''')
         return 0.0
-def _dir_is_writable(path):
-    try:
-        os.makedirs(path, exist_ok=True)
-        test = os.path.join(path, '.w_' + uuid.uuid4().hex[slice(None, 8, None)])
-        with open(test, 'wb') as f:
-            f.write(b'0')
-        os.remove(test)
-        return True
-    except Exception:
-        return False
-def _first_writable_drive_audio_root():
-    import string
-    letters = [l for l in string.ascii_uppercase if l != 'C'] + ['C']
-    for letter in letters:
-        root = f'''{letter}:\\'''
-        cand = os.path.join(root, 'AutoReviewStudio_audio')
-        if os.path.isdir(root) and _dir_is_writable(cand):
-            return cand
-    return None
-def _audio_home_roots(output_dir=''):
-    import string
-    roots = set()
-    la = os.environ.get('LOCALAPPDATA', '')
-    if la:
-        roots.add(os.path.join(la, 'AutoReviewStudio', 'audio'))
-    if output_dir:
-        try:
-            roots.add(os.path.join(os.path.abspath(output_dir), 'AutoReviewStudio_audio'))
-        except Exception:
-            pass
-    for letter in string.ascii_uppercase:
-        d = f'''{letter}:\\AutoReviewStudio_audio'''
-        if os.path.isdir(d):
-            roots.add(d)
-    return roots
-_AUDIO_HOME_PARENTS = {'autoreviewstudio_audio', 'audio'}
 def safe_filename(name):
     bad = '<>:"/\\|?*'
     for c in bad:
@@ -159,11 +114,11 @@ def safe_filename(name):
     return name.strip()[slice(None, 100, None)]
 # Giọng mẫu: backend/voice_samples/ (Edge/FPT/VieNeu chung), thư mục con cho từng engine.
 VOICE_SAMPLES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'voice_samples')
-VOICE_SAMPLE_KINDS = ('', 'vieneu', 'vieneu3_clone', 'vieneu3_ref', 'xtts')
+VOICE_SAMPLE_KINDS = ('', 'vieneu', 'vieneu3_clone', 'vieneu3_ref')
 
 
 def voice_samples_dir(kind=''):
-    """kind: '' (thư mục gốc) | 'vieneu' | 'vieneu3_clone' | 'vieneu3_ref' | 'xtts'."""
+    """kind: '' (thư mục gốc) | 'vieneu' | 'vieneu3_clone' | 'vieneu3_ref'."""
     return os.path.join(VOICE_SAMPLES_DIR, kind) if kind else VOICE_SAMPLES_DIR
 
 

@@ -123,10 +123,6 @@ def _web_ai_status():
     return web_llm.status(force=True)
 
 
-@router.get('/web-ai')
-def web_ai():
-    return _web_ai_status()
-
 
 @router.get('/system')
 def system():

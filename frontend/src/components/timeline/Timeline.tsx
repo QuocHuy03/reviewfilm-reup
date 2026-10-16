@@ -1,8 +1,9 @@
 import {
-  AlertTriangle, Captions, CircleHelp, Crosshair, Eye, EyeOff, Film, Maximize2, Mic, Music2, Pause, Play, SkipBack, SkipForward,
-  Volume2, VolumeX, ZoomIn, ZoomOut,
+  AlertTriangle, ArrowLeftToLine, ArrowRightToLine, Captions, ChevronLeft, ChevronRight, CircleHelp, Crosshair, Eye, EyeOff, Film,
+  Maximize2, Mic, Music2, Pause, Play, Redo2, SkipBack, SkipForward, Undo2, Volume2, VolumeX, ZoomIn, ZoomOut,
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
+import { toast } from "sonner"
 import { Slider } from "@/components/ui/slider"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { fmtClock } from "@/lib/format"
@@ -53,6 +54,15 @@ type Props = {
   mode?: EditMode
   /** Độ dài video gốc — giới hạn khi nới mép cuối. */
   videoDuration?: number
+  /** Hoàn tác / làm lại — có thì hiện nút trên thanh công cụ. */
+  onUndo?: () => void
+  onRedo?: () => void
+  canUndo?: boolean
+  canRedo?: boolean
+  /** Màn chỉ xem: kéo cảnh thì hiện thông báo này (vd "Kéo được ở bước Hậu kỳ & xác nhận"). */
+  readOnlyHint?: string
+  /** Bỏ cảnh đang chọn — có thì hiện nút. */
+  onToggleExcluded?: (index: number) => void
   onSeek: (t: number) => void
   onSelect: (index: number) => void
   onToggle: () => void
@@ -60,7 +70,7 @@ type Props = {
 }
 
 /** Timeline nhiều track kiểu CapCut: Video · Lời đọc · Phụ đề · Nhạc nền, thước thời gian, đầu phát, zoom. */
-export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim, onReorder, onEditStart, onPeek, mode = "review", videoDuration, onSeek, onSelect, onToggle, onToggleMute }: Props) {
+export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim, onReorder, onEditStart, onPeek, mode = "review", videoDuration, onUndo, onRedo, canUndo, canRedo, onToggleExcluded, readOnlyHint = "Đổi thứ tự / cắt cảnh được ở bước Sửa kịch bản và Hậu kỳ & xác nhận (khi job dừng chờ bạn).", onSeek, onSelect, onToggle, onToggleMute }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const [pps, setPps] = useState(24)
   const [fitted, setFitted] = useState(false)
@@ -82,11 +92,36 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
   }, [time, pps, playing, follow])
 
   // Ctrl + lăn chuột = zoom
+  // Lăn chuột thường = cuộn ngang (nhiều cảnh vẫn đi hết được)
   const onWheel = (e: React.WheelEvent) => {
-    if (!e.ctrlKey) return
-    e.preventDefault()
+    const el = scroller.current
+    if (!e.ctrlKey) {
+      if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY
+      return
+    }
     setPps((p) => Math.min(MAX_PPS, Math.max(MIN_PPS, p * (e.deltaY < 0 ? 1.15 : 1 / 1.15))))
   }
+  // Ctrl + lăn phải chặn zoom cả trang → listener không passive
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const block = (e: WheelEvent) => { if (e.ctrlKey) e.preventDefault() }
+    el.addEventListener("wheel", block, { passive: false })
+    return () => el.removeEventListener("wheel", block)
+  }, [])
+
+  // Khung nhìn hiện tại (cho thanh tổng quan)
+  const [view, setView] = useState({ left: 0, w: 1 })
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const upd = () => setView({ left: el.scrollLeft, w: el.clientWidth })
+    upd()
+    el.addEventListener("scroll", upd)
+    const ro = new ResizeObserver(upd)
+    ro.observe(el)
+    return () => { el.removeEventListener("scroll", upd); ro.disconnect() }
+  }, [])
 
   // Kéo trên thước / vùng trống để tua
   const timeFromEvent = (e: ReactPointerEvent | PointerEvent) => {
@@ -187,7 +222,22 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
   /** Kéo thân: bấm (không kéo) = chọn; kéo quá 4px = dời cả cảnh, thả để đổi thứ tự. Kéo sát mép khung → tự cuộn. */
   const startMove = (e: ReactPointerEvent, c: Clip) => {
     e.stopPropagation()
-    if (!onReorder || clips.length < 2) { pick(c); return }
+    if (!onReorder || clips.length < 2) {
+      pick(c)
+      // Màn chỉ xem (job đang chạy / đã xong / lỗi): kéo thì báo rõ khi nào mới kéo được, thay vì im lặng
+      if (!onReorder && readOnlyHint) {
+        const x0 = e.clientX
+        const move = (ev: PointerEvent) => {
+          if (Math.abs(ev.clientX - x0) < 8) return
+          off()
+          toast.info("Timeline này chỉ để xem", { id: "tl-readonly", description: readOnlyHint })
+        }
+        const off = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", off) }
+        window.addEventListener("pointermove", move)
+        window.addEventListener("pointerup", off)
+      }
+      return
+    }
     const el = scroller.current!
     const x0 = e.clientX
     const scroll0 = el.scrollLeft
@@ -200,9 +250,15 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
     }
     const timer = window.setInterval(() => {            // tự cuộn khi giữ chuột sát mép
       if (!moved) return
+      // càng sát / vượt mép càng cuộn nhanh → kéo cảnh đi xa trên timeline dài vẫn nhanh
       const r = el.getBoundingClientRect()
-      const edge = lastX < r.left + 40 ? -1 : lastX > r.right - 40 ? 1 : 0
-      if (edge) { el.scrollLeft += edge * 14; update() }
+      const ZONE = 70
+      const over = lastX < r.left + ZONE ? lastX - (r.left + ZONE) : lastX > r.right - ZONE ? lastX - (r.right - ZONE) : 0
+      if (over) {
+        const before = el.scrollLeft
+        el.scrollLeft += Math.sign(over) * Math.min(80, 6 + Math.abs(over) * 0.6)
+        if (el.scrollLeft !== before) update()
+      }
     }, 30)
     const move = (ev: PointerEvent) => {
       lastX = ev.clientX
@@ -225,6 +281,36 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
     window.addEventListener("pointerup", up)
   }
 
+  // Cảnh đang chọn: dời nhanh bằng nút (thay cho kéo xa trên timeline dài)
+  const selPos = clips.findIndex((x) => x.index === selected)
+  const selClip = selPos >= 0 ? clips[selPos] : undefined
+  const moveSel = (pos: number) => {
+    if (!selClip || !onReorder || pos === selPos) return
+    const others = clips.filter((x) => x.index !== selClip.index)
+    onReorder(selClip.index, others[pos] ? others[pos].index : scenes.length)
+    const el = scroller.current
+    const at = others.slice(0, pos).reduce((a, x) => a + x.dur, 0)
+    if (el) requestAnimationFrame(() => { el.scrollLeft = Math.max(0, at * pps - el.clientWidth * 0.3) })
+  }
+
+  // Thanh tổng quan: cả video thu nhỏ, khung trắng = phần đang nhìn; bấm / kéo để nhảy tới
+  const overview = useRef<HTMLDivElement>(null)
+  const startOverview = (e: ReactPointerEvent) => {
+    const el = scroller.current, bar = overview.current
+    if (!el || !bar || !width) return
+    const go = (x: number) => {
+      const r = bar.getBoundingClientRect()
+      el.scrollLeft = ((x - r.left) / r.width) * width - el.clientWidth / 2
+    }
+    go(e.clientX)
+    const move = (ev: PointerEvent) => go(ev.clientX)
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up) }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+  }
+  const showOverview = !empty && width > view.w + 8
+  const pct = (px: number) => `${(px / width) * 100}%`
+
   return (
     <div className="flex shrink-0 flex-col border-t border-white/10 bg-[#161618] text-white/90 select-none">
       {/* Thanh công cụ: công cụ | điều khiển phát ở GIỮA | zoom */}
@@ -232,8 +318,26 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
         <div className="flex items-center gap-1">
           <IconBtn title={follow ? "Đang bám theo đầu phát — bấm để tắt" : "Bám theo đầu phát khi phát"} active={follow} onClick={() => setFollow(!follow)}><Crosshair /></IconBtn>
           <IconBtn title="Vừa khung" onClick={fit}><Maximize2 /></IconBtn>
+          {(onUndo || onRedo) && <>
+            <span className="mx-1 h-4 w-px bg-white/10" />
+            <IconBtn title="Hoàn tác (Ctrl+Z)" disabled={!canUndo} onClick={() => onUndo?.()}><Undo2 /></IconBtn>
+            <IconBtn title="Làm lại (Ctrl+Y)" disabled={!canRedo} onClick={() => onRedo?.()}><Redo2 /></IconBtn>
+          </>}
+          {selClip && (onReorder || onToggleExcluded) && <>
+            <span className="mx-1 h-4 w-px bg-white/10" />
+            <span className="mr-0.5 text-[11px] whitespace-nowrap text-white/55">Cảnh {selPos + 1}</span>
+            {onReorder && <>
+              <IconBtn title="Đưa lên đầu" disabled={selPos <= 0} onClick={() => moveSel(0)}><ArrowLeftToLine /></IconBtn>
+              <IconBtn title="Dời sang trái (Alt+←)" disabled={selPos <= 0} onClick={() => moveSel(selPos - 1)}><ChevronLeft /></IconBtn>
+              <IconBtn title="Dời sang phải (Alt+→)" disabled={selPos >= clips.length - 1} onClick={() => moveSel(selPos + 1)}><ChevronRight /></IconBtn>
+              <IconBtn title="Đưa xuống cuối" disabled={selPos >= clips.length - 1} onClick={() => moveSel(clips.length - 1)}><ArrowRightToLine /></IconBtn>
+            </>}
+            {onToggleExcluded && (
+              <IconBtn title="Bỏ cảnh này khỏi video (Delete)" onClick={() => onToggleExcluded(selClip.index)}><EyeOff /></IconBtn>
+            )}
+          </>}
           <span className="mx-1 h-4 w-px bg-white/10" />
-          <span className="text-[11px] text-white/40">{clips.length} cảnh</span>
+          <span className="text-[11px] whitespace-nowrap text-white/40">{clips.length} cảnh</span>
         </div>
         <div className={cn("flex items-center gap-3", empty && "pointer-events-none opacity-40")}>
           <span className="tabular w-[62px] text-right font-mono text-[12.5px] text-white">{fmtClock(empty ? 0 : time)}</span>
@@ -255,11 +359,27 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
             <TooltipTrigger asChild><span className="ml-1 cursor-help text-white/40 hover:text-white/80 [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
               Space: phát/dừng · ← →: chuyển cảnh · Kéo thước: tua · Kéo cảnh: đổi thứ tự (Alt + ← →) · Kéo mép: cắt hình, tự hít nối liền cảnh kề ·
-              Delete: bỏ/dùng lại cảnh · Ctrl+Z / Ctrl+Y: hoàn tác / làm lại · Ctrl + lăn chuột: zoom
+              Delete: bỏ/dùng lại cảnh · Ctrl+Z / Ctrl+Y: hoàn tác / làm lại · Lăn chuột: cuộn ngang · Ctrl + lăn chuột: zoom · Thanh tổng quan: bấm để nhảy nhanh
             </TooltipContent>
           </Tooltip>
         </div>
       </div>
+
+      {showOverview && (
+        <div className="flex h-4 items-center border-b border-white/10 bg-black/20" style={{ paddingLeft: HEADER_W }}>
+          <div ref={overview} onPointerDown={startOverview} title="Bấm / kéo để nhảy tới đoạn đó"
+            className="relative mx-1 h-2.5 flex-1 cursor-pointer overflow-hidden rounded-sm bg-white/[0.04]">
+            {clips.map((c) => (
+              <span key={c.index} className={cn("absolute inset-y-0 border-r border-black/40",
+                selected === c.index ? "bg-white/70" : issues[c.index] === "error" ? "bg-red-400/60" : issues[c.index] ? "bg-amber-400/50" : "bg-sky-400/35")}
+                style={{ left: pct(c.start * pps), width: pct(c.dur * pps) }} />
+            ))}
+            <span className="pointer-events-none absolute inset-y-0 w-px bg-red-500" style={{ left: pct(time * pps) }} />
+            <span className="pointer-events-none absolute inset-y-0 rounded-sm border border-white/80 bg-white/10"
+              style={{ left: pct(view.left), width: pct(Math.min(width, view.w)) }} />
+          </div>
+        </div>
+      )}
 
       <div className="flex">
         {/* Cột track kiểu CapCut: icon + nút điều khiển, tên hiện khi rê chuột */}
@@ -335,7 +455,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                         {issues[c.index] && <AlertTriangle className={cn("size-3 shrink-0", issues[c.index] === "error" ? "text-red-300" : "text-amber-300")} />}
                         {(rate > 1.35 || rate < 0.7) && <span className="rounded bg-amber-400/25 px-1 font-mono text-[9px] text-amber-200" title="Tốc độ hình sau khi kéo giãn cho vừa lời">×{rate.toFixed(1)}</span>}
                       </span>
-                      <span className="tabular truncate font-mono text-[9.5px] text-white/55">{c.dur.toFixed(1)}s · gốc {fmtClock(c.scene.clip_start)}</span>
+                      <span className="tabular truncate font-mono text-[9.5px] text-white/55" title="Mốc trong video gốc · độ dài">▶ {fmtClock(c.scene.clip_start)} · {c.dur.toFixed(1)}s</span>
                     </div>
                   </ClipBox>
                 )
@@ -416,10 +536,10 @@ function fmtTick(t: number) {
   return `${String(m).padStart(2, "0")}:${(Number.isInteger(s) ? String(s) : s.toFixed(1)).padStart(2, "0")}`
 }
 
-function IconBtn({ title, onClick, children, active, danger }: { title: string; onClick: () => void; children: ReactNode; active?: boolean; danger?: boolean }) {
+function IconBtn({ title, onClick, children, active, danger, disabled }: { title: string; onClick: () => void; children: ReactNode; active?: boolean; danger?: boolean; disabled?: boolean }) {
   return (
-    <button title={title} onClick={onClick}
-      className={cn("flex size-7 items-center justify-center rounded-md [&_svg]:size-3.5",
+    <button title={title} onClick={onClick} disabled={disabled} aria-pressed={active}
+      className={cn("flex size-7 shrink-0 items-center justify-center rounded-md disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5",
         active ? (danger ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-white/15 text-white") : "text-white/60 hover:bg-white/10 hover:text-white")}>
       {children}
     </button>

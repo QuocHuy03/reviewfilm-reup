@@ -1,16 +1,5 @@
 __doc__ = '\nTranslator — Dich & Reup pipeline (phien ban 3 — PIVOT qua tieng Anh):\n  1. Gom Whisper segments thanh blocks ~10-12s (bao toan ngu canh)\n  2. Phan tich ngu canh phim → glossary KHOA CUNG ten rieng/thuat ngu (chong pivot lam hong Han-Viet)\n  3. Stage A: dich goc(Trung...) → TIENG ANH trung gian (hieu DUNG nghia, het mo ho)\n  4. Stage B: dich tieng Anh + doi chieu ban goc + glossary → TIENG VIET dia phuong hoa muot\n  5. Stage C: ChatGPT "nuot" ngu dieu giong thuyet minh YouTube VN\n  6. Tra ve list scenes cho TTS + video editor\n\nVi sao pivot qua tieng Anh: tieng Anh lam ro nghia (tri "sai nghia"), con glossary giu\nten rieng/thuat ngu di THANG Han-Viet (giang ho, Truong Tam...) — khong bi pivot pha nat.\nKhong co API key: Google dich pivot goc→Anh→Viet (don thuan, khong nuot).\n'
 import os, time, json, re, requests
-try:
-    import google.generativeai as genai
-except Exception:
-    genai = None
-try:
-    from .cost_tracker import _cost_tls
-except Exception:
-    import threading as _threading
-    _cost_tls = _threading.local()
-DEEPSEEK_URL = 'https://api.deepseek.com/v1/chat/completions'
-OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 BLOCK_MAX_DUR = 12.0
 BLOCK_MAX_CHARS = 220
 BATCH_BLOCKS = 80
@@ -46,35 +35,6 @@ def _post_fix_sino_pinyin(text: str, film_vi_title: str) -> str:
                 text = re.sub('\\b' + re.escape(sino) + '\\b', role, text)
     return text
 
-def _fetch_characters_from_ai(vi_title: str, src_title: str, deepseek_key: str, openai_key: str, log_fn) -> list:
-    if vi_title or src_title:
-        prompt = f"""Bộ phim: '{src_title}' (tên tiếng Việt: '{vi_title}').\n\nNhiệm vụ: Liệt kê các nhân vật CHÍNH trong phim này với tên CHÍNH XÁC theo ngôn ngữ gốc.\nQuan trọng:\n- Nếu là phim Hàn: tên romanized kiểu Hàn (Na Hwa-jin, Gong Min, Kim Soo-hyun...)\n- Nếu là phim Nhật: tên romanized Nhật (Tanaka Kenji, Yamamoto...)\n- Nếu là phim Trung: tên Hán Việt phổ biến (Trương Tam, Lâm Kiệt...)\n- Cũng cung cấp: tên có thể xuất hiện trong bản lồng tiếng Trung (nếu biết)\n\nCỰC KỲ QUAN TRỌNG VỀ ĐỘ TIN CẬY:\n- CHỈ trả về known=true khi bạn THỰC SỰ CHẮC CHẮN nhận ra đúng bộ phim này và NHỚ RÕ tên nhân vật.\n- TUYỆT ĐỐI KHÔNG bịa tên nhân vật. Nếu chỉ đoán mò, không chắc, hoặc nhầm sang phim khác cùng tên/cùng thể loại → trả về known=false.\n- Thà trả về known=false còn hơn cung cấp tên SAI (vì tên sai sẽ làm hỏng toàn bộ video review).\n\nTrả về JSON:\n{{ "known": true/false, "characters": [{{"name": "tên chính xác", "role": "vai trò", "chinese_dub_name": "tên trong bản lồng tiếng Trung nếu có hoặc null"}}] }}\nNếu không biết phim này hoặc không chắc chắn: trả về {{"known": false, "characters": []}}\nChỉ trả về JSON thuần túy."""
-        for (api_url, key, model) in ((DEEPSEEK_URL, deepseek_key, 'deepseek-chat'), (OPENAI_URL, openai_key, 'gpt-4o-mini')):
-            if key:
-                try:
-                    r = requests.post(api_url, headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}, json={'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': 0.1, 'max_tokens': 800, **({'response_format': {'type': 'json_object'}} if 'openai' in api_url else {})}, timeout=30)
-                    if r.status_code != 200:
-                        continue
-                    content = r.json()['choices'][0]['message']['content'].strip()
-                    content = re.sub('^```(?:json)?\\s*', '', content)
-                    content = re.sub('\\s*```$', '', content).strip()
-                    data = json.loads(content)
-                    if data.get('known') and data.get('characters'):
-                        entries = []
-                        for c in data['characters']:
-                            name = c.get('name', '').strip()
-                            cn_name = c.get('chinese_dub_name', '') or ''
-                            if name:
-                                entries.append({'src': name, 'vi': name})
-                                if cn_name and cn_name != name:
-                                    entries.append({'src': cn_name, 'vi': name})
-                        log_fn(f"   [AI Knowledge] Tìm được {len(data['characters'])} nhân vật của '{vi_title or src_title}' từ training data")
-                        return entries
-                    log_fn(f"   [AI Knowledge] Không biết phim '{vi_title or src_title}'")
-                    return []
-                except Exception as e:
-                    log_fn(f'   [AI Knowledge] Lỗi: {str(e)[:60]}')
-    return []
 
 def _find_known_titles(text: str) -> list:
 
@@ -91,25 +51,39 @@ def _find_known_titles(text: str) -> list:
     found.sort(key=lambda x: len(x[1]), reverse=True)
     return found
 
+_GT_UA = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
+_GT_FAILS = [0]          # số lần dịch thất bại (trả nguyên văn) — báo ra log thay vì im lặng
+
+
 def _google_translate(text: str, sl: str, tl: str) -> str:
-    import urllib.parse, time as _t
-    url = f'https://translate.googleapis.com/translate_a/single?client=gtx&sl={sl}&tl={tl}&dt=t&q={urllib.parse.quote(text)}'
+    """Google Dịch miễn phí. Endpoint `gtx` hay trả 429 với request từ Python (Google nhận dạng kết nối của thư viện),
+    nên lùi về endpoint của extension Chrome (`dict-chrome-ex`, cùng dịch vụ). Lỗi hết → trả nguyên văn + đếm lỗi."""
+    import time as _t
     for attempt in range(3):
         try:
-            r = requests.get(url, timeout=20)
+            r = requests.get('https://translate.googleapis.com/translate_a/single', params={'client': 'gtx', 'sl': sl, 'tl': tl, 'dt': 't', 'q': text},
+                             headers=_GT_UA, timeout=20)
+            if r.status_code == 200:
+                return ''.join((p[0] for p in r.json()[0] if p[0])).strip()
+            r = requests.get('https://clients5.google.com/translate_a/t', params={'client': 'dict-chrome-ex', 'sl': sl, 'tl': tl, 'q': text},
+                             headers=_GT_UA, timeout=20)
             if r.status_code == 200:
                 res = r.json()
-                return ''.join((p[0] for p in res[0] if p[0])).strip()
+                # sl=auto → [[bản dịch, ngôn ngữ]]; còn lại → [bản dịch]
+                out = ''.join((x[0] if isinstance(x, list) else x) for x in res).strip()
+                if out:
+                    return out
         except Exception:
             pass
         if attempt < 2:
             _t.sleep(1.5)
+    _GT_FAILS[0] += 1
     return text
 
 def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_context: str, video_filename: str) -> list:
     if segments:
         blocks = _group_segments(segments)
-        log_fn(f"   Gom {len(segments)} segment -> {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
+        log_fn(f"   Gộp {len(segments)} segment -> {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
         sl = source_lang if source_lang and source_lang != 'auto' else 'auto'
         _lookup_text = (user_context or '') + ' ' + (video_filename or '')
         _glossary = []
@@ -125,7 +99,8 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
             _has_r2w = True
         except Exception:
             _has_r2w = False
-        log_fn('   Dich PIVOT mien phi (Google): goc -> tieng Anh -> tieng Viet...')
+        log_fn('   Dịch miễn phí (Google): gốc → tiếng Anh → tiếng Việt...')
+        _GT_FAILS[0] = 0
         translated_scenes = []
         for (i, block) in enumerate(blocks):
             src = block['text'].strip()
@@ -138,7 +113,7 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
                     else:
                         translated_text = _google_translate(src, sl, 'vi')
                 except Exception as e:
-                    log_fn(f'   [WARN] Loi dich pivot block {i + 1}: {e}. Thu dich thang...')
+                    log_fn(f'   [WARN] Lỗi dịch đoạn {i + 1}: {e}. Thử dịch thẳng...')
                     try:
                         translated_text = _google_translate(src, sl, 'vi')
                     except Exception:
@@ -155,7 +130,9 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
                     pass
             sub = translated_text
             translated_scenes.append({'voiceover': translated_text, 'clip_start': float(block['start']), 'clip_end': float(block['end']), 'subtitle': sub, 'block_dur': float(block['end']) - float(block['start']), 'orig_text': src})
-        log_fn(f'   Hoan tat dich pivot Google: {len(translated_scenes)} block.')
+        if _GT_FAILS[0]:
+            log_fn(f'   [WARN] Google Dịch không phản hồi {_GT_FAILS[0]} lần — một số câu còn nguyên văn gốc, kiểm tra mạng rồi chạy lại.')
+        log_fn(f'   Hoàn tất dịch Google: {len(translated_scenes)} đoạn.')
         return translated_scenes
     return []
 
@@ -215,8 +192,6 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
     user_context = user_context or ''
     deepseek_key = (api_key or '').strip()
     okey = (openai_key or '').strip()
-    gkey = ''
-    _cost_tls.acc = cost_acc
     from core import web_llm
     _wrap = web_llm.with_web if allow_web else (lambda engs: [(e, k) for (e, k) in engs if k])
     if not _wrap([('deepseek', deepseek_key), ('openai', okey)]):
@@ -224,8 +199,8 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
         return _translate_via_google_free(segments, source_lang, log_fn, user_context=user_context, video_filename=video_filename)
     if segments:
         blocks = _group_segments(segments)
-        log_fn(f"   Gom {len(segments)} segment → {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
-        log_fn('   Phan tich ngu canh phim (nhan dien ten rieng, thuat ngu, hook)...')
+        log_fn(f"   Gộp {len(segments)} segment → {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
+        log_fn('   Phân tích ngữ cảnh phim (nhận diện tên riêng, thuật ngữ, hook)...')
         user_context = (user_context or '').strip()
         ctx_chain = _wrap([('deepseek', deepseek_key), ('openai', okey)])
         film_ctx = {}
@@ -233,35 +208,31 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
             film_ctx = _analyze_film_context(blocks, ck, source_lang, log_fn, engine=ce, extra_title_hint=video_filename, user_context=user_context) or {}
             if film_ctx.get('title') or film_ctx.get('glossary') or film_ctx.get('origin'):
                 break
-            log_fn(f"   Phan tich ngu canh '{ce}' chua duoc, thu engine khac...")
+            log_fn(f"   Phân tích ngữ cảnh '{ce}' chưa được, thử engine khác...")
         _name_matches = _find_known_titles(video_filename) if video_filename else []
         if video_filename and (not film_ctx.get('_vi_title')) and _name_matches:
             (_vi, _src) = _name_matches[0]
             film_ctx['title'] = f'{_vi} ({_src})'
             film_ctx['_vi_title'] = _vi
-            log_fn(f'   → Nhan dien phim tu TEN FILE: {_vi}')
+            log_fn(f'   → Nhận diện phim từ TÊN FILE: {_vi}')
             _chars_from_file = _get_char_glossary_for_film(_vi)
             if _chars_from_file:
                 existing = {e.get('src', '').lower(): True for e in film_ctx.get('glossary', [])}
                 for entry in _chars_from_file:
                     if entry['src'].lower() not in existing:
                         film_ctx.setdefault('glossary', []).insert(0, entry)
-                log_fn(f'   → Inject {len(_chars_from_file)} ten nhan vat cung tu DB')
+                log_fn(f'   → Nạp {len(_chars_from_file)} tên nhân vật cố định từ DB')
         if film_ctx.get('origin'):
-            log_fn(f"   → Nuoc san xuat: {film_ctx.get('origin')}")
+            log_fn(f"   → Nước sản xuất: {film_ctx.get('origin')}")
         if film_ctx.get('title'):
-            log_fn(f"   → Phim: {film_ctx['title']} | The loai: {film_ctx.get('genre', '?')}")
+            log_fn(f"   → Phim: {film_ctx['title']} | Thể loại: {film_ctx.get('genre', '?')}")
         if film_ctx.get('glossary'):
-            log_fn(f"   → {len(film_ctx['glossary'])} thuat ngu/ten rieng duoc KHOA cach dich")
+            log_fn(f"   → {len(film_ctx['glossary'])} thuật ngữ/tên riêng được KHÓA cách dịch")
         _vi_title_ctx = film_ctx.get('title', '') or film_ctx.get('_vi_title', '')
         _hard_chars = _get_char_glossary_for_film(_vi_title_ctx)
         if _hard_chars:
             log_fn(f'   → Đã inject {len(_hard_chars)} tên nhân vật cứng từ DB')
-        _ai_chars = []
-        if _vi_title_ctx and (not _hard_chars):
-            _src_title_ctx = film_ctx.get('_vi_title_src', '') or film_ctx.get('title', '')
-            _ai_chars = _fetch_characters_from_ai(_vi_title_ctx, _src_title_ctx, deepseek_key=deepseek_key, openai_key=okey, log_fn=log_fn)
-        _all_extra = _hard_chars or _ai_chars
+        _all_extra = _hard_chars
         if _all_extra:
             existing = {e.get('src', '').lower(): True for e in film_ctx.get('glossary', [])}
             for entry in _all_extra:
@@ -283,7 +254,7 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
                     existing[s]['vi'] = entry['vi']
                 else:
                     film_ctx.setdefault('glossary', []).insert(0, entry)
-            log_fn(f'   → Nap {len(_persisted)} ten/vai tro da chot tu tap truoc (giu nhat quan)')
+            log_fn(f'   → Nạp {len(_persisted)} tên/vai trò đã chốt từ tập trước (giữ nhất quán)')
         pivot_engines = _wrap([('deepseek', deepseek_key), ('openai', okey)])
         loc_engines = list(pivot_engines)
         english_texts = _blocks_to_english(blocks, pivot_engines, source_lang, film_ctx, log_fn)
@@ -292,7 +263,7 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
         if polish_engines:
             translated = _polish_blocks_chatgpt(translated, polish_engines, log_fn, troll_tone=troll_tone)
         else:
-            log_fn('   [3/3] (Bo qua buoc nuot ngu dieu — chua co API key nao)')
+            log_fn('   [3/3] (Bỏ qua bước chuốt ngữ điệu — chưa có API key nào)')
         _vi_title_for_fix = (film_ctx or {}).get('title', '') or (film_ctx or {}).get('_vi_title', '')
         fixed_count = 0
         for (i, txt) in enumerate(translated):
@@ -301,7 +272,7 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
                 fixed_count += 1
                 translated[i] = new_txt
         if fixed_count:
-            log_fn(f'   [Safety] Da chuan hoa chuc danh/biet danh o {fixed_count} block')
+            log_fn(f'   [Safety] Đã chuẩn hóa chức danh/biệt danh ở {fixed_count} block')
         try:
             _save_film_glossary(film_ctx.get('_film_key', ''), film_ctx.get('glossary', []), film_ctx.get('title', ''))
         except Exception:
@@ -333,12 +304,12 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
                     pass
             scenes[0]['voiceover'] = hook + ' ' + scenes[0]['voiceover']
             scenes[0]['subtitle'] = scenes[0]['voiceover']
-            log_fn('   [Hook] Da chen cau mo dau cuon vao canh 1')
+            log_fn('   [Hook] Đã chèn câu mở đầu cuốn hút vào cảnh 1')
         if digits_fixed:
-            log_fn(f'   [Safety] Da chuyen so thanh chu o {digits_fixed} block dich (TTS safety)')
-        log_fn(f'   Hoan tat dich: {len(scenes)} block san sang cho TTS')
+            log_fn(f'   [Safety] Đã chuyển số thành chữ ở {digits_fixed} block dịch (an toàn TTS)')
+        log_fn(f'   Hoàn tất dịch: {len(scenes)} block sẵn sàng cho TTS')
         return scenes
-    log_fn('   [WARN] Transcript rong')
+    log_fn('   [WARN] Transcript rỗng')
     return []
 
 def _group_segments(segments: list) -> list:
@@ -456,14 +427,14 @@ def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, 
                         data['title'] = f'{vi_t} ({src_t})'
                 data['glossary'] = gloss[:45]
                 return data
-            log_fn('   [WARN] Phan tich ngu canh that bai — bo qua, dich binh thuong')
+            log_fn('   [WARN] Phân tích ngữ cảnh thất bại — bỏ qua, dịch bình thường')
             if known_matches:
                 gloss_fallback = [{'src': src, 'vi': vi} for (vi, src) in known_matches[:5]]
                 (vi_t, src_t) = known_matches[0]
                 return {'title': f'{vi_t} ({src_t})', 'glossary': gloss_fallback, 'genre': '', 'summary': '', 'hook': ''}
             return {}
         except Exception as ex:
-            log_fn(f'   [WARN] Phan tich ngu canh loi: {str(ex)[:80]} — bo qua, dich binh thuong')
+            log_fn(f'   [WARN] Phân tích ngữ cảnh lỗi: {str(ex)[:80]} — bỏ qua, dịch bình thường')
             if known_matches:
                 gloss_fallback = [{'src': src, 'vi': vi} for (vi, src) in known_matches[:5]]
                 (vi_t, src_t) = known_matches[0]
@@ -510,83 +481,13 @@ def _build_ctx_header(film_ctx: dict) -> str:
         return '\n'.join(parts)
     return ''
 
-def _deepseek_call(prompt: str, api_key: str, log_fn, temperature: float, max_tokens: int) -> str:
-    for attempt in range(3):
-        try:
-            r = requests.post(DEEPSEEK_URL, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json={'model': 'deepseek-chat', 'messages': [{'role': 'user', 'content': prompt}], 'temperature': temperature, 'max_tokens': max_tokens, 'response_format': {'type': 'json_object'}}, timeout=180)
-            if r.status_code == 200:
-                rj = r.json()
-                _acc = getattr(_cost_tls, 'acc', None)
-                if _acc is not None:
-                    u = rj.get('usage', {})
-                    _acc.add_deepseek(u.get('prompt_tokens', 0), u.get('completion_tokens', 0))
-                return rj['choices'][0]['message']['content'].strip()
-            log_fn(f'   [WARN] DeepSeek HTTP {r.status_code} (attempt {attempt + 1}/3)')
-        except Exception as ex:
-            log_fn(f'   [WARN] DeepSeek exception: {str(ex)[:100]}')
-        if attempt < 2:
-            time.sleep(2)
-    return ''
 
-def _openai_call(prompt: str, api_key: str, log_fn, temperature: float, max_tokens: int, model: str = 'gpt-4o-mini') -> str:
-    try:
-        r = requests.post(OPENAI_URL, headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, json={'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'temperature': temperature, 'max_tokens': max_tokens, 'response_format': {'type': 'json_object'}}, timeout=120)
-        if r.status_code == 200:
-            rj = r.json()
-            _acc = getattr(_cost_tls, 'acc', None)
-            if _acc is not None:
-                u = rj.get('usage', {})
-                _acc.add_openai(u.get('prompt_tokens', 0), u.get('completion_tokens', 0))
-            return rj['choices'][0]['message']['content'].strip()
-        log_fn(f'   [WARN] OpenAI HTTP {r.status_code}')
-    except Exception as ex:
-        log_fn(f'   [WARN] OpenAI exception: {str(ex)[:100]}')
-    return ''
 
-def _gemini_call(prompt: str, api_key: str, log_fn, temperature: float = 0.3, max_tokens: int = 8192) -> str:
-    if not api_key or genai is None:
-        return ''
-    keys = [k.strip() for k in str(api_key).split(',') if k.strip()]
-    for key in keys:
-        key_short = f'...{key[-6:]}' if len(key) > 6 else key
-        try:
-            genai.configure(api_key=key)
-        except Exception as ex:
-            log_fn(f'   [WARN] Gemini configure loi ({key_short}): {str(ex)[:60]}')
-            continue
-        auth_failed = False
-        for m_name in ('gemini-2.5-flash', 'gemini-1.5-flash'):
-            if auth_failed:
-                break
-            for attempt in range(2):
-                try:
-                    model = genai.GenerativeModel(m_name)
-                    resp = model.generate_content(prompt, generation_config={'response_mime_type': 'application/json', 'temperature': temperature, 'max_output_tokens': min(max_tokens, 8192)})
-                    txt = (getattr(resp, 'text', '') or '').strip()
-                    if txt:
-                        _acc = getattr(_cost_tls, 'acc', None)
-                        if _acc is not None:
-                            _acc.add_gemini(1)
-                        return txt
-                except Exception as ex:
-                    err = str(ex)
-                    if any((s in err for s in ('429', 'RESOURCE_EXHAUSTED', 'quota', 'exhausted'))):
-                        log_fn(f'   [WARN] Gemini {m_name} ({key_short}) het quota, thu model/key khac...')
-                        break
-                    elif any((s in err for s in ('API_KEY_INVALID', 'PERMISSION_DENIED', '401', '403'))):
-                        log_fn(f'   [WARN] Gemini key {key_short} loi auth, thu key tiep theo...')
-                        auth_failed = True
-                        break
-                    else:
-                        log_fn(f'   [WARN] Gemini {m_name} ({key_short}) loi: {err[:80]}')
-                        time.sleep(1.2)
-    return ''
 
 def _engine_call(engine: str, key: str, prompt: str, log_fn, temperature: float, max_tokens: int) -> str:
-    if engine == 'web':
-        from core import web_llm
-        return web_llm.chat(prompt, log_fn)
-    return _openai_call(prompt, key, log_fn, temperature, max_tokens) if engine == 'openai' else _gemini_call(prompt, key, log_fn, temperature, max_tokens) if engine == 'gemini' else _deepseek_call(prompt, key, log_fn, temperature, max_tokens)
+    """AI dịch = tài khoản ChatGPT/Gemini đăng nhập trong app (engine 'web')."""
+    from core import web_llm
+    return web_llm.chat(prompt, log_fn)
 
 def _parse_id_text(content: str, list_key: str) -> dict:
     if content:
@@ -628,9 +529,9 @@ def _try_engines(engines: list, prompt: str, log_fn, temperature: float, max_tok
         next_engines = [e for (e, _) in remaining[idx + 1:]]
         if next_engines:
             if mp:
-                log_fn(f"   [FALLBACK] '{eng}' tra {len(mp)}/{min_items} dong → chuyen sang '{next_engines[0]}'...")
+                log_fn(f"   [FALLBACK] '{eng}' trả {len(mp)}/{min_items} dòng → chuyển sang '{next_engines[0]}'...")
             else:
-                log_fn(f"   [FALLBACK] '{eng}' loi / het quota → chuyen sang '{next_engines[0]}'...")
+                log_fn(f"   [FALLBACK] '{eng}' lỗi / hết quota → chuyển sang '{next_engines[0]}'...")
     return best
 
 def _english_prompt(batch: list, offset: int, lang_hint: str, gloss_hint: str) -> str:
@@ -668,7 +569,7 @@ def _blocks_to_english(blocks: list, engines: list, source_lang: str, film_ctx: 
     for s in range(0, n, BATCH_BLOCKS):
         e = min(s + BATCH_BLOCKS, n)
         batch = blocks[s:e]
-        log_fn(f'   [1/3] Dich sang tieng Anh trung gian: block {s + 1}-{e}/{n} ({eng_label})...')
+        log_fn(f'   [1/3] Dịch sang tiếng Anh trung gian: block {s + 1}-{e}/{n} ({eng_label})...')
         prompt = _english_prompt(batch, s, lang_hint, gloss_hint)
         mp = _try_engines(engines, prompt, log_fn, 0.2, min(8000, len(batch) * 70 + 500), 'translations', min_items=max(1, len(batch) // 2))
         for (k, v) in mp.items():
@@ -689,7 +590,7 @@ def _localize_to_vietnamese(blocks: list, english_texts: list, engines: list, so
     eng_label = engines[0][0] if engines else '?'
     for s in range(0, n, BATCH_BLOCKS):
         e = min(s + BATCH_BLOCKS, n)
-        log_fn(f'   [2/3] Dia phuong hoa tieng Viet: block {s + 1}-{e}/{n} ({eng_label})...')
+        log_fn(f'   [2/3] Địa phương hóa tiếng Việt: block {s + 1}-{e}/{n} ({eng_label})...')
         lines = '\n'.join((f"[{s + i}] GOC: {blocks[s + i]['text']}\n     ENG: {english_texts[s + i]}" for i in range(e - s)))
         prompt = f"""Ban la dich gia chuyen dia phuong hoa phim nuoc ngoai sang tieng Viet.\n{ctx_header}Duoi day la {e - s} doan thoai. Moi doan co BAN GOC (ngon ngu goc) va ban dich TIENG ANH trung gian de ban hieu DUNG nghia. Viet lai sang TIENG VIET tu nhien, muot ma, dung mach truyen.\n\n{lines}\n\nNHIEM VU & QUY TAC:\n- Dich du {e - s} dong, giu nguyen so dong va ID.\n- Phong cach loi an khanh YouTube Viet Nam (kieu Pikachu Review, Sakura Review): tu nhien, dung thanh ngu Viet, cau van luu loat.\n- DICH THOAT Y, KHONG dich tung chu mot: doc HIEU Y NGHIA tong the cua ban tieng Anh trung gian roi VIET LAI bang cau tieng Viet tu nhien nguoi Viet hay noi, KHONG giu cau truc ngu phap tieng Anh (TRANH cau van cung nhac, dao ngu ky la, dich sat nghia den lam toi nghia).\n- DA DANG HOA DAI TU XUNG HO nhan vat: TUYET DOI TRANH lap lai may moc 'anh ta'/'co ta' o gan het cac cau. Tuy ngu canh va sac thai, luan phien dung cac dai tu/cach goi da dang: 'han', 'ga', 'ga ta', 'thang nay', 'y', 'co nang', 'co ay', 'mu ta', 'ten do', 'gã kia'... de van phong sinh dong, khong nhao nhet.\n- LOAI BO LOI DICH MAY NGO NGHE: ban dich phai doc lien mach nhu nguoi ke chuyen thuc su, khong con dau vet dich tung tu, khong dung tu Han Viet cung nhac khi co tu thuan Viet tu nhien hon.\n{tone_str}- BAT BUOC tuan theo TU DIEN + NUOC SAN XUAT trong NGU CANH PHIM o tren: ten rieng/thuat ngu dich y HET nhu vay, KHONG lay nghia den tu ban tieng Anh (vi du giu 'giang ho', KHONG dich 'rivers and lakes').\n- LUAT TEN NHAN VAT (RAT QUAN TRONG): CHI phien am Han Viet (Truong Tam, Lam Kiet...) khi phim XAC DINH la TRUNG QUOC/HOA NGU. Voi phim HAN QUOC / NHAT / THAI / AU-MY, HOAC khi KHONG CHAC CHAN xuat xu → GIU NGUYEN ten romanized goc (Han: Kim Min Jae, Lee Soo Jin; Nhat: Tanaka, Sakura; Thai: Somchai, Ploy; Au-My: John, Anna...), TUYET DOI KHONG phien am Han Viet — DU loi thoai/phu de goc la tieng Trung (vi day co the la phim nuoc ngoai LONG TIENG TRUNG). Ten tieng Anh luon giu nguyen.\n- DAC BIET: Phim Han/Nhat/Thai bi LONG TIENG TRUNG → ten nhan vat trong transcript la dang pinyin Hoa ngu (Xiao Piao, Xiao Min, Xiao Ba, Xiao Liu...). TUYET DOI KHONG chuyen sang am Han Viet (KHONG viet 'Phieu' tu Xiao Piao, KHONG viet 'Minh' tu Xiao Min, KHONG viet 'Ba' tu Xiao Ba). Thay vao do: giu nguyen dang pinyin (Xiao Piao, Xiao Min) HOAC dat biet danh tieng Viet don gian mieu ta nhan vat (vd: 'thang trum', 'thang nho', 'thang ban nho'). Viec dich 'Xiao Piao' thanh 'Phieu' hay 'Xiao Min' thanh 'Minh' la SAI vi lam nguoi xem tuong day la nhan vat Viet Nam.\n- TU CHI VAI TRO KHONG PHAI TEN: vi du 'school bully' / 校霸 = 'trum truong / dai bang lop' (KHONG dich thanh ten 'Hieu Ba'); 'class president' = 'lop truong'; 'the teacher' = 'thay/co giao'. Dich thanh danh tu chung.\n- Tuy hoan canh, tu dat biet danh di dom cho nhan vat dua tren dac diem (vi du 'anh da den', 'anh lac', 'chua te bong toi'). Neu khong hop thi thoi.\n- Giu do dai cau dich xap xi ban goc de voiceover khop timeline (khong qua dai, khong qua ngan).\n- Khong tu y xuong dong. Bat buoc escape dau nhay kep thanh \\" de khong hong JSON.\nDINH DANG TRA VE: chi JSON thuan tuy: {{ "translations": [{{"id": {s}, "text": "tieng Viet..."}}, ...] }}"""
         mp = _try_engines(engines, prompt, log_fn, 0.3, min(8000, (e - s) * 90 + 500), 'translations', min_items=max(1, (e - s) // 2))
@@ -759,10 +660,10 @@ def _polish_blocks_chatgpt(translated: list, engines: list, log_fn, troll_tone: 
         tone_str = 'Giong van: hoi troll, vui ve, cham biem di dom de nguoi xem thich thu bat cuoi.\n' if troll_tone else 'Giong van: nghiem tuc, chuan muc, phu hop ngu canh va bieu cam that cua nhan vat.\n'
         prompt = f"""Ban la bien tap vien chuyen chuot lai loi thuyet minh tieng Viet cho kenh YouTube Viet Nam.\nNhiem vu: Nhan vao danh sach cac doan thoai tieng Viet da dich (co the con lom com, may moc), viet lai moi doan cho tu nhien, luu loat, gong giong thuyet minh phim YouTube Viet Nam (nhu Pikachu Review, Sakura Review). Giu nguyen so doan va ID, khong them khong bot noi dung chinh.\n{tone_str}Quy tac ten rieng & biet danh: GIU NGUYEN cach viet ten nhan vat da co trong ban nhap (KHONG tu y phien am Han Viet lai cac ten dang romanized nhu Kim Min Jae, Tanaka, Somchai, John...). Voi ten phim, dung TEN TIENG VIET PHO BIEN neu da co (vi du: 'Ma Thoi Den', 'Chan Hoan Truyen'). Tu dong dat biet danh di dom cho nhan vat (vi du: 'anh da den', 'anh lac', 'chua te'...) dua tren dac diem.\nYeu cau bo sung (CHAT LUONG DICH): (a) Viet THOAT Y, KHONG may moc — cau van phai doc len tu nhien nhu nguoi Viet ke chuyen, khong con dau vet dich tung chu, khong dao ngu ky la; (b) DA DANG HOA cach xung ho nhan vat — TRANH lap lai may moc 'anh ta'/'co ta', luan phien dung 'han', 'ga', 'ga ta', 'y', 'co nang', 'mu ta', 'ten do'... tuy ngu canh; (c) Loai bo triet de cac cau con lom com/sai ngu phap/nghia mo ho con sot lai tu ban dich may.\nYeu cau: Giu do dai cau polished xap xi va tuong dong voi cau goc de toc do thuyet minh duoc deu dan. Khong viet lai qua dai khien nguoi doc phai doc don dap, tra ve JSON thuan tuy:\n{{"polished": [{{"id": 0, "text": "..."}}, ...]}}\n\nDanh sach ({len(input_data)} doan):\n{json.dumps(input_data, ensure_ascii=False)}"""
         eng_label = engines[0][0] if engines else '?'
-        log_fn(f'   [3/3] Chuot ngu dieu tieng Viet ({eng_label})...')
+        log_fn(f'   [3/3] Chuốt ngữ điệu tiếng Việt ({eng_label})...')
         max_tokens = min(16000, len(translated) * 100 + 500)
         mp = _try_engines(engines, prompt, log_fn, 0.3, max_tokens, 'polished', min_items=max(1, len(translated) // 2))
         if mp:
             return [mp.get(i, t) for (i, t) in enumerate(translated)]
-        log_fn('   [WARN] Chuot ngu dieu khong thanh cong o engine nao, giu ban dich goc')
+        log_fn('   [WARN] Chuốt ngữ điệu không thành công ở engine nào, giữ bản dịch gốc')
     return translated

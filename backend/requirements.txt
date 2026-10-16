@@ -1,6 +1,5 @@
 fastapi>=0.115
 uvicorn>=0.30
-python-dotenv>=1.0
 requests>=2.31
 numpy>=1.24
 opencv-python>=4.8
@@ -10,3 +9,5 @@ gTTS>=2.3
 yt-dlp>=2026.8.19   # Bilibili cần bản mới; app có nút "Cập nhật bộ tải"
 scenedetect>=0.6.2
 soundfile>=0.12
+Pillow>=10.0   # thumbnail bài đăng (jobs/publish.py)
+fonttools>=4.40   # đọc tên font khi chọn / nhập font phụ đề (core/fonts.py)

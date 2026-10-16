@@ -2,7 +2,7 @@
 
 - `python main.py [--port 8765]`              → chạy FastAPI (uvicorn)
 - `python main.py --whisper-worker args res`  → tiến trình Whisper riêng (core.transcriber gọi)
-- `python main.py --xtts-worker ...` / `--vieneu-worker ...` → worker TTS
+- `python main.py --vieneu-worker ...` → worker TTS
 """
 import json
 import os
@@ -81,8 +81,6 @@ def main():
         i = sys.argv.index('--whisper-worker')
         _whisper_worker(sys.argv[i + 1], sys.argv[i + 2])
         sys.exit(0)
-    if '--xtts-worker' in sys.argv:
-        _run_worker('--xtts-worker', 'workers.xtts_worker')
     if '--vieneu-worker' in sys.argv:
         _run_worker('--vieneu-worker', 'workers.vieneu_worker')
 

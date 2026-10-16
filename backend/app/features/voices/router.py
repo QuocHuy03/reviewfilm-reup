@@ -46,6 +46,9 @@ def sample_path(vid):
             keys.add(vid[len(p):])
     keys |= {k.replace('-', '_') for k in keys}
     keys |= {'fpt_' + k for k in list(keys)}
+    from core.tts_engine import _VIENEU3_REF_ALIASES     # giọng VieNeu3 có file mẫu mang tên khác
+    if vid in _VIENEU3_REF_ALIASES:
+        keys.add(os.path.splitext(_VIENEU3_REF_ALIASES[vid])[0])
     for kind in VOICE_SAMPLE_KINDS:
         folder = voice_samples_dir(kind)
         if not os.path.isdir(folder):
