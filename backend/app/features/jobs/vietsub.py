@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import time
 
+from core.video_editor import enable_expr
+
 from .pipelines import (_audio_codec, _base_name, _force_style, _is_url, _layout, _out_dir, _rechunk, _resolve_video,
                         _sub_style, _transcribe, _translate, _unique_path, _workspace, _write_srt, clean_regions,
                         sub_cover_center)
@@ -42,7 +44,7 @@ def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
                 merged.append([a, b])
         if not merged:
             return ('', cur)
-        en = ":enable='" + '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in merged) + "'"
+        en = ":enable='" + enable_expr(merged) + "'"   # gộp cho đủ ngắn (phim dài hàng trăm câu → ffmpeg hết bộ nhớ)
     parts = []
     if style == 'erase':
         parts.append(f'[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}{en}[{tag}d]')
@@ -151,7 +153,7 @@ def _fit_cover_chain(cur, band, cues, style, w, h, old=None):
                 merged[-1][1] = max(merged[-1][1], b)
             else:
                 merged.append([a, b])
-        en = '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in merged)
+        en = enable_expr(merged)                 # gộp cho đủ ngắn (phim dài hàng trăm câu → ffmpeg hết bộ nhớ)
         parts.append(f'[ftg{i}]crop={bw}:{ph}:{x}:0[ftc{i}]')
         parts.append(f"[{prev}][ftc{i}]overlay={x}:{py}:enable='{en}'[fto{i}]")
         prev = f'fto{i}'

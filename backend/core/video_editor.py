@@ -159,6 +159,28 @@ def _find_system_font(font_name='Segoe UI'):
     except Exception:
         pass
     return _find_font()
+def cap_spans(spans, max_terms=50):
+    """Gộp khoảng thời gian [(a, b)] cho còn tối đa `max_terms` (gộp 2 khoảng sát nhau nhất trước) — biểu thức
+    enable='between(..)+between(..)…' quá dài (phim dài có hàng trăm câu phụ đề) làm ffmpeg báo "Cannot allocate memory".
+    Không bỏ khoảng nào: gộp chỉ che dư phần hở giữa 2 khoảng, vẫn che đủ mọi lúc có chữ."""
+    merged = []
+    for (a, b) in sorted((float(a), float(b)) for (a, b) in spans if float(b) > float(a)):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    while len(merged) > max_terms:
+        k = min(range(len(merged) - 1), key=lambda i: merged[i + 1][0] - merged[i][1])
+        merged[k][1] = max(merged[k][1], merged[k + 1][1])
+        del merged[k + 1]
+    return merged
+
+
+def enable_expr(spans, max_terms=50):
+    """[(a, b)] → biểu thức enable của ffmpeg (between(t,a,b)+…), đã gộp cho đủ ngắn; '' nếu không có khoảng nào."""
+    return '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in cap_spans(spans, max_terms))
+
+
 def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, max_spans=40, merge_gap=0.0, style='blur', src_size=None):
     """Vùng chữ (box % hình gốc, giây video gốc) → chuỗi lọc làm mờ trên [0:v] của clip (t tính từ clip_start).
     Vùng cùng dải (vd mọi câu phụ đề ở đáy) gộp thành 1 lớp mờ với nhiều khoảng thời gian → ít bước lọc, dựng nhanh."""
@@ -195,7 +217,7 @@ def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, 
                 merged[-1][1] = max(merged[-1][1], b)
             else:
                 merged.append([a, b])
-        en = '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in merged[:max_spans])
+        en = enable_expr(merged, min(50, max_spans))       # gộp cho đủ ngắn — không bỏ khoảng nào (trước cắt bớt → cuối phim lộ chữ)
         (dw, dh) = (x2 - x1, y2 - y1)
         if erase:
             # Xoá nhẹ: delogo lấp vùng chữ bằng điểm ảnh xung quanh (gần như không thấy), phủ thêm mờ nhẹ cho mượt viền.

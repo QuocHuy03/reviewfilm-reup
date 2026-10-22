@@ -12,6 +12,11 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-10-22
+
+### Fixed
+- Phim dài lỗi ở bước dựng video "ffmpeg … Error initializing filters | Cannot allocate memory": biểu thức bật/tắt vùng che theo thời gian (hàng trăm câu phụ đề) quá dài → gộp các khoảng sát nhau còn tối đa 50 khoảng (không bỏ khoảng nào, vẫn che đủ). Trước đây chỗ che chữ tự động còn cắt bớt khoảng → cuối phim có thể lộ chữ.
+
 ## [2.4.2] - 2026-10-21
 
 ### Changed
@@ -154,7 +159,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.2...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...HEAD
+[2.4.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.3.0...v2.4.0
