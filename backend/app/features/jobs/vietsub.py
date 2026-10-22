@@ -423,6 +423,18 @@ def _band_or_corner(box, band, corner_x=0.3, corner_y=0.22):
     return (cx < corner_x or cx > 1 - corner_x) and (cy < corner_y or cy > 1 - corner_y)
 
 
+def _narrator_for_unknown(job, res):
+    """Câu nào có phụ đề cũng phải lồng tiếng: dòng AI cho là "không phải thoại" (lời dẫn, chữ chèn, câu cảm thán…)
+    gán vai "Người dẫn" thay vì bỏ — đổi vai / giọng được ở bước duyệt kịch bản theo vai."""
+    if not res or -1 not in res['labels']:
+        return res
+    nid = max(res['speakers']) + 1 if res['speakers'] else 0
+    n_x = res['labels'].count(-1)
+    job.log(f'   {n_x} dòng phụ đề không rõ nhân vật — vẫn lồng tiếng (vai "Người dẫn", đổi được ở bước duyệt)', 'info')
+    return {'labels': [nid if k == -1 else k for k in res['labels']],
+            'speakers': {**res['speakers'], nid: {'name': 'Người dẫn', 'gender': 'male', 'count': n_x, 'minor': False}}}
+
+
 def _subtitle_spans(job, cfg, video):
     """Lúc nào trên hình có phụ đề Trung (dải phụ đề, quét chữ cả phim) → [(giây bắt đầu, giây kết thúc)], hoặc None nếu không
     quét được / video không có phụ đề cứng. Dùng cùng khoảng quét với bước che chữ → bước đó dùng lại cache, không quét 2 lần."""
@@ -532,14 +544,8 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
     job.log(f'[3] Phân tích nhân vật trên SRT gốc ({len(units)} câu) — ai nói câu nào, trước khi dịch...', 'info')
     res = _analyze_cast(job, video, units, [u['text'] for u in units])
     job.check()
-    if transcript.get('hardsub') and res and -1 in res['labels']:
-        # lời gốc lấy từ phụ đề cứng → câu nào có phụ đề cũng phải lồng tiếng: dòng AI cho là "không phải thoại"
-        # (lời dẫn, chữ chèn, câu cảm thán…) gán vai "Người dẫn" — đổi vai / giọng được ở bước duyệt
-        nid = max(res['speakers']) + 1 if res['speakers'] else 0
-        n_x = res['labels'].count(-1)
-        res = {'labels': [nid if k == -1 else k for k in res['labels']],
-               'speakers': {**res['speakers'], nid: {'name': 'Người dẫn', 'gender': 'male', 'count': n_x, 'minor': False}}}
-        job.log(f'   {n_x} dòng phụ đề không rõ nhân vật — vẫn lồng tiếng (vai "Người dẫn", đổi được ở bước duyệt)', 'info')
+    if transcript.get('hardsub'):
+        res = _narrator_for_unknown(job, res)
     if cfg.get('dub_only_subbed', True) and not transcript.get('hardsub'):   # chỉ lồng câu có phụ đề Trung trên hình
         spans = _subtitle_spans(job, cfg, video)
         if spans:
@@ -915,6 +921,20 @@ def run_vietsub_pipeline(job):
             job.log(f'[1] Dùng lại bản dịch {len(cues)} dòng — bỏ qua Whisper & dịch', 'info')
             (transcript, lang) = (None, 'reuse')
             dub_plan = cfg.get('dub_plan_reuse') or None
+            if cfg.get('dub_voice') and not (dub_plan and dub_plan.get('res')) and cfg.get('dub_by_gender', True):
+                # Lồng tiếng lại job cũ (chưa có phân vai): phân tích nhân vật TRƯỚC bước duyệt — để kiểm tra vai & chọn giọng
+                # từng nhân vật rồi mới tạo giọng (không lồng tiếng ngay khi bấm)
+                units = _sentences(cues)
+                if units:
+                    job.set_progress(30, 'Phân tích nhân vật trước khi lồng tiếng')
+                    job.log(f'[2] Phân tích nhân vật ({len(units)} câu) — ai nói câu nào, trước khi lồng tiếng...', 'info')
+                    orig = _orig_texts(cfg.get('orig_srt_path') or '', units)
+                    res = _narrator_for_unknown(job, _analyze_cast(job, video, units, orig, [u['text'] for u in units]))
+                    for (u, o) in zip(units, orig):
+                        u['orig'] = o or ''          # lời gốc hiện ở bước duyệt kịch bản theo vai
+                    dub_plan = {'units': units, 'res': res}
+                    if res:
+                        job.result['dub_cast'] = res
         else:
             segs = _hardsub_segments(job, cfg, video) if cfg.get('hardsub_source', True) else None
             if segs:

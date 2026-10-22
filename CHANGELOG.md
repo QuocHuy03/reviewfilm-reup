@@ -12,6 +12,18 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.4.5] - 2026-10-22
+
+### Added
+- Lịch sử: nút "Xoá tất cả" — xoá đúng các job đang hiện theo bộ lọc / ô tìm (chọn "Lỗi / huỷ" thì chỉ xoá job lỗi); job đang chạy / chờ tự giữ lại; dọn thư mục tạm, video & file đã xuất giữ nguyên.
+
+### Changed
+- "Lồng tiếng lại": luôn phân tích nhân vật TRƯỚC rồi dừng ở bước "Duyệt kịch bản theo vai" (kiểm tra ai nói câu nào, chọn giọng từng nhân vật) mới tạo giọng — kể cả job cũ chưa có phân vai; dòng không rõ nhân vật vẫn lồng tiếng (vai "Người dẫn").
+- Hộp thoại "Lồng tiếng lại" rộng hơn: giọng nam / nữ 2 bên, danh sách nhân vật 2 cột, ghi rõ các bước.
+
+### Fixed
+- Dịch phụ đề: timeline & danh sách câu (bước duyệt, màn Hoàn thành) đặt mỗi câu đúng thời điểm thật trong video thay vì xếp nối nhau từ 0s như Review — trước đây nhìn như giọng / phụ đề lệch miệng nhân vật, bấm câu nhảy sai chỗ.
+
 ## [2.4.4] - 2026-10-22
 
 ### Changed
@@ -164,7 +176,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...HEAD
+[2.4.5]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...v2.4.5
 [2.4.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...v2.4.4
 [2.4.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.1...v2.4.2

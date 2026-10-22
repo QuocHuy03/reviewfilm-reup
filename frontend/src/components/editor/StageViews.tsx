@@ -53,8 +53,15 @@ function VideoMonitor({ path, videoRef, placeholder }: { path?: string; videoRef
  * Timeline "tĩnh" cho các bước chưa có lời đọc / đã xuất xong: chọn cảnh, tua.
  * onPickClip(index) — bước Sửa kịch bản dùng để cuộn tới câu; video (nếu có) tua tới đoạn gốc của cảnh.
  */
-function useStaticTimeline(scenes: Scene[]) {
-  const { clips, total } = useMemo(() => layoutClips(scenes), [scenes])
+/** Dịch phụ đề giữ nguyên thời gian video gốc → mỗi câu nằm đúng lúc nó nói (clip_start), không xếp nối nhau như Review. */
+function realTimeClips(scenes: Scene[]) {
+  const clips = scenes.flatMap((scene, index) => scene.excluded ? [] : [{
+    index, scene, start: Math.max(0, scene.clip_start), dur: Math.max(0.2, (scene.clip_end || scene.clip_start + 1) - scene.clip_start) }])
+  return { clips, total: clips.reduce((m, c) => Math.max(m, c.start + c.dur), 0) }
+}
+
+function useStaticTimeline(scenes: Scene[], realTime = false) {
+  const { clips, total } = useMemo(() => (realTime ? realTimeClips(scenes) : layoutClips(scenes)), [scenes, realTime])
   const [time, setTime] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
@@ -82,7 +89,7 @@ const STEPS: Record<string, [string, number][]> = {
 const isLocalVideo = (p: unknown): p is string => typeof p === "string" && /^[a-z]:[\\/]/i.test(p)
 
 export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
-  const tl = useStaticTimeline(job.scenes)
+  const tl = useStaticTimeline(job.scenes, job.kind === "vietsub")
   const video = useRef<HTMLVideoElement | null>(null)
   const steps = STEPS[job.kind] ?? []
   const cur = steps.reduce((acc, [, p], i) => (job.progress >= p ? i : acc), 0)
@@ -179,7 +186,7 @@ export function ScriptStage({ job }: { job: JobDetail }) {
   const [scenes, setScenes] = useState<Scene[]>(() => draftFor(job, "script")?.scenes ?? job.scenes)
   const saveState = useDraftAutosave(job.id, scenes)
   const [busy, setBusy] = useState(false)
-  const tl = useStaticTimeline(scenes)
+  const tl = useStaticTimeline(scenes, job.kind === "vietsub")
   const video = useRef<HTMLVideoElement | null>(null)
   const items = useRef<Record<number, HTMLDivElement | null>>({})
   const words = useMemo(() => scenes.reduce((n, s) => n + (s.voiceover || "").split(/\s+/).filter(Boolean).length, 0), [scenes])
@@ -314,7 +321,7 @@ export function moveItem<T>(arr: T[], from: number, to: number): T[] {
 /* ═══════════════════════════════ Xong ═══════════════════════════════ */
 /** Video đã xuất + timeline chạy theo video (bố cục cảnh trùng với video xuất ra). */
 export function DoneStage({ job }: { job: JobDetail }) {
-  const tl = useStaticTimeline(job.scenes)
+  const tl = useStaticTimeline(job.scenes, job.kind === "vietsub")
   const video = useRef<HTMLVideoElement | null>(null)
   const [playing, setPlaying] = useState(false)
   const raf = useRef(0)
@@ -463,7 +470,7 @@ function QaPanel({ jobId, initial, fixes }: { jobId: string; initial?: QaReport;
 /* ═══════════════════════════════ Lỗi / đã huỷ ═══════════════════════════════ */
 export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () => void }) {
   const { openJob } = useStore()
-  const tl = useStaticTimeline(job.scenes)
+  const tl = useStaticTimeline(job.scenes, job.kind === "vietsub")
   const video = useRef<HTMLVideoElement | null>(null)
   const [busy, setBusy] = useState<"" | "resume" | "retry">("")
   const isError = job.status === "error"

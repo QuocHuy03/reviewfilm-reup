@@ -83,6 +83,7 @@ export const api = {
   retry: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/retry`),
   cancel: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/cancel`),
   deleteJob: (id: string) => request<{ ok: boolean }>("DELETE", `/api/jobs/${id}`),
+  clearJobs: (ids: string[]) => request<{ deleted: number; skipped: number }>("POST", "/api/jobs/clear", { ids }),
   streamUrl: (id: string, since = 0) => `${BASE_URL}/api/jobs/${id}/stream?since=${since}`,
 
   readSrt: (path: string) => request<{ path: string; cues: { start: number; end: number; text: string }[] }>("GET", `/api/srt?path=${encodeURIComponent(path)}`),

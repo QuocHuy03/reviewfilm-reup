@@ -405,6 +405,26 @@ def cancel(job_id: str):
         raise HTTPException(404, str(e))
 
 
+class ClearRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+
+
+@router.post('/clear')
+def clear_jobs(req: ClearRequest):
+    """Xoá nhiều job khỏi lịch sử một lần ("Xoá tất cả" theo bộ lọc). Job đang chạy / chờ / xếp hàng → bỏ qua (không xoá).
+    Dọn thư mục tạm; video & file đã xuất giữ nguyên."""
+    (deleted, skipped) = (0, 0)
+    for jid in dict.fromkeys(req.ids):
+        try:
+            manager.delete(jid)
+            deleted += 1
+        except KeyError:
+            continue
+        except ValueError:
+            skipped += 1
+    return {'deleted': deleted, 'skipped': skipped}
+
+
 @router.delete('/{job_id}')
 def delete(job_id: str):
     try:

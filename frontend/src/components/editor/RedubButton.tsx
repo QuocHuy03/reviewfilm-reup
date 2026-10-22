@@ -34,7 +34,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
     try {
       const n = await api.redub(job.id, { voice, voice_female: byGender ? female : "", dub_by_gender: byGender && !!female, dub_orig_volume: level,
         char_voices: byGender ? cv : {} })
-      toast.success("Đang lồng tiếng — dùng lại bản dịch, dừng cho bạn xem câu dài trước khi đọc", { description: n.title })
+      toast.success("Đang phân tích nhân vật — app sẽ dừng ở bước Duyệt kịch bản theo vai để bạn kiểm tra vai & giọng trước khi lồng tiếng", { description: n.title })
       setOpen(false)
       openJob(n.id)
     } catch (e) { toast.error("Không lồng tiếng được", { description: (e as Error).message }) }
@@ -48,31 +48,38 @@ export function RedubButton({ job }: { job: JobDetail }) {
         <Mic2 /> {dubbed ? "Lồng tiếng lại" : "Lồng tiếng"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>{dubbed ? "Lồng tiếng lại" : "Lồng tiếng Việt"}</DialogTitle>
             <DialogDescription>
-              Dùng lại bản dịch {job.scenes.length} dòng của video này, đọc từng câu đúng lúc câu thoại gốc (giữ nguyên thời gian video).
-              Không chạy lại Whisper / dịch. Video cũ giữ nguyên.
+              Dùng lại bản dịch {job.scenes.length} dòng của video này (không chạy lại Whisper / dịch, video cũ giữ nguyên).
+              Các bước: phân tích nhân vật → dừng ở <b>Duyệt kịch bản theo vai</b> để bạn kiểm tra ai nói câu nào & chọn giọng từng nhân vật → rồi mới lồng tiếng.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-3">
-            {byGender && <p className="-mb-1 text-xs font-medium text-muted-foreground">Giọng cho nhân vật nam</p>}
-            <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} />
+          <div className="flex flex-col gap-4">
             <ToggleRow label="Giọng theo nhân vật nam / nữ" checked={byGender} onChange={setByGender}
-              desc="Tự nhận câu giọng nữ trong video gốc và đọc bằng giọng nữ bạn chọn." />
-            {byGender && <>
-              <p className="-mb-1 text-xs font-medium text-muted-foreground">Giọng cho nhân vật nữ</p>
-              <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} />
-            </>}
+              desc="Nam 1 giọng, nữ 1 giọng — đổi riêng từng nhân vật được ở bước duyệt." />
+            <div className={byGender ? "grid gap-4 sm:grid-cols-2" : "flex flex-col gap-2"}>
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs font-medium text-muted-foreground">{byGender ? "Giọng cho nhân vật nam" : "Giọng đọc"}</p>
+                <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} />
+              </div>
+              {byGender && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-xs font-medium text-muted-foreground">Giọng cho nhân vật nữ</p>
+                  <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} />
+                </div>
+              )}
+            </div>
             {byGender && cast.length > 0 && (
               <div className="flex flex-col gap-2 rounded-lg border p-3">
                 <div>
                   <p className="text-sm font-medium">Giọng từng nhân vật</p>
-                  <p className="text-xs text-muted-foreground">AI đã nhận ra {cast.length} nhân vật ở lần lồng tiếng trước — chọn giọng riêng cho từng người. Giữ nguyên phân vai, không phân tích lại.</p>
+                  <p className="text-xs text-muted-foreground">AI đã nhận ra {cast.length} nhân vật ở lần lồng tiếng trước — chọn giọng riêng cho từng người (xem lại được ở bước duyệt).</p>
                 </div>
+                <div className="grid gap-3 sm:grid-cols-2">
                 {cast.map((c) => (
-                  <div key={c.id} className="flex flex-col gap-1.5 border-t pt-2 first:border-t-0 first:pt-0">
+                  <div key={c.id} className="flex min-w-0 flex-col gap-1.5 rounded-md border p-2.5">
                     <div className="flex items-center gap-2 text-sm">
                       <span className="font-medium">{c.name}</span>
                       <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${c.gender === "female" ? "bg-pink-500/15 text-pink-600 dark:text-pink-300" : "bg-sky-500/15 text-sky-600 dark:text-sky-300"}`}>
@@ -84,6 +91,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
                     <VoiceSelect value={cv[String(c.id)] ?? c.voice} onChange={(v) => setCv((m) => ({ ...m, [String(c.id)]: v }))} />
                   </div>
                 ))}
+                </div>
               </div>
             )}
             <div className="flex flex-col gap-2">
@@ -93,7 +101,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>Thôi</Button>
-            <Button onClick={go} disabled={busy || !voice || (byGender && !female)}>{busy ? <Loader2 className="animate-spin" /> : <Mic2 />} Lồng tiếng</Button>
+            <Button onClick={go} disabled={busy || !voice || (byGender && !female)}>{busy ? <Loader2 className="animate-spin" /> : <Mic2 />} Phân tích & duyệt vai</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

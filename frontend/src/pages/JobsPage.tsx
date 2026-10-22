@@ -63,6 +63,23 @@ export function JobsPage() {
     try { await api.deleteJob(j.id); setJobs(jobs.filter((x) => x.id !== j.id)) } catch (e) { toast.error((e as Error).message) }
   }
 
+  // "Xoá tất cả": xoá đúng các job đang hiện (theo bộ lọc + ô tìm), job đang chạy / chờ giữ lại
+  const ACTIVE = new Set(["running", "queued", "waiting"])
+  const clearAll = async () => {
+    const del = list.filter((j) => !ACTIVE.has(j.status))
+    const keep = list.length - del.length
+    if (!del.length) { toast.info(keep ? "Các job đang hiện đều đang chạy — dừng trước khi xoá" : "Không có job nào để xoá"); return }
+    if (!await confirmAction({ title: `Xoá ${del.length} job khỏi lịch sử?`, danger: true, action: `Xoá ${del.length} job`,
+      desc: `Xoá các job đang hiện${filter !== "all" ? ` (bộ lọc "${FILTER_LABEL[filter]}")` : ""}${q.trim() ? ` khớp "${q.trim()}"` : ""}. `
+        + (keep ? `${keep} job đang chạy / chờ được giữ lại. ` : "")
+        + "Thư mục tạm bị dọn (không Tiếp tục được nữa). Video và file đã xuất vẫn giữ nguyên." })) return
+    try {
+      const r = await api.clearJobs(del.map((j) => j.id))
+      toast.success(`Đã xoá ${r.deleted} job` + (r.skipped ? ` · ${r.skipped} job đang chạy được giữ lại` : ""))
+      load()
+    } catch (e) { toast.error("Không xoá được", { description: (e as Error).message }) }
+  }
+
   if (!loaded) return <div className="flex h-full items-center justify-center"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
   if (jobs.length === 0) return <EmptyState className="h-full" icon={<History />} title="Chưa có lịch sử" desc="Các job tạo video, tách SRT, ghép phụ đề sẽ xuất hiện ở đây." />
 
@@ -75,6 +92,10 @@ export function JobsPage() {
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tìm theo tên video…" className="h-8 pl-8 text-xs" />
         </div>
         <Button variant="ghost" size="sm" onClick={load}><RefreshCw /> Làm mới</Button>
+        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={clearAll}
+          disabled={!list.some((j) => !ACTIVE.has(j.status))} title="Xoá các job đang hiện (theo bộ lọc / tìm kiếm) — job đang chạy được giữ lại">
+          <Trash2 /> {filter === "all" && !q.trim() ? "Xoá tất cả" : `Xoá ${list.filter((j) => !ACTIVE.has(j.status)).length} job`}
+        </Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <Table>
