@@ -1,6 +1,6 @@
 {
   "name": "reviewfilm",
-  "version": "2.4.5",
+  "version": "2.4.6",
   "private": true,
   "description": "ReviewFilm Studio — AI review phim, dịch & reup, phụ đề",
   "main": "electron/dist/main.js",

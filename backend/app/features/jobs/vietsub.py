@@ -880,6 +880,16 @@ def auto_cover_box(cfg, regions, video, w, h):
     (y1, y2) = (max(0.0, fy(band[1])), min(float(h), fy(band[3])))
     if x2 - x1 < w * 0.05 or y2 - y1 < h * 0.02:
         return None
+    # giới hạn an toàn: dải phụ đề không bao giờ cao quá 22% / rộng quá 96% khung (chữ rải nhiều độ cao → khỏi che nửa video)
+    if y2 - y1 > h * 0.22:
+        (c, half) = ((y1 + y2) / 2, h * 0.11)
+        (y1, y2) = (max(0.0, c - half), min(float(h), c + half))
+    if x2 - x1 > w * 0.96:
+        (c, half) = ((x1 + x2) / 2, w * 0.48)
+        (x1, x2) = (max(0.0, c - half), min(float(w), c + half))
+    # bề ngang như Review phim (dải giữa ≥ 80%): phụ đề Việt dài hơn chữ Trung vẫn nằm gọn trong dải mờ, không lòi 2 bên
+    if x2 - x1 < w * 0.8:
+        (x1, x2) = (min(x1, w * 0.1), max(x2, w * 0.9))
     return [round(x1 / w * 100, 1), round(y1 / h * 100, 1), round((x2 - x1) / w * 100, 1), round((y2 - y1) / h * 100, 1)]
 
 
@@ -1136,7 +1146,7 @@ def run_vietsub_pipeline(job):
                 (chain, cur) = ('', cur)          # chữ cũ đã xoá sạch ở bước trên
             elif fit_mode:
                 (chain, cur) = _fit_cover_chain(cur, band, sub_cues, style, w, h, old)
-            elif scanned and not old and cstyle != 'blur':          # kiểu Review ('blur') luôn che vùng đã đặt, như Review phim
+            elif scanned and not old:
                 # quét cả phim mà không thấy phụ đề cứng → không che dải phụ đề (đỡ mờ vô ích)
                 (chain, cur) = ('', cur)
                 job.log('   Không thấy phụ đề cứng trong video — không che dải phụ đề', 'info')
@@ -1148,6 +1158,7 @@ def run_vietsub_pipeline(job):
                 graph.append(chain)
                 band_covered = True
             logos = [b for b in boxes if b is not band and not cleaned]
+            corners = {}
             if not cleaned and regions and sw and sh:
                 # chữ / logo đứng yên ở 4 góc (watermark kênh, "nội dung hư cấu"…) quét được → tự che suốt video như vùng vẽ tay
                 for r in regions:
@@ -1157,7 +1168,13 @@ def run_vietsub_pipeline(job):
                     (X1, Y1, X2, Y2) = (fx(x1), fy(y1), fx(x2), fy(y2))
                     (padx, pady) = ((X2 - X1) * 0.08 + 4, (Y2 - Y1) * 0.15 + 4)
                     (X1, Y1, X2, Y2) = (max(0.0, X1 - padx), max(0.0, Y1 - pady), min(float(w), X2 + padx), min(float(h), Y2 + pady))
-                    if X2 - X1 > 8 and Y2 - Y1 > 8:
+                    if 8 < X2 - X1 <= w * 0.30 and 8 < Y2 - Y1 <= h * 0.18:     # chỉ logo / chữ nhỏ ở góc — vùng to bỏ qua
+                        corner = (X1 + X2 < w, Y1 + Y2 < h)                       # góc nào (trái/phải, trên/dưới)
+                        corners.setdefault(corner, []).append((X1, Y1, X2, Y2))
+                for bxs in corners.values():                                       # 1 vùng che / góc (gộp các mảnh)
+                    (X1, Y1) = (min(b[0] for b in bxs), min(b[1] for b in bxs))
+                    (X2, Y2) = (max(b[2] for b in bxs), max(b[3] for b in bxs))
+                    if X2 - X1 <= w * 0.32 and Y2 - Y1 <= h * 0.2:
                         logos.append([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100])
             for (k, b) in enumerate(logos):     # logo / chữ cố định: che suốt video (đã xoá sạch thì thôi)
                 (chain, cur) = _box_chain(cur, b, w, h, cstyle, None, f'lg{k}')

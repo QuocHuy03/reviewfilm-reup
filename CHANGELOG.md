@@ -12,6 +12,12 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.4.6] - 2026-10-22
+
+### Fixed
+- Dải che phụ đề của Dịch phụ đề rộng như Review phim (dải giữa ≥ 80% chiều ngang): phụ đề Việt dài hơn chữ Trung không còn lòi ra 2 bên dải mờ.
+- Không còn che lố cả video: dải phụ đề AI tự căn tối đa 22% chiều cao; logo góc chỉ nhận vùng nhỏ (≤ 30% ngang, ≤ 18% cao), gộp 1 vùng / góc; không thấy phụ đề cứng thì không che dải (chỉ che logo góc nếu có).
+
 ## [2.4.5] - 2026-10-22
 
 ### Added
@@ -176,7 +182,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.6...HEAD
+[2.4.6]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...v2.4.6
 [2.4.5]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...v2.4.5
 [2.4.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...v2.4.4
 [2.4.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.2...v2.4.3
