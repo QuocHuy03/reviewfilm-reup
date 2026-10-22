@@ -12,6 +12,21 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.4.7] - 2026-10-22
+
+### Added
+- Dịch phụ đề xuất được khung dọc 9:16 (Shorts / TikTok) — chọn ở tab Quy trình; video ngang nằm giữa, trên / dưới viền đen; cỡ chữ phụ đề tính theo bề ngang (không to tràn 3 dòng).
+
+### Changed
+- Logo / chữ đứng yên ở 4 góc được XOÁ (lấp bằng điểm ảnh xung quanh, mịn viền) thay vì làm mờ thành ô chữ nhật lộ; dải phụ đề vẫn làm mờ như Review.
+
+### Fixed
+- Câu AI dịch sót được dịch bổ sung từng câu một (trước gộp nhiều câu thành 1 khối → lệch câu, có câu giọng Việt đọc chữ Trung).
+- Tách giọng chạy nền tự dừng khi job lỗi / xong (không chạy tiếp tốn CPU, giữ file trong thư mục tạm).
+- "Lồng tiếng lại": dữ liệu phân vai luôn khớp số câu (trước có thể mất câu cuối / gán lệch vai); bước duyệt luôn hiện vai & chọn giọng.
+- Đọc phụ đề cứng: ffmpeg dừng giữa chừng thì bỏ kết quả (không lưu cache nửa phim).
+- VieNeu nhiều giọng: đọc số bằng chữ như đường đọc thường (trước đọc sai chữ số, dễ lỗi phải đổi giọng).
+
 ## [2.4.6] - 2026-10-22
 
 ### Fixed
@@ -182,7 +197,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.6...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.7...HEAD
+[2.4.7]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.6...v2.4.7
 [2.4.6]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...v2.4.6
 [2.4.5]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...v2.4.5
 [2.4.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...v2.4.4

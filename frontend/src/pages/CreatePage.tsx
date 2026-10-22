@@ -527,6 +527,12 @@ export function CreatePage() {
                 desc="Pipeline dừng lại để bạn sửa từng câu trong Studio." />
               <ToggleRow label="Nghe lại & xác nhận trước khi dựng video" checked={cfg.scene_preview} onChange={(v) => set("scene_preview", v)}
                 desc="Nghe từng câu, sửa & tạo lại giọng, bỏ câu không ưng, thêm nhạc nền." />
+              {mode === "vietsub" && (
+                <Field label="Khung hình xuất" hint="9:16 dọc: video ngang nằm giữa, trên / dưới viền đen.">
+                  <Segmented value={cfg.target_resolution as "1920x1080" | "1280x720" | "1080x1920"} onChange={(v) => set("target_resolution", v)}
+                    items={[{ value: "1920x1080", label: "16:9 · 1080p" }, { value: "1280x720", label: "16:9 · 720p" }, { value: "1080x1920", label: "9:16 · Shorts/TikTok" }]} />
+                </Field>
+              )}
               <Field label="Thư mục xuất">
                 <PathInput value={cfg.out_dir} onChange={(v) => set("out_dir", v)} pick={bridge.pickFolder} />
               </Field>

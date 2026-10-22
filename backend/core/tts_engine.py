@@ -587,6 +587,8 @@ def generate_vieneu_cast(scenes, temp_dir, log_fn=print, gpu_timeout=600):
         return []
     for (i, s) in enumerate(scenes):
         s.setdefault('_original_index', i)
+        clean_text = re.sub('\\s+', ' ', (s['voiceover'] or '').replace('||', ' ')).strip()
+        s['voiceover_for_tts'] = replace_numbers_with_words(clean_text)   # như generate_tts_per_scene (đọc số bằng chữ)
     n_voice = len({s['_vn_voice'] for s in scenes})
     if not _acquire_gpu_lock(log_fn, gpu_timeout, '   [GPU] Đang chờ GPU giải phóng (tiến trình khác đang xử lý)...'):
         return []
