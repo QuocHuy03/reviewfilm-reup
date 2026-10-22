@@ -12,6 +12,11 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-10-22
+
+### Changed
+- Dịch phụ đề (có / không lồng tiếng) che phụ đề cũ y hệt Review phim, 1 kiểu duy nhất: làm mờ cố định cả dải phụ đề + logo 4 góc suốt video (bỏ lựa chọn "Xoá nhẹ" / "Xoá sạch nét chữ" / "Vừa theo chữ" ở chế độ này) — ổn định, nhanh, nhẹ RAM.
+
 ## [2.4.3] - 2026-10-22
 
 ### Fixed
@@ -159,7 +164,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...HEAD
+[2.4.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.3...v2.4.4
 [2.4.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.2...v2.4.3
 [2.4.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.1...v2.4.2
 [2.4.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.0...v2.4.1

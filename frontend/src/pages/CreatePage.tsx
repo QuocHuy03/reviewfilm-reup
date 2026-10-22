@@ -430,19 +430,21 @@ export function CreatePage() {
                 </Field>
               </div>
               {cfg.burn_subtitles && <SubtitleStyleEditor base={preset} custom={cfg.sub_custom} onChange={(c) => set("sub_custom", c)} />}
+              {mode === "vietsub" ? (
+                <p className="text-[11px] text-muted-foreground">Che phụ đề cũ y như Review phim: làm mờ cố định cả dải phụ đề (và logo 4 góc) suốt video, phụ đề Việt nằm trên dải mờ.</p>
+              ) : (
               <Field label="Kiểu che chữ cũ / logo">
                 <Segmented size="sm" value={cfg.cover_style} onChange={(v) => set("cover_style", v)}
                   items={[{ value: "blur", label: "Làm mờ (như Review)" }, { value: "erase", label: "Xoá nhẹ" }, { value: "clean", label: "Xoá sạch nét chữ" }]} />
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   {cfg.cover_style === "clean"
-                    ? (mode === "vietsub"
-                      ? "Đẹp nhất: AI tìm đúng nét chữ Trung từng khung hình rồi lấp bằng hình xung quanh — không khung, không vệt mờ. Chậm hơn (~1 phút xử lý / 1 phút video)."
-                      : "Xoá sạch nét chữ chỉ có ở chế độ Dịch phụ đề — chế độ này sẽ dùng Xoá nhẹ.")
+                    ? "Xoá sạch nét chữ chỉ có ở chế độ Dịch phụ đề — chế độ này sẽ dùng Xoá nhẹ."
                     : cfg.cover_style === "erase"
                     ? "Lấp cả vùng chữ bằng hình xung quanh như xoá logo — nhanh, ít vết; chỉ che lúc có chữ."
                     : "Như chế độ Review phim: làm mờ cố định cả dải phụ đề cũ (và vùng logo) suốt video, phụ đề Việt nằm trên dải mờ — đều, nhanh, chắc chắn không lộ chữ cũ."}
                 </p>
               </Field>
+              )}
               <ToggleRow label="Che phụ đề gốc / logo" checked={cfg.remove_old_sub} onChange={(v) => set("remove_old_sub", v)}
                 desc="Làm mờ dòng chữ cứng / logo có sẵn trong video gốc — kéo khung ngay trên khung hình để che vừa khít." />
               {cfg.remove_old_sub && (
@@ -466,15 +468,6 @@ export function CreatePage() {
                   {mode === "vietsub" && (
                     <ToggleRow label="AI tự căn vùng che khi dựng" checked={cfg.auto_sub_box} onChange={(v) => set("auto_sub_box", v)}
                       desc="Lúc dựng, AI quét cả phim tìm đúng chỗ phụ đề cũ rồi đặt lại vùng che cho trùm kín — không lòi chữ cũ trên / dưới." />
-                  )}
-                  {mode === "vietsub" && cfg.burn_subtitles && cfg.sub_in_cover && (
-                    <Field label="Kiểu khung mờ">
-                      <Segmented size="sm" value={cfg.cover_fit_text ? "fit" : "band"} onChange={(v) => set("cover_fit_text", v === "fit")}
-                        items={[{ value: "band", label: "Cả dải (như CapCut)" }, { value: "fit", label: "Vừa theo chữ" }]} />
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {cfg.cover_fit_text ? "Bề ngang co giãn theo từng câu, tự nới trùm hết chữ cũ cùng lúc." : "Một dải mờ cố định suốt video, phụ đề Việt nằm giữa — gọn & chắc chắn kín."}
-                      </p>
-                    </Field>
                   )}
                 </>
               )}

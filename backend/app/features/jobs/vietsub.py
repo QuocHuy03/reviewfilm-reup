@@ -890,6 +890,9 @@ def run_vietsub_pipeline(job):
     from core.utils import FFMPEG_EXE, get_video_duration
     from core.video_editor import _crop_prefix, _src_text_blur_chain
     cfg = job.config
+    # Che phụ đề cũ y như Review phim (1 kiểu duy nhất, ổn định): làm mờ cố định cả dải phụ đề + logo suốt video
+    cfg['cover_style'] = 'blur'
+    cfg['cover_fit_text'] = False
     out_dir = _out_dir(cfg)
     layout = _layout(cfg)
     (w, h) = [int(v) for v in str(cfg.get('target_resolution') or '1920x1080').split('x')]
@@ -1113,7 +1116,7 @@ def run_vietsub_pipeline(job):
                 (chain, cur) = ('', cur)          # chữ cũ đã xoá sạch ở bước trên
             elif fit_mode:
                 (chain, cur) = _fit_cover_chain(cur, band, sub_cues, style, w, h, old)
-            elif scanned and not old:
+            elif scanned and not old and cstyle != 'blur':          # kiểu Review ('blur') luôn che vùng đã đặt, như Review phim
                 # quét cả phim mà không thấy phụ đề cứng → không che dải phụ đề (đỡ mờ vô ích)
                 (chain, cur) = ('', cur)
                 job.log('   Không thấy phụ đề cứng trong video — không che dải phụ đề', 'info')
