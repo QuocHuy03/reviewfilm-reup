@@ -13,12 +13,12 @@ class SubtitleOptions(BaseModel):
 
 class VideoJobRequest(SubtitleOptions):
     inp: str
-    mode: Literal['review', 'reup'] = 'review'
+    mode: Literal['review', 'reup', 'vietsub'] = 'review'
     out_dir: str = ''
     source_lang: str = 'Tự động'
     whisper_model: str = 'base'
     device: str = 'GPU (NVIDIA)'
-    minutes: int = Field(12, ge=1, le=60)
+    minutes: int = Field(0, ge=0, le=60)                           # độ dài review (phút); 0 = tự động theo độ dài video
     film_context: str = ''
     scene_accurate: bool = False
     ai_translate: bool = True
@@ -31,6 +31,22 @@ class VideoJobRequest(SubtitleOptions):
     burn_subtitles: bool = True
     remove_old_sub: bool = False
     cover_boxes: list[list[float]] = Field(default_factory=list)  # [x, y, w, h] theo %
+    sub_in_cover: bool = False                                     # phụ đề mới căn giữa vùng che phụ đề cũ
+    cover_fit_text: bool = False                                   # Dịch phụ đề: khung mờ ngang vừa theo độ dài chữ từng câu
+    cover_style: Literal['clean', 'erase', 'blur'] = 'erase'                # che chữ: xoá nhẹ (delogo, tự nhiên) | làm mờ
+    auto_sub_box: bool = True                                      # AI tự căn vùng che phụ đề theo chỗ phụ đề cũ thật
+    dub_voice: bool = False                                        # Dịch phụ đề: lồng tiếng Việt đúng thời gian câu thoại
+    dub_orig_volume: int = Field(20, ge=0, le=100)                 # % âm lượng tiếng gốc khi có lời Việt
+    hardsub_source: bool = True                                    # Dịch phụ đề: video có phụ đề cứng → đọc phụ đề trên hình làm lời gốc (thay Whisper)
+    dub_only_subbed: bool = True                                   # lồng tiếng: chỉ câu có phụ đề Trung trên hình (lời nhân vật)
+    dub_separate: bool = True                                      # lồng tiếng: tách giọng gốc khỏi nhạc nền (bỏ hẳn giọng Trung, giữ nhạc)
+    dub_by_gender: bool = False                                    # lồng tiếng: câu giọng nữ (theo cao độ giọng gốc) đọc bằng voice_female
+    voice_female: str = ''
+    crop_box: list[float] = Field(default_factory=list)           # cắt khung hình gốc [x, y, w, h] theo % — rỗng = không cắt
+    crop_fill: bool = True                                         # phóng phần đã cắt phủ kín khung (False = viền đen)
+    auto_cover_text: bool = False                                  # AI quét & làm mờ mọi chữ tiếng Trung trên hình gốc
+    text_scan_interval: float = Field(2.0, ge=0.5, le=5)           # giây giữa 2 khung quét (1 = kỹ, 2 = nhanh)
+    text_blur_strength: int = Field(22, ge=8, le=60)               # độ mờ vùng chữ (sigma gblur)
     script_edit: bool = True
     scene_preview: bool = True
     # Hậu kỳ tự động sau lồng tiếng: căn hình theo lời + AI sửa kịch bản + tạo lại giọng
@@ -76,6 +92,7 @@ class ConfirmRequest(BaseModel):
     confirmed: bool = True
     scenes: Optional[list[dict[str, Any]]] = None
     mixer: Optional[dict[str, Any]] = None
+    char_voices: Optional[dict[str, str]] = None   # Dịch phụ đề + lồng tiếng: giọng từng nhân vật chọn ở bước duyệt theo vai
 
 
 class RegenRequest(BaseModel):

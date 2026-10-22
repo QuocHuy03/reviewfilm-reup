@@ -7,6 +7,8 @@ import { useStore } from "@/app/store"
 import { Timeline } from "@/components/timeline/Timeline"
 import { PublishSummary } from "./PublishPanel"
 import { ReeditButton } from "./ReeditButton"
+import { RedubButton } from "./RedubButton"
+import { VoiceSelect } from "@/components/VoiceSelect"
 import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
 import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
@@ -154,9 +156,25 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
   )
 }
 
-const KIND_TEXT: Record<string, string> = { review: "Review phim", reup: "Dịch & Reup", srt: "Tách SRT", burn: "Ghép phụ đề" }
+const KIND_TEXT: Record<string, string> = { review: "Review phim", reup: "Dịch & Reup", vietsub: "Dịch phụ đề", srt: "Tách SRT", burn: "Ghép phụ đề" }
 
 /* ═══════════════════════════════ Sửa kịch bản ═══════════════════════════════ */
+// Giọng đọc tiếng Việt ~17 ký tự/giây (đo trên CapCut / Edge / VieNeu, đã cắt khoảng lặng)
+const DUB_CPS = 17
+// Căn thời gian như VideoLingo (khớp backend): mượn khoảng lặng sau tối đa 1.5s, dài hơn thì đọc nhanh nhẹ tối đa 1.2×
+const DUB_TOLERANCE = 1.5
+const DUB_MAX_SPEED = 1.2
+
+/** Lồng tiếng giữ thời gian video: câu có kịp đọc trong khung (thời lượng câu + khoảng lặng mượn được) không. */
+function readFit(scenes: Scene[], i: number) {
+  const s = scenes[i]
+  const next = scenes[i + 1]
+  const gap = Math.max(0, (next ? next.clip_start : s.clip_end + DUB_TOLERANCE) - s.clip_end)
+  const slot = Math.max(0.3, s.clip_end - s.clip_start + Math.min(gap, DUB_TOLERANCE))
+  const need = s.speaker_id === -1 ? 0 : (s.voiceover || "").replace(/\s+/g, " ").trim().length / DUB_CPS
+  return { slot, need, level: need > slot * DUB_MAX_SPEED ? "long" : need > slot ? "fast" : "ok" } as const
+}
+
 export function ScriptStage({ job }: { job: JobDetail }) {
   const [scenes, setScenes] = useState<Scene[]>(() => draftFor(job, "script")?.scenes ?? job.scenes)
   const saveState = useDraftAutosave(job.id, scenes)
@@ -165,6 +183,28 @@ export function ScriptStage({ job }: { job: JobDetail }) {
   const video = useRef<HTMLVideoElement | null>(null)
   const items = useRef<Record<number, HTMLDivElement | null>>({})
   const words = useMemo(() => scenes.reduce((n, s) => n + (s.voiceover || "").split(/\s+/).filter(Boolean).length, 0), [scenes])
+  // Dịch phụ đề + lồng tiếng: báo câu dài hơn thời gian câu thoại (vàng = đọc nhanh hơn, đỏ = AI sẽ rút gọn)
+  const dub = job.kind === "vietsub" && !!job.config.dub_voice
+  const fits = useMemo(() => (dub ? scenes.map((_, i) => readFit(scenes, i)) : []), [dub, scenes])
+  // duyệt theo vai: danh sách nhân vật AI nhận ra (đổi được nhân vật từng câu trước khi tạo giọng)
+  const cast = useMemo(() => Object.entries(job.result.dub_cast?.speakers ?? {})
+    .map(([id, v]) => ({ id: Number(id), name: v.name || `NV${Number(id) + 1}`, female: v.gender === "female" }))
+    .sort((a, b) => a.id - b.id), [job.result.dub_cast])
+  const byRole = dub && cast.length > 0 && scenes.some((s) => s.speaker_id !== undefined)
+  // giọng từng nhân vật: NGƯỜI DÙNG chọn (mặc định nam → giọng nam, nữ → giọng nữ đã chọn ở tab Lồng tiếng)
+  // khớp backend: nam 1 giọng, nữ 1 giọng — "giọng nam" lỡ là giọng nữ thì dùng Nam Bắc, chưa chọn giọng nữ thì Nữ Bắc
+  const rawMale = String(job.config.voice ?? "")
+  const femaleVoice = String(job.config.voice_female || "Edge TTS — Nữ Bắc (miễn phí)")
+  const maleVoice = !rawMale || rawMale.includes("Nữ") || rawMale === femaleVoice ? "Edge TTS — Nam Bắc (miễn phí)" : rawMale
+  const [charVoices, setCharVoices] = useState<Record<string, string>>(() => ({ ...((job.config.char_voices as Record<string, string>) ?? {}) }))
+  const voiceOf = (c: { id: number; female: boolean }) => charVoices[String(c.id)] || (c.female ? femaleVoice : maleVoice)
+  const lineCount = useMemo(() => {
+    const n: Record<number, number> = {}
+    for (const s of scenes) if (s.speaker_id !== undefined) n[s.speaker_id] = (n[s.speaker_id] ?? 0) + 1
+    return n
+  }, [scenes])
+  const longCount = fits.filter((f) => f.level === "long").length
+  const fastCount = fits.filter((f) => f.level === "fast").length
 
   const pick = (i: number) => {
     tl.setSelected(i)
@@ -177,25 +217,50 @@ export function ScriptStage({ job }: { job: JobDetail }) {
   const submit = async (confirmed: boolean) => {
     setBusy(true)
     try {
-      await api.confirm(job.id, confirmed ? { confirmed, scenes } : { confirmed })
-      toast.success(confirmed ? "Đã xác nhận — bắt đầu lồng tiếng" : "Đã huỷ job")
+      await api.confirm(job.id, confirmed
+        ? { confirmed, scenes, ...(byRole ? { char_voices: Object.fromEntries(cast.map((c) => [String(c.id), voiceOf(c)])) } : {}) }
+        : { confirmed })
+      toast.success(confirmed ? (job.kind === "vietsub" && !dub ? "Đã xác nhận — bắt đầu ghép phụ đề" : "Đã xác nhận — bắt đầu lồng tiếng") : "Đã huỷ job")
     } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
   }
 
   return (
-    <StageShell title={job.kind === "review" ? "Sửa kịch bản thuyết minh" : "Sửa bản dịch"} dot="bg-warning animate-pulse"
-      meta={<span className="flex items-center gap-2">{scenes.length} câu · {words.toLocaleString("vi-VN")} từ · bấm cảnh trên timeline để tới câu đó <SaveBadge state={saveState} /></span>}
+    <StageShell title={job.kind === "review" ? "Sửa kịch bản thuyết minh" : byRole ? "Duyệt kịch bản theo vai" : "Sửa bản dịch"} dot="bg-warning animate-pulse"
+      meta={<span className="flex items-center gap-2">{scenes.length} câu · {words.toLocaleString("vi-VN")} từ
+        {dub && (longCount + fastCount > 0
+          ? <span className="text-warning">· {longCount > 0 && <b className="text-destructive">{longCount} câu dài (AI sẽ rút gọn)</b>}{longCount > 0 && fastCount > 0 && " · "}{fastCount > 0 && `${fastCount} câu đọc nhanh nhẹ`}</span>
+          : <span className="text-success">· mọi câu đọc vừa thời gian</span>)}
+        {!dub && " · bấm cảnh trên timeline để tới câu đó"} <SaveBadge state={saveState} /></span>}
       actions={<>
         <Button variant="ghost" size="sm" disabled={busy} onClick={async () => {
             if (await confirmAction({ title: "Huỷ job?", danger: true, action: "Huỷ job", cancel: "Tiếp tục sửa",
               desc: "Job sẽ dừng và không xuất video. Các chỉnh sửa ở bước này sẽ không được dùng." })) submit(false)
           }}>Huỷ job</Button>
         <Button size="sm" onClick={() => submit(true)} disabled={busy || scenes.length === 0}>
-          {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} Xác nhận & lồng tiếng
+          {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} {job.kind === "vietsub" && !dub ? "Xác nhận & ghép phụ đề" : "Xác nhận & lồng tiếng"}
         </Button>
       </>}
       monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
-      side={scenes.map((s, i) => (
+      side={<>
+        {byRole && (
+          <div className="flex flex-col gap-2 border-b border-border/60 bg-muted/30 px-3 py-3">
+            <div>
+              <p className="text-[13px] font-semibold">Giọng từng nhân vật</p>
+              <p className="text-[11px] text-muted-foreground">Bạn tự chọn giọng cho từng nhân vật (bấm ▶ để nghe thử). Chưa đổi thì nam đọc giọng nam, nữ đọc giọng nữ ở tab Lồng tiếng.</p>
+            </div>
+            {cast.filter((c) => (lineCount[c.id] ?? 0) > 0).sort((a, b) => (lineCount[b.id] ?? 0) - (lineCount[a.id] ?? 0)).map((c) => (
+              <div key={c.id} className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 text-[12px]">
+                  <span className="font-medium">{c.name}</span>
+                  <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", c.female ? "bg-pink-500/15 text-pink-600 dark:text-pink-300" : "bg-sky-500/15 text-sky-600 dark:text-sky-300")}>{c.female ? "Nữ" : "Nam"}</span>
+                  <span className="text-[11px] text-muted-foreground">{lineCount[c.id] ?? 0} câu</span>
+                </div>
+                <VoiceSelect value={voiceOf(c)} onChange={(v) => setCharVoices((m) => ({ ...m, [String(c.id)]: v }))} />
+              </div>
+            ))}
+          </div>
+        )}
+        {scenes.map((s, i) => (
         <div key={i} ref={(el) => { items.current[i] = el }} onClick={() => pick(i)}
           className={cn("group grid cursor-pointer grid-cols-[40px_1fr_28px] gap-2 border-b border-border/60 px-3 py-2.5", tl.selected === i && "bg-primary/5")}>
           <div className="pt-1 text-xs">
@@ -203,14 +268,31 @@ export function ScriptStage({ job }: { job: JobDetail }) {
             <div className="tabular mt-0.5 text-[10px] text-muted-foreground/70">{fmtClock(s.clip_start)}</div>
           </div>
           <div className="flex flex-col gap-1">
+            {byRole && (
+              <select value={s.speaker_id ?? 0} onClick={(e) => e.stopPropagation()} onFocus={() => pick(i)}
+                onChange={(e) => setScenes(scenes.map((x, j) => j === i ? { ...x, speaker_id: Number(e.target.value) } : x))}
+                className={cn("h-7 w-fit max-w-full rounded-md border border-input bg-background px-2 text-[12px] font-medium",
+                  s.speaker_id === -1 ? "text-muted-foreground" : cast.find((c) => c.id === s.speaker_id)?.female ? "text-pink-600 dark:text-pink-300" : "text-sky-600 dark:text-sky-300")}
+                title="Nhân vật nói câu này — đổi nếu AI gán nhầm">
+                {cast.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.female ? "nữ" : "nam"})</option>)}
+                <option value={-1}>— Không lồng tiếng (nhạc, tiếng động…)</option>
+              </select>
+            )}
             {(s.orig_text || s.description) && <p className="line-clamp-2 text-[11px] text-muted-foreground">{s.orig_text || s.description}</p>}
             <Textarea value={s.voiceover} rows={2} className="min-h-0 resize-y text-[13px] leading-relaxed" onFocus={() => pick(i)}
               onChange={(e) => setScenes(scenes.map((x, j) => j === i ? { ...x, voiceover: e.target.value, subtitle: e.target.value } : x))} />
+            {dub && fits[i] && (
+              <p className={cn("tabular text-[10.5px]", fits[i].level === "long" ? "text-destructive" : fits[i].level === "fast" ? "text-warning" : "text-muted-foreground/70")}>
+                {fits[i].slot.toFixed(1)}s · cần ~{fits[i].need.toFixed(1)}s đọc
+                {fits[i].level === "long" ? " — dài quá, AI sẽ rút gọn (hoặc tự sửa ngắn lại)" : fits[i].level === "fast" ? " — hơi dài, sẽ đọc nhanh nhẹ (≤ 1.2×)" : ""}
+              </p>
+            )}
           </div>
           <Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100" title="Xoá câu"
             onClick={(e) => { e.stopPropagation(); setScenes(scenes.filter((_, j) => j !== i)) }}><Trash2 /></Button>
         </div>
       ))}
+      </>}
       timeline={<Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
         onSeek={tl.setTime} onSelect={pick} onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop}
@@ -259,6 +341,7 @@ export function DoneStage({ job }: { job: JobDetail }) {
     <StageShell title="Hoàn thành" dot="bg-success" meta={`${tl.clips.length} cảnh · ${fmtDuration(tl.total)} · xong sau ${fmtDuration(job.elapsed)}`}
       actions={<>
         {(job.kind === "review" || job.kind === "reup") && job.scenes.length > 0 && <ReeditButton job={job} />}
+        {job.kind === "vietsub" && job.result.vi_srt && <RedubButton job={job} />}
         {job.result.output_path && <Button size="sm" variant="outline" onClick={() => bridge.open(job.result.output_path!)}><Film /> Mở video</Button>}
       </>}
       monitor={<VideoMonitor path={job.result.output_path} videoRef={attach} placeholder={<><CheckCircle2 className="size-6 text-success" /> Hoàn thành</>} />}

@@ -27,6 +27,20 @@ def get_whisper_cache_dir(audio_path):
     os.makedirs(whisper_dir, exist_ok=True)
     return whisper_dir
 
+def prefetch_model(model_name, out_dir):
+    """Tải sẵn model Whisper (ngầm, lúc mở app) vào đúng chỗ job sẽ tìm — job đầu tiên không phải chờ tải."""
+    try:
+        from huggingface_hub import snapshot_download
+        drive = os.path.splitdrive(os.path.abspath(out_dir or os.path.expanduser('~')))[0]
+        local_dir = os.path.join(get_whisper_cache_dir(os.path.join(drive + os.sep, 'x') if drive else '~'), f'fw-{model_name}')
+        if os.path.exists(os.path.join(local_dir, 'model.bin')):
+            return
+        hub = {'large': 'Systran/faster-whisper-large-v3'}.get(model_name, f'Systran/faster-whisper-{model_name}')
+        snapshot_download(hub, local_dir=local_dir)
+    except Exception:
+        pass                      # mất mạng / thiếu chỗ → job sẽ tự tải lại như cũ
+
+
 def _has_nvidia_gpu():
     try:
         r = subprocess.run(['nvidia-smi'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
@@ -50,9 +64,44 @@ def _add_cuda_dll_dirs(log_fn=print):
         pass
     return False
 
-def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5, should_stop=None):
-    global _should_stop
+_word_ts = False
+
+
+def _split_by_words(words, pause=0.3):
+    """Đoạn Whisper có thời gian từng chữ → thời gian đúng lúc mở miệng / ngậm miệng, tách đôi ở chỗ ngừng nói ≥ pause giây
+    (thường là chuyển người nói hoặc hết câu) — câu lồng tiếng bắt đầu đúng lúc, không sớm. Tách hơi kỹ cũng được:
+    Whisper tiếng Trung hay không có dấu câu & 2 người đối đáp nhanh chỉ ngừng ~0.3s — phân vai xong mảnh cùng người được gộp lại."""
+    out = []
+    cur = [words[0]]
+    ends = ('。', '！', '？', '!', '?', '…')
+    for w in words[1:]:
+        # ngừng nói đủ lâu, hoặc hết câu (。？！ — trong phim thường là chuyển người nói) khi câu đã đủ dài
+        # câu dài ≥ 2.5s tách cả ở dấu phẩy (2 người nói nối nhau hay chỉ cách dấu phẩy) — phân vai xong mảnh cùng người được gộp lại
+        last = cur[-1].word.strip()
+        dur = float(cur[-1].end) - float(cur[0].start)
+        if (float(w.start) - float(cur[-1].end) >= pause
+                or (last.endswith(ends) and dur >= 0.4)
+                or (last.endswith((',', '，', '、')) and dur >= 2.5)):
+            out.append(cur)
+            cur = [w]
+        else:
+            cur.append(w)
+    out.append(cur)
+    segs = []
+    for grp in out:
+        text = ''.join(w.word for w in grp).strip()
+        if text:
+            segs.append({'start': float(grp[0].start), 'end': max(float(grp[-1].end), float(grp[0].start) + 0.2), 'text': text,
+                         'words': [[round(float(w.start), 3), round(float(w.end), 3), w.word] for w in grp]})
+    return segs
+
+
+def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5, should_stop=None,
+                     word_timestamps=False):
+    """word_timestamps=True (lồng tiếng): đầu / cuối đoạn bám đúng chữ đầu / chữ cuối, tách đoạn ở chỗ ngừng nói dài."""
+    global _should_stop, _word_ts
     _should_stop = should_stop
+    _word_ts = bool(word_timestamps)
     _inject_ffmpeg_to_path()
     drive = os.path.splitdrive(os.path.abspath(temp_dir))[0]
     if drive:
@@ -225,6 +274,20 @@ def _collect(segments_gen):
     return out
 
 
+def _load_wav_16k(path):
+    """WAV PCM 16-bit mono 16kHz (do ffmpeg trích) → numpy float32 [-1, 1]; None nếu không đúng định dạng."""
+    import wave
+    import numpy as np
+    try:
+        with wave.open(path, 'rb') as w:
+            if w.getsampwidth() != 2 or w.getnchannels() != 1 or w.getframerate() != 16000:
+                return None
+            data = w.readframes(w.getnframes())
+        return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+    except Exception:
+        return None
+
+
 def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, beam_size=5):
     from faster_whisper import WhisperModel
     from huggingface_hub import snapshot_download
@@ -302,11 +365,18 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
         }
         if language and language != 'auto':
             kwargs['language'] = language
+        if _word_ts:
+            kwargs['word_timestamps'] = True
 
+        # Tự đọc WAV (đã trích sẵn 16kHz mono) → mảng số đưa thẳng cho Whisper. Không để faster-whisper tự mở file
+        # bằng PyAV: PyAV bản mới bỏ tham số metadata_errors mà faster-whisper còn dùng → máy cài mới chết ngay ở đây.
+        audio_in = _load_wav_16k(audio_path)
+        if audio_in is None:
+            audio_in = audio_path
         try:
             if _should_stop and _should_stop():
                 raise WhisperCancelled('Đã huỷ trước khi nhận dạng.')
-            segments_gen, info = model.transcribe(audio_path, **kwargs)
+            segments_gen, info = model.transcribe(audio_in, **kwargs)
             segments_list = _collect(segments_gen)
         except WhisperCancelled:
             raise
@@ -317,7 +387,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             if device == 'cuda':
                 device, compute_type = 'cpu', 'int8'
                 model = WhisperModel(local_dir, device=device, compute_type=compute_type)
-            segments_gen, info = model.transcribe(audio_path, **kwargs)
+            segments_gen, info = model.transcribe(audio_in, **kwargs)
             segments_list = _collect(segments_gen)
 
         detected_lang = getattr(info, 'language', 'vi')
@@ -325,7 +395,12 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
         segments = []
         for seg in segments_list:
             text = seg.text.strip()
-            if text:
+            if not text:
+                continue
+            words = [w for w in (getattr(seg, 'words', None) or []) if (w.word or '').strip()]
+            if words:
+                segments.extend(_split_by_words(words))
+            else:
                 segments.append({'start': float(seg.start), 'end': float(seg.end), 'text': text})
         full_text = ' '.join((s['text'] for s in segments))
         log_fn(f'   Đã nhận dạng {len(segments)} đoạn thoại (faster-whisper)')

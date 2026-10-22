@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("rf", {
   },
   python: {
     status: () => ipcRenderer.invoke("py:status"),
+    retry: () => ipcRenderer.invoke("py:retry"),
     onStatus: (cb: (s: unknown) => void) => {
       const h = (_e: unknown, s: unknown) => cb(s)
       ipcRenderer.on("py:status", h)

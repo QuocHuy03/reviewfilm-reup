@@ -130,6 +130,8 @@ ipcMain.handle("rf:setTheme", (_e, theme: "dark" | "light") => {
 ipcMain.handle("sys:usage", () => usage())
 ipcMain.handle("rf:setFullScreen", (_e, on: boolean) => { win?.setFullScreen(!!on); return win?.isFullScreen() ?? false })
 ipcMain.handle("py:status", () => pyStatus)
+// Lỗi chuẩn bị Python (mất mạng khi tải…) → bấm "Thử lại" trên màn chờ, không phải mở lại app
+ipcMain.handle("py:retry", () => { if (pyStatus.phase === "error") { reportPython({ phase: "checking", message: "Đang thử lại…" }); launchBackend() } })
 
 // ---------- IPC: thông tin app / phiên bản ----------
 ipcMain.handle("capcut:login", () => capcutLogin(win))

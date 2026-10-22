@@ -159,6 +159,123 @@ def _find_system_font(font_name='Segoe UI'):
     except Exception:
         pass
     return _find_font()
+def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, max_spans=40, merge_gap=0.0, style='blur', src_size=None):
+    """Vùng chữ (box % hình gốc, giây video gốc) → chuỗi lọc làm mờ trên [0:v] của clip (t tính từ clip_start).
+    Vùng cùng dải (vd mọi câu phụ đề ở đáy) gộp thành 1 lớp mờ với nhiều khoảng thời gian → ít bước lọc, dựng nhanh."""
+    if not regions:
+        return ('', '0:v')
+    groups = []        # [box, [(a, b), ...]]
+    for r in regions:
+        try:
+            (x1, y1, x2, y2) = [max(0.0, min(1.0, float(v))) for v in r['box']]
+            (a, b) = (float(r['t_start']) - clip_start, float(r['t_end']) - clip_start)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if b <= 0 or a >= src_dur or x2 - x1 < 0.01 or y2 - y1 < 0.01:
+            continue
+        (a, b) = (max(0.0, a), min(src_dur, b))
+        for g in groups:
+            gb = g[0]
+            oy = min(y2, gb[3]) - max(y1, gb[1])
+            mh = min(y2 - y1, gb[3] - gb[1])
+            ox = min(x2, gb[2]) - max(x1, gb[0])
+            # cùng dải (chồng dọc ≥ 50%) — hoặc 2 dòng sát nhau cùng cột (vd watermark 2 dòng có ký tự "&" ở giữa không quét ra)
+            if (oy >= 0.5 * mh and ox > -0.05) or (oy > -0.6 * mh and ox > 0.5 * min(x2 - x1, gb[2] - gb[0])):
+                g[0] = [min(x1, gb[0]), min(y1, gb[1]), max(x2, gb[2]), max(y2, gb[3])]
+                g[1].append((a, b))
+                break
+        else:
+            groups.append([[x1, y1, x2, y2], [(a, b)]])
+    erase = style == 'erase' and src_size and src_size[0] > 8 and src_size[1] > 8
+    (parts, cur) = ([], '0:v')
+    for (i, ((x1, y1, x2, y2), spans)) in enumerate(groups[:max_groups]):
+        merged = []                              # gộp khoảng sát nhau (cả phim một lượt có hàng trăm câu phụ đề)
+        for (a, b) in sorted(spans):
+            if merged and a <= merged[-1][1] + merge_gap:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        en = '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in merged[:max_spans])
+        (dw, dh) = (x2 - x1, y2 - y1)
+        if erase:
+            # Xoá nhẹ: delogo lấp vùng chữ bằng điểm ảnh xung quanh (gần như không thấy), phủ thêm mờ nhẹ cho mượt viền.
+            # delogo cần toạ độ px nằm hẳn trong khung (không chạm mép).
+            (sw, sh) = src_size
+            (px, py) = (max(1, int(x1 * sw)), max(1, int(y1 * sh)))
+            (pw, ph) = (max(4, min(int(x2 * sw), sw - 2) - px), max(4, min(int(y2 * sh), sh - 2) - py))
+            parts.append(f"[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}:enable='{en}'[tsd{i}]")
+            cur = f'tsd{i}'
+            sigma_i = max(4, round(ph * 0.09))       # vùng lớn mờ thêm chút cho hết vệt sọc của delogo
+        else:
+            sigma_i = sigma
+        parts.append(f'[{cur}]split[tsa{i}][tsb{i}]')
+        parts.append(f'[tsb{i}]crop=trunc(iw*{dw:.4f}/2)*2:trunc(ih*{dh:.4f}/2)*2:trunc(iw*{x1:.4f}/2)*2:trunc(ih*{y1:.4f}/2)*2,'
+                     f'gblur=sigma={sigma_i:g}:steps=3[tsc{i}]')
+        parts.append(f"[tsa{i}][tsc{i}]overlay=trunc(W*{x1:.4f}/2)*2:trunc(H*{y1:.4f}/2)*2:enable='{en}'[ts{i}]")
+        cur = f'ts{i}'
+    return (';'.join(parts), cur) if parts else ('', '0:v')
+
+
+_DIMS = {}
+
+
+def src_dims(path):
+    """(rộng, cao) px của video gốc — nhớ theo file (xoá chữ kiểu delogo cần toạ độ px)."""
+    if path not in _DIMS:
+        try:
+            r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
+                                '-of', 'csv=p=0', path], capture_output=True, text=True, creationflags=_HIDE, timeout=20)
+            (w, h) = [int(v) for v in r.stdout.strip().split(',')[:2]]
+            _DIMS[path] = (w, h)
+        except Exception:
+            _DIMS[path] = (0, 0)
+    return _DIMS[path]
+
+
+def _text_region(text, font_path, fontsize, line_spacing, border, vid_w, vid_h, position, margin_v, center_y=None):
+    """Khung (x, y, w, h — px, số chẵn) bao dòng phụ đề như drawtext vẽ, nới thêm lề — để làm mờ nền sau chữ."""
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype(font_path, int(fontsize)) if font_path else ImageFont.load_default()
+        (_, top, _, bottom) = font.getbbox('Ây')                   # cao 1 dòng (có dấu tiếng Việt)
+        lines = text.split('\n')
+        tw = max(font.getlength(ln) for ln in lines) if lines else 0
+        th = (bottom - top) * len(lines) + max(0, int(line_spacing)) * (len(lines) - 1)
+    except Exception:
+        return None
+    pad = int(fontsize * 0.45) + int(border)
+    (bw, bh) = (min(vid_w, int(tw) + 2 * pad), min(vid_h, int(th) + 2 * pad))
+    x = (vid_w - bw) // 2
+    if center_y is not None:
+        y = int(vid_h * center_y - th / 2) - pad
+    elif position == 'top':
+        y = margin_v - pad
+    elif position == 'middle':
+        y = (vid_h - th) // 2 - pad
+    else:
+        y = vid_h - int(th) - margin_v - pad
+    (x, y) = (max(0, x), max(0, min(vid_h - bh, y)))
+    even = lambda v: int(v) // 2 * 2
+    return (even(x), even(y), max(2, even(bw)), max(2, even(bh)))
+
+
+def _crop_prefix(crop_box, fill, w, h):
+    """Cắt khung hình gốc trước khi đưa về khung xuất. crop_box = [x, y, rộng, cao] theo % hình GỐC.
+    fill=True: phóng phần đã cắt cho phủ kín khung (cắt bớt mép thừa nếu khác tỉ lệ); False: giữ trọn, thêm viền đen.
+    '' nếu không cắt / khung không hợp lệ."""
+    try:
+        (x, y, cw, ch) = [max(0.0, min(100.0, float(v))) / 100.0 for v in (crop_box or [])[:4]]
+    except (TypeError, ValueError):
+        return ''
+    if cw < 0.05 or ch < 0.05 or (cw > 0.995 and ch > 0.995):
+        return ''
+    (cw, ch) = (min(cw, 1.0 - x), min(ch, 1.0 - y))
+    crop = f'crop=trunc(iw*{cw:.4f}/2)*2:trunc(ih*{ch:.4f}/2)*2:trunc(iw*{x:.4f}/2)*2:trunc(ih*{y:.4f}/2)*2'
+    if fill:
+        return f'{crop},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}'
+    return f'{crop},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'
+
+
 def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
     (w, h) = resolution.split('x')
     use_nvenc = _check_nvenc()
@@ -528,7 +645,9 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         pts_ratio = 1.0
         sub_span_duration = clip_duration
     (w, h) = resolution.split('x')
-    vf = f'''scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,fps={fps}'''
+    vf = _crop_prefix(kwargs.get('crop_box'), kwargs.get('crop_fill', True), w, h) or \
+        f'''scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'''
+    vf += f',fps={fps}'
     _v_scale = scene.get('_video_scale')
     _v_pos = str(scene.get('_video_position') or 'center').strip().lower()
     if _v_scale is not None:
@@ -620,6 +739,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             atempo_filter = f''',atempo={audio_speed:.4f}'''
     subtitle_files = []
     sub_filters = []
+    _sub_blur = []          # vùng làm mờ ngay sau từng dòng phụ đề: (x, y, w, h px, t bắt đầu, t kết thúc)
     if burn_subtitles and subtitle and not font_path:
         log_fn('   [WARN] Không tìm thấy font Unicode, bỏ qua burn phụ đề cảnh này')
         burn_subtitles = False
@@ -645,6 +765,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             sub_max_lines = kwargs.get('sub_max_lines', 2)
             sub_max_width_pct = max(0.3, min(0.95, float(kwargs.get('sub_max_width_pct', 0.82) or 0.82)))
             margin_v = max(20, int(vid_h * sub_margin_v_pct))
+            sub_center_y = kwargs.get('sub_center_y_pct')        # có → tâm phụ đề đặt đúng tâm vùng che phụ đề cũ
             _sub_dur = sub_span_duration if sub_span_duration is not None else clip_duration
             _manual_chunks = scene.get('_manual_sub_chunks')
             chunks_timed = []
@@ -694,7 +815,10 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 with open(subtitle_file, 'w', encoding='utf-8') as _sf:
                     _sf.write(wrapped)
                 subtxt_esc = subtitle_file.replace('\\', '/').replace(':', '\\:')
-                if eff_position_mode == 'top':
+                center_y = sub_center_y if (sub_center_y is not None and not c_style.get('position')) else None
+                if center_y is not None:
+                    y_expr = f'h*{float(center_y):.4f}-text_h/2'
+                elif eff_position_mode == 'top':
                     y_expr = f"{margin_v}"
                 elif eff_position_mode == 'middle':
                     y_expr = '(h-text_h)/2'
@@ -702,10 +826,18 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     y_expr = f'''h-text_h-{margin_v}'''
                 clause = f'''drawtext={eff_font_str}textfile=\'{subtxt_esc}\':fontcolor={eff_font_color}:fontsize={fontsize}:borderw={sub_border_width}:bordercolor={sub_border_color}:line_spacing={sub_line_spacing}:x=(w-text_w)/2:y={y_expr}:{eff_box_str}enable=\'between(t\\,{t_cur:.3f}\\,{t_end:.3f})\''''
                 sub_filters.append(clause)
+                if c_style.get('bgBlur', kwargs.get('sub_bg_blur')):
+                    reg = _text_region(wrapped, eff_font_path, fontsize, sub_line_spacing, sub_border_width, vid_w, vid_h, eff_position_mode, margin_v, center_y)
+                    if reg:
+                        _sub_blur.append((*reg, t_cur, t_end))
     _all_blur_boxes = list(blur_boxes or []) + _extra_blur_boxes
     (blur_chain, blur_last) = _build_blur_chain('vbase', _all_blur_boxes, clip_start=clip_start, clip_end=clip_end)
     has_wm = bool(watermark_path and os.path.exists(watermark_path))
-    fc = f'''[0:v]{vf}[vbase]'''
+    # Chữ Trung do AI quét (core/text_cover): làm mờ ngay trên hình GỐC, trước cắt/co/giãn → đúng chỗ, đúng lúc
+    (src_chain, src_last) = _src_text_blur_chain(kwargs.get('text_regions'), clip_start, clip_duration, float(kwargs.get('text_blur_sigma') or 22),
+                                                 style=kwargs.get('cover_style') or 'erase', src_size=src_dims(source_video))
+    vin = f'[{src_last}]' if src_chain else '[0:v]'
+    fc = (src_chain + ';' if src_chain else '') + f'''{vin}{vf}[vbase]'''
     last = 'vbase'
     if blur_chain:
         fc += ';' + blur_chain
@@ -715,6 +847,11 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     if _fx:
         fc += f'; [{last}]{_fx}[vfx]'
         last = 'vfx'
+    # nền mờ sau phụ đề: làm mờ đúng khung chữ, chỉ lúc dòng đó hiện (sau hiệu ứng → khớp vị trí chữ trên khung cuối)
+    for (bi, (bx, by, bw, bh, ta, tb)) in enumerate(_sub_blur):
+        fc += (f'; [{last}]split[sba{bi}][sbc{bi}]; [sbc{bi}]crop={bw}:{bh}:{bx}:{by},gblur=sigma=18:steps=2[sbb{bi}]'
+               f"; [sba{bi}][sbb{bi}]overlay={bx}:{by}:enable='between(t\\,{ta:.3f}\\,{tb:.3f})'[sbo{bi}]")
+        last = f'sbo{bi}'
     for (si, sub_filter) in enumerate(sub_filters):
         out_lbl = f'''vsub{si}'''
         fc += f'''; [{last}]{sub_filter}[{out_lbl}]'''
@@ -764,7 +901,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     r = run_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
-        fc_fb = f'''[0:v]{vf}[vbase]'''
+        fc_fb = (src_chain + ';' if src_chain else '') + f'''{vin}{vf}[vbase]'''
         last_fb = 'vbase'
         if blur_chain:
             fc_fb += ';' + blur_chain

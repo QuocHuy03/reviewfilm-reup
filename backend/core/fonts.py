@@ -21,6 +21,8 @@ def _dirs():
     from app.config import DATA_DIR
     windir = os.environ.get('WINDIR', r'C:\Windows')
     return {
+        # font OFL đóng gói sẵn cùng app (Baloo 2, Be Vietnam Pro, Montserrat, Oswald — đủ dấu tiếng Việt)
+        'bundled': os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'fonts'),
         'system': os.path.join(windir, 'Fonts'),
         'user': os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'Windows', 'Fonts'),
         'custom': os.path.join(DATA_DIR, 'fonts'),
@@ -145,3 +147,23 @@ def import_font(src_path):
 def custom_font_files():
     d = _dirs()['custom']
     return [os.path.join(d, n) for n in os.listdir(d) if n.lower().endswith(FONT_EXTS)] if os.path.isdir(d) else []
+
+
+def render_font_files(family=''):
+    """Font cần chép cạnh file phụ đề khi ghép (fontsdir của libass): font có sẵn của app + font người dùng thêm
+    + file của chính font đang chọn (font chỉ cài cho tài khoản Windows hiện tại libass không tự thấy)."""
+    out = list(custom_font_files())
+    d = _dirs()['bundled']
+    if os.path.isdir(d):
+        out += [os.path.join(d, n) for n in os.listdir(d) if n.lower().endswith(FONT_EXTS)]
+    if family:
+        p = find_font_file(family)
+        if p and os.path.isfile(p):
+            out.append(p)
+    seen, uniq = set(), []
+    for p in out:
+        k = os.path.basename(p).lower()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(p)
+    return uniq

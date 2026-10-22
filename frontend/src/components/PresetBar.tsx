@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Preset } from "@/lib/types"
 
@@ -13,8 +14,10 @@ import type { Preset } from "@/lib/types"
  * Mẫu cấu hình theo kênh: lưu toàn bộ cấu hình trang Tạo video (giọng, phụ đề, vùng che, logo/intro/outro,
  * khung hình, hậu kỳ…) thành mẫu có tên — chọn mẫu là điền lại hết. Không lưu nguồn video.
  */
-export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onApply }: {
+export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onApply, bare }: {
   mode: string; cfg: C; onApply: (mode: string, cfg: Partial<C>) => void
+  /** Không khung, gọn — nằm trong thanh trên cùng của trang Tạo video */
+  bare?: boolean
 }) {
   const [items, setItems] = useState<Preset[]>([])
   const [current, setCurrent] = useState("")
@@ -46,11 +49,11 @@ export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onAppl
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+    <div className={cn("flex items-center gap-2", !bare && "rounded-xl border border-border bg-card px-3 py-2")}>
       <Layers className="size-4 shrink-0 text-primary" />
-      <span className="shrink-0 text-[13px] font-medium">Mẫu kênh</span>
+      <span className={cn("shrink-0 text-[13px] font-medium", bare && "sr-only")}>Mẫu kênh</span>
       <Select value={current} onValueChange={apply}>
-        <SelectTrigger size="sm" className="w-56"><SelectValue placeholder={items.length ? "Chọn mẫu để điền sẵn…" : "Chưa có mẫu nào"} /></SelectTrigger>
+        <SelectTrigger size="sm" className={bare ? "w-36 xl:w-48" : "w-56"} title="Mẫu kênh — điền sẵn giọng, phụ đề, logo, intro/outro…"><SelectValue placeholder={bare ? (items.length ? "Chọn mẫu kênh…" : "Mẫu kênh") : (items.length ? "Chọn mẫu để điền sẵn…" : "Chưa có mẫu nào")} /></SelectTrigger>
         <SelectContent>
           {items.map((p) => (
             <SelectItem key={p.name} value={p.name}>
@@ -60,8 +63,10 @@ export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onAppl
         </SelectContent>
       </Select>
       {current && <Button variant="ghost" size="icon-sm" title="Xoá mẫu này" onClick={remove}><Trash2 /></Button>}
-      <span className="ml-auto hidden text-[11px] text-muted-foreground xl:inline">Lưu giọng, phụ đề, logo, intro/outro… để dùng lại cho kênh</span>
-      <Button variant="outline" size="sm" onClick={() => { setName(current); setOpen(true) }}><BookmarkPlus /> Lưu thành mẫu</Button>
+      {!bare && <span className="ml-auto hidden text-[11px] text-muted-foreground xl:inline">Lưu giọng, phụ đề, logo, intro/outro… để dùng lại cho kênh</span>}
+      <Button variant="outline" size="sm" title="Lưu cấu hình hiện tại thành mẫu kênh" onClick={() => { setName(current); setOpen(true) }}>
+        <BookmarkPlus /> {bare ? <span className="hidden xl:inline">Lưu mẫu</span> : "Lưu thành mẫu"}
+      </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-sm">

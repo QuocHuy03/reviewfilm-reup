@@ -84,6 +84,7 @@ export interface ReviewFilmBridge {
   }
   python: {
     status: () => Promise<PythonStatus>
+    retry: () => Promise<void>
     onStatus: (cb: (s: PythonStatus) => void) => () => void
   }
   update: {

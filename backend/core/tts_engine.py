@@ -18,13 +18,13 @@ FPTAI_VOICES = {'banmai': 'Nu, mien Bac', 'lannhi': 'Nu, mien Nam', 'leminh': 'N
 FPTAI_ENHANCE_VOICES = {'lannhi'}
 _FPTAI_ENHANCE_AF = 'highpass=f=75,equalizer=f=300:t=q:w=1.2:g=-1.5,equalizer=f=2500:t=q:w=1.0:g=2,treble=g=5:f=4000,acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2,loudnorm=I=-16:TP=-1.5:LRA=9,atempo=1.08'
 EDGE_VOICES = {'vi-VN-HoaiMyNeural': 'Nu - Edge TTS mien phi', 'vi-VN-NamMinhNeural': 'Nam - Edge TTS mien phi'}
-_FEMALE_VOICE_HINTS = ('lena', 'banmai', 'mia', 'rachel', 'nova', 'shimmer', 'ngoc-lan', 'ngoclan', 'my-duyen', 'myduyen', 'truc-ly', 'trucly', 'ngoc-linh', 'ngoclinh', 'hoaimy', '21m00tcm4tlvdq8ikwam')
+_FEMALE_VOICE_HINTS = ('lena', 'banmai', 'mia', 'rachel', 'nova', 'shimmer', 'ngoc-lan', 'ngoclan', 'my-duyen', 'myduyen', 'truc-ly', 'trucly', 'ngoc-linh', 'ngoclinh', 'hoaimy', '21m00tcm4tlvdq8ikwam', 'mai-anh', 'thuy-dung', 'ngoc-huyen', 'ngoc-tran', 'doan-trang', 'thuc-doan', 'quynh-anh', 'kim-thanh')
 def _get_fallback_edge_voice(voice):
     voice = ((voice or '')).lower()
     if any((h in voice for h in _FEMALE_VOICE_HINTS)):
         return 'vi-VN-HoaiMyNeural'
     return 'vi-VN-NamMinhNeural'
-VIENEU_VOICES = {'binh-an': 'Nam - Bình An (VieNeu điềm đạm)', 'xuan-vinh': 'Nam - Xuân Vĩnh (VieNeu vui tươi)', 'ngoc-lan': 'Nữ - Ngọc Lan (VieNeu dịu dàng)', 'my-duyen': 'Nữ - Mỹ Duyên (VieNeu mượt mà)', 'truc-ly': 'Nữ - Trúc Ly (VieNeu trẻ trung)', 'ngoc-linh': 'Nữ - Ngọc Linh (VieNeu tươi sáng)', 'gia-bao': 'Nam - Gia Bảo (VieNeu mượt mà)', 'thai-son': 'Nam - Thái Sơn (VieNeu chắc khỏe)', 'duc-tri': 'Nam - Đức Trí (VieNeu rõ ràng)', 'trong-huu': 'Nam - Trọng Hữu (VieNeu uyên bác)', 'clone': 'Nhân bản giọng riêng (VieNeu - cần 3-5s audio mẫu)', 'vieneu3-chien-thang': 'VieNeu3 - Chiến Thắng', 'vieneu3-hung-ba': 'VieNeu3 - Hùng Bá', 'vieneu3-lam-le': 'VieNeu3 - Lâm Lê', 'vieneu3-ly-long-tieng': 'VieNeu3 - Lý Long Tiếng', 'vieneu3-phat-phap': 'VieNeu3 - Pháp Phật', 'vieneu3-review-toptop': 'VieNeu3 - Review Toptop', 'vieneu3-trinh-le': 'VieNeu3 - Trịnh Lê', 'vieneu3-trung-dung': 'VieNeu3 - Trung Dũng', 'vieneu3-yen-tin-tuc': 'VieNeu3 - Yến Tin Tức', 'vieneu3-ban-mai': 'VieNeu3 - Ban Mai', 'vieneu3-bac-quynh-anh': 'VieNeu3 - Quỳnh Anh (Giọng Bắc)', 'vieneu3-bac-thao-chi': 'VieNeu3 - Thảo Chi (Giọng Bắc)', 'vieneu3-bac-thanh-tung': 'VieNeu3 - Thanh Tùng (Giọng Bắc)', 'vieneu3-bac-nam-khanh': 'VieNeu3 - Nam Khánh (Giọng Bắc)', 'vieneu3-quang-cao': 'VieNeu3 - Quảng Cáo Nội Lực', 'vieneu3-he-thong': 'VieNeu3 - Hệ Thống', 'vieneu3-lena': 'VieNeu3 - Lena', 'vieneu3-mc-truyen-hinh': 'VieNeu3 - MC Truyền Hình', 'vieneu3-mia': 'VieNeu3 - Mia', 'vieneu3-minh-quang': 'VieNeu3 - Minh Quang', 'vieneu3-nam': 'VieNeu3 - Nam', 'vieneu3-nguyen': 'VieNeu3 - Nguyên', 'vieneu3-thu-minh': 'VieNeu3 - Thu Minh', 'vieneu3-nam-tram-am': 'VieNeu3 - Nam Trầm Ấm', 'vieneu3-nam-cham-rai': 'VieNeu3 - Nam Chậm Rãi', 'vieneu3-nam-nhanh-nhen': 'VieNeu3 - Nam Nhanh Nhẹn', 'vieneu3-nam-truyen-cam': 'VieNeu3 - Nam Truyền Cảm', 'vieneu3-nu-diem-dam': 'VieNeu3 - Nữ Điềm Đạm', 'vieneu3-nu-cham-rai': 'VieNeu3 - Nữ Chậm Rãi', 'vieneu3-nu-luu-loat': 'VieNeu3 - Nữ Lưu Loát', 'vieneu3-nu-nhan-nha': 'VieNeu3 - Nữ Nhàn Nhã', 'vieneu3-nu-nhe-nhang': 'VieNeu3 - Nữ Nhẹ Nhàng'}
+VIENEU_VOICES = {'binh-an': 'Nam - Bình An (VieNeu điềm đạm)', 'xuan-vinh': 'Xuân Vĩnh (Nam · miền Bắc · tự nhiên)', 'ngoc-lan': 'Nữ - Ngọc Lan (VieNeu dịu dàng)', 'my-duyen': 'Mỹ Duyên (Nữ · miền Nam · kể chuyện)', 'truc-ly': 'Trúc Ly (Nữ · miền Bắc · tự nhiên)', 'ngoc-linh': 'Ngọc Linh (Nữ · miền Bắc · kể chuyện)', 'gia-bao': 'Nam - Gia Bảo (VieNeu mượt mà)', 'thai-son': 'Thái Sơn (Nam · miền Nam · kể chuyện)', 'duc-tri': 'Đức Trí (Nam · miền Nam · kể chuyện)', 'trong-huu': 'Nam - Trọng Hữu (VieNeu uyên bác)', 'clone': 'Nhân bản giọng riêng (VieNeu - cần 3-5s audio mẫu)', 'vieneu3-chien-thang': 'VieNeu3 - Chiến Thắng', 'vieneu3-hung-ba': 'VieNeu3 - Hùng Bá', 'vieneu3-lam-le': 'VieNeu3 - Lâm Lê', 'vieneu3-ly-long-tieng': 'VieNeu3 - Lý Long Tiếng', 'vieneu3-phat-phap': 'VieNeu3 - Pháp Phật', 'vieneu3-review-toptop': 'VieNeu3 - Review Toptop', 'vieneu3-trinh-le': 'VieNeu3 - Trịnh Lê', 'vieneu3-trung-dung': 'VieNeu3 - Trung Dũng', 'vieneu3-yen-tin-tuc': 'VieNeu3 - Yến Tin Tức', 'vieneu3-ban-mai': 'VieNeu3 - Ban Mai', 'vieneu3-bac-quynh-anh': 'VieNeu3 - Quỳnh Anh (Giọng Bắc)', 'vieneu3-bac-thao-chi': 'VieNeu3 - Thảo Chi (Giọng Bắc)', 'vieneu3-bac-thanh-tung': 'VieNeu3 - Thanh Tùng (Giọng Bắc)', 'vieneu3-bac-nam-khanh': 'VieNeu3 - Nam Khánh (Giọng Bắc)', 'vieneu3-quang-cao': 'VieNeu3 - Quảng Cáo Nội Lực', 'vieneu3-he-thong': 'VieNeu3 - Hệ Thống', 'vieneu3-lena': 'VieNeu3 - Lena', 'vieneu3-mc-truyen-hinh': 'VieNeu3 - MC Truyền Hình', 'vieneu3-mia': 'VieNeu3 - Mia', 'vieneu3-minh-quang': 'VieNeu3 - Minh Quang', 'vieneu3-nam': 'VieNeu3 - Nam', 'vieneu3-nguyen': 'VieNeu3 - Nguyên', 'vieneu3-thu-minh': 'VieNeu3 - Thu Minh', 'vieneu3-nam-tram-am': 'VieNeu3 - Nam Trầm Ấm', 'vieneu3-nam-cham-rai': 'VieNeu3 - Nam Chậm Rãi', 'vieneu3-nam-nhanh-nhen': 'VieNeu3 - Nam Nhanh Nhẹn', 'vieneu3-nam-truyen-cam': 'VieNeu3 - Nam Truyền Cảm', 'vieneu3-nu-diem-dam': 'VieNeu3 - Nữ Điềm Đạm', 'vieneu3-nu-cham-rai': 'VieNeu3 - Nữ Chậm Rãi', 'vieneu3-nu-luu-loat': 'VieNeu3 - Nữ Lưu Loát', 'vieneu3-nu-nhan-nha': 'VieNeu3 - Nữ Nhàn Nhã', 'vieneu3-nu-nhe-nhang': 'VieNeu3 - Nữ Nhẹ Nhàng', 'adam-bua': 'Adam bựa (Nam · miền Bắc · tự nhiên)', 'thien-minh': 'Thiện Minh (Nam · miền Bắc · kể chuyện)', 'mai-anh': 'Mai Anh (Nữ · miền Bắc · tin tức)', 'hai-dang': 'Hải Đăng (Nam · miền Bắc · tự nhiên)', 'thuy-dung': 'Thùy Dung (Nữ · miền Nam · tin tức)', 'thien-tam-duc': 'Thiền Tâm Đức (Nam · miền Bắc · kể chuyện)', 'ngoc-huyen': 'Ngọc Huyền (Nữ · miền Bắc · tự nhiên)', 'quang-son': 'Quang Sơn (Nam · miền Trung · tự nhiên)', 'ngoc-tran': 'Ngọc Trân (Nữ · miền Trung · tự nhiên)', 'minh-duc': 'Minh Đức (Nam · miền Bắc · tin tức)', 'pham-tuyen': 'Phạm Tuyên (Nam · miền Bắc · tự nhiên)', 'thanh-binh': 'Thanh Bình (Nam · miền Bắc · kể chuyện)', 'doan-trang': 'Đoan Trang (Nữ · miền Bắc · tự nhiên)', 'thuc-doan': 'Thục Đoan (Nữ · miền Nam · kể chuyện)', 'minh-triet': 'Minh Triết (Nam · miền Nam · tin tức)', 'quynh-anh': 'Quỳnh Anh (Nữ · miền Bắc · kể chuyện)', 'kim-thanh': 'Kim Thanh (Nữ · miền Nam · kể chuyện)', 'adam': 'Adam (Nam · miền Nam · tự nhiên)', 'quoc-tuan': 'Quốc Tuấn (Nam · miền Bắc · tự nhiên)'}
 _VIENEU3_BUILTIN_REF = {'vieneu3-chien-thang': 'chien-thang.wav', 'vieneu3-hung-ba': 'hung-ba.wav', 'vieneu3-lam-le': 'lam-le.wav', 'vieneu3-ly-long-tieng': 'ly-long-tieng.wav', 'vieneu3-phat-phap': 'phat-phap.wav', 'vieneu3-review-toptop': 'review-toptop.wav', 'vieneu3-trinh-le': 'trinh-le.wav', 'vieneu3-trung-dung': 'trung-dung.wav', 'vieneu3-yen-tin-tuc': 'yen-tin-tuc.wav', 'vieneu3-ban-mai': 'ban-mai.wav', 'vieneu3-bac-quynh-anh': 'bac-quynh-anh.wav', 'vieneu3-bac-thao-chi': 'bac-thao-chi.wav', 'vieneu3-bac-thanh-tung': 'bac-thanh-tung.wav', 'vieneu3-bac-nam-khanh': 'bac-nam-khanh.wav', 'vieneu3-quang-cao': 'quang-cao.wav', 'vieneu3-he-thong': 'he-thong.wav', 'vieneu3-lena': 'lena.wav', 'vieneu3-mc-truyen-hinh': 'mc-truyen-hinh.wav', 'vieneu3-mia': 'mia.wav', 'vieneu3-minh-quang': 'minh-quang.wav', 'vieneu3-nam': 'nam.wav', 'vieneu3-nguyen': 'nguyen.wav', 'vieneu3-thu-minh': 'thu-minh.wav', 'vieneu3-nam-tram-am': 'nam-tram-am.wav', 'vieneu3-nam-cham-rai': 'nam-cham-rai.wav', 'vieneu3-nam-nhanh-nhen': 'nam-nhanh-nhen.wav', 'vieneu3-nam-truyen-cam': 'nam-truyen-cam.wav', 'vieneu3-nu-diem-dam': 'nu-diem-dam.wav', 'vieneu3-nu-cham-rai': 'nu-cham-rai.wav', 'vieneu3-nu-luu-loat': 'nu-luu-loat.wav', 'vieneu3-nu-nhan-nha': 'nu-nhan-nha.wav', 'vieneu3-nu-nhe-nhang': 'nu-nhe-nhang.wav'}
 def _vi_number_to_words(n):
     if n == 0:
@@ -479,7 +479,7 @@ def _read_model_pack_root():
     return ''
 _VIENEU_PYTHON = 'C:\\Users\\Admin\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe'
 _VIENEU_DEV_HUB = 'D:\\AutoReview_Studio\\models\\vieneu\\hub'
-_VIENEU_VOICE_MAP = {'binh-an': 'Bình An', 'xuan-vinh': 'Xuân Vĩnh', 'ngoc-lan': 'Ngọc Lan', 'my-duyen': 'Mỹ Duyên', 'truc-ly': 'Trúc Ly', 'ngoc-linh': 'Ngọc Linh', 'gia-bao': 'Gia Bảo', 'thai-son': 'Thái Sơn', 'duc-tri': 'Đức Trí', 'trong-huu': 'Trọng Hữu', 'clone': 'clone'}
+_VIENEU_VOICE_MAP = {'adam-bua': 'Adam bựa', 'truc-ly': 'Trúc Ly', 'thien-minh': 'Thiện Minh', 'mai-anh': 'Mai Anh', 'hai-dang': 'Hải Đăng', 'thuy-dung': 'Thùy Dung', 'thien-tam-duc': 'Thiền Tâm Đức', 'ngoc-huyen': 'Ngọc Huyền', 'quang-son': 'Quang Sơn', 'ngoc-tran': 'Ngọc Trân', 'minh-duc': 'Minh Đức', 'pham-tuyen': 'Phạm Tuyên', 'thai-son': 'Thái Sơn', 'xuan-vinh': 'Xuân Vĩnh', 'thanh-binh': 'Thanh Bình', 'ngoc-linh': 'Ngọc Linh', 'doan-trang': 'Đoan Trang', 'thuc-doan': 'Thục Đoan', 'minh-triet': 'Minh Triết', 'my-duyen': 'Mỹ Duyên', 'quynh-anh': 'Quỳnh Anh', 'duc-tri': 'Đức Trí', 'kim-thanh': 'Kim Thanh', 'adam': 'Adam', 'quoc-tuan': 'Quốc Tuấn', 'binh-an': 'Bình An', 'ngoc-lan': 'Ngọc Lan', 'gia-bao': 'Gia Bảo', 'trong-huu': 'Trọng Hữu', 'clone': 'clone'}
 def _get_vieneu_worker_script():
     if getattr(_sys_tts, 'frozen', False):
         return os.path.join(_sys_tts._MEIPASS, 'vieneu_worker.py')
@@ -495,6 +495,13 @@ def _get_vieneu_exe_dir():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _get_vieneu_cmd():
     import sys
+    try:                                     # cài bằng nút "Tải model" trong app (môi trường riêng trong thư mục dữ liệu)
+        from . import vieneu_setup
+        managed = vieneu_setup.worker_cmd()
+        if managed:
+            return (managed[0], managed[1], True)
+    except Exception:
+        pass
     exe_dir = _get_vieneu_exe_dir()
     worker_exe = os.path.join(exe_dir, 'vieneu_worker.exe')
     if os.path.exists(worker_exe):
@@ -558,6 +565,38 @@ def _get_vieneu3_builtin_ref(vn_voice):
         if os.path.exists(path):
             return path
     return ''
+def _vn_item(scene):
+    """Lô nhiều nhân vật: câu mang '_vn_voice' riêng → giọng có sẵn ('voice') hoặc file mẫu clone có sẵn ('ref')."""
+    v = scene.get('_vn_voice')
+    if not v:
+        return {}
+    ref = _get_vieneu3_builtin_ref(v)
+    return {'ref': ref} if ref else {'voice': v}
+
+
+def vieneu_voice_key(voice):
+    """id trong VOICE_OPTIONS ('vieneu-hai-dang' / 'vieneu3-lena') → id worker ('hai-dang' / 'vieneu3-lena'); không phải VieNeu → ''."""
+    v = (voice or '').lower()
+    return v if v.startswith('vieneu3-') else (v[len('vieneu-'):] if v.startswith('vieneu-') else '')
+
+
+def generate_vieneu_cast(scenes, temp_dir, log_fn=print, gpu_timeout=600):
+    """Đọc câu của NHIỀU nhân vật VieNeu trong 1 lần nạp model (mỗi câu có '_vn_voice'), khỏi nạp lại model cho từng giọng."""
+    scenes = [s for s in scenes if (s.get('voiceover') or '').strip() and s.get('_vn_voice')]
+    if not scenes:
+        return []
+    for (i, s) in enumerate(scenes):
+        s.setdefault('_original_index', i)
+    n_voice = len({s['_vn_voice'] for s in scenes})
+    if not _acquire_gpu_lock(log_fn, gpu_timeout, '   [GPU] Đang chờ GPU giải phóng (tiến trình khác đang xử lý)...'):
+        return []
+    try:
+        return _render_vieneu_sequential(scenes, scenes[0]['_vn_voice'], '', log_fn, temp_dir, allow_fallback=False,
+                                         _display_override=f'{n_voice} giọng nhân vật') or []
+    finally:
+        _LOCAL_GPU_LOCK.release()
+
+
 def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir, allow_fallback=True, _fallback_flag=None, _retry_done=False, _display_override=None):
     _orig_voice = vn_voice
     _edge_voice = _get_fallback_edge_voice(_orig_voice)
@@ -583,8 +622,8 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
     if is_clone and ref_audio_path:
         ref_audio_path = _trim_ref_audio(ref_audio_path, temp_dir, log_fn)
     if vn_voice not in _VIENEU_VOICE_MAP:
-        log_fn(f'''   [WARN] Giọng VieNeu không hợp lệ: {vn_voice} — dùng Bình An''')
-        vn_voice = 'binh-an'
+        log_fn(f'''   [WARN] Giọng VieNeu không hợp lệ: {vn_voice} — dùng Hải Đăng''')
+        vn_voice = 'hai-dang'
     (base_cmd, hf_home, cmd_ok) = _get_vieneu_cmd()
     if not cmd_ok:
         if getattr(_sys_tts, 'frozen', False):
@@ -592,7 +631,7 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
             log_fn('   Giải nén ModelPack vào thư mục AutoReviewTool/ để dùng giọng VieNeu.')
             log_fn('   => Ổ chứa AutoReviewTool hết dung lượng? Có thể giải nén ModelPack sang Ổ ĐĨA KHÁC (vd D:\\ModelPack hoặc E:\\ModelPack) — tool tự tìm thấy, không cần cùng ổ với exe.')
         else:
-            log_fn('   [LỖI] Không tìm thấy vieneu_worker.exe hoặc Python 3.14.')
+            log_fn('   [LỖI] Chưa cài VieNeu — vào trang Giọng đọc, bấm "Tải model VieNeu".')
         if not allow_fallback:
             return []
         log_fn('   => Tự chuyển sang Edge TTS...')
@@ -602,7 +641,8 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
     if not indexed:
         return []
     os.makedirs(temp_dir, exist_ok=True)
-    batch = [{'text': s.get('voiceover_for_tts', s['voiceover']).strip(), 'out': os.path.join(temp_dir, f'''vo_{i:04d}.wav''')} for (i, s) in indexed]
+    batch = [{'text': s.get('voiceover_for_tts', s['voiceover']).strip(), 'out': os.path.join(temp_dir, f'''vo_{i:04d}.wav'''), **_vn_item(s)}
+             for (i, s) in indexed]
     batch_file = os.path.join(temp_dir, '_vieneu_batch.json')
     import json as _json_vn
     with open(batch_file, 'w', encoding='utf-8') as bf:
@@ -614,6 +654,9 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
     timeout_secs = max(360, 90 + total * 30)
     env = os.environ.copy()
     env['PYTHONWARNINGS'] = 'ignore'
+    from . import vieneu_setup
+    if base_cmd[0] == vieneu_setup.PY:
+        env = vieneu_setup.hf_env(offline=True)   # model đã tải đủ lúc cài → không gọi mạng
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, env=env)
         register_process(proc)
@@ -716,7 +759,7 @@ def _is_plausible_tts_duration(text, dur):
     n_chars = len(text)
     if n_chars == 0:
         return dur < 0.5
-    min_dur = n_chars / 22.0
+    min_dur = n_chars / 26.0         # giọng đọc nhanh (VieNeu ~23 ký tự/giây) vẫn hợp lệ; audio bị cắt cụt ngắn hơn nhiều
     max_dur = n_chars / 4.0 + 2.0
     return min_dur <= dur <= max_dur
 def _concat_audio_files(paths, out_path, log_fn=print):

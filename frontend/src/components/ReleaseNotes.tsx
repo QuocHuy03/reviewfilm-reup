@@ -1,9 +1,10 @@
-import { FileText, FolderOpen, Info, Sparkles } from "lucide-react"
+import { FileText, FolderOpen, Info, LifeBuoy, Sparkles } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Section } from "@/components/common"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { openSupport } from "@/lib/support"
 import type { AppInfo, ReleaseNote } from "@/types/electron"
 
 const GROUP_LABEL: Record<string, string> = {
@@ -85,9 +86,10 @@ export function AboutPanel() {
         <dt className="text-muted-foreground">Electron · Node</dt><dd className="tabular">{info.electron} · {info.node}</dd>
         <dt className="text-muted-foreground">Hệ điều hành</dt><dd>{info.platform}</dd>
       </dl>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={() => bridge.openData()}><FolderOpen /> Thư mục dữ liệu</Button>
         <Button size="sm" variant="outline" onClick={() => bridge.openLogs()}><FileText /> Mở log</Button>
+        <Button size="sm" variant="outline" onClick={openSupport} title="Mở taothaoai.com"><LifeBuoy /> Hỗ trợ</Button>
       </div>
       {notes.length > 0 && (
         <div className="flex flex-col gap-3 border-t border-border pt-3">

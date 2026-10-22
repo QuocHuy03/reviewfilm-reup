@@ -34,3 +34,14 @@ def warm_fonts():
     import threading
     from core.fonts import families
     threading.Thread(target=families, daemon=True, name='warm-fonts').start()
+
+
+@app.on_event('startup')
+def warm_whisper():
+    """Tải sẵn model Whisper đang chọn trong Cài đặt (chỉ lần đầu / khi đổi model)."""
+    import threading
+    from app.config import load_settings
+    from core.transcriber import prefetch_model
+    st = load_settings()
+    threading.Thread(target=prefetch_model, args=(st.get('whisper_model') or 'base', st.get('output_dir') or ''),
+                     daemon=True, name='warm-whisper').start()

@@ -6,6 +6,7 @@ import { Field, ToggleRow } from "@/components/common"
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { api, bridge } from "@/lib/api"
+import { ensureFont } from "@/lib/fonts"
 import type { FontInfo, SubStyle } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -35,6 +36,9 @@ function FontPicker({ value, onChange }: { value: string; onChange: (family: str
   const [viOnly, setViOnly] = useState(true)
   const box = useRef<HTMLDivElement>(null)
   const current = fonts.find((f) => f.family.toLowerCase() === value.toLowerCase())
+  // font không có trong Windows (đóng gói / tự thêm): nạp cho trình duyệt để tên hiện đúng kiểu chữ
+  useEffect(() => { ensureFont(value) }, [value])
+  useEffect(() => { if (open) fonts.filter((f) => f.source === "bundled" || f.source === "custom").forEach((f) => ensureFont(f.family)) }, [open, fonts])
 
   useEffect(() => {
     if (!open) return
@@ -76,11 +80,13 @@ function FontPicker({ value, onChange }: { value: string; onChange: (family: str
             <input type="checkbox" checked={viOnly} onChange={(e) => setViOnly(e.target.checked)} /> Chỉ font có đủ dấu tiếng Việt ({fonts.filter((f) => f.vi).length})
           </label>
           <div className="max-h-64 overflow-y-auto py-1">
-            {list.map((f) => (
+            {/* font đóng gói lên đầu; nạp font không có sẵn trong Windows để tên hiện đúng kiểu chữ */}
+            {[...list].sort((a, b) => Number(b.source === "bundled") - Number(a.source === "bundled")).map((f) => (
               <button key={f.family} type="button" onClick={() => { onChange(f.family); setOpen(false) }}
                 className={cn("flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted", f.family === value && "bg-primary/10")}>
                 <span className="min-w-0 flex-1 truncate text-[15px]" style={{ fontFamily: `"${f.family}"` }}>{f.family}</span>
                 {f.source === "custom" && <span className="rounded bg-primary/15 px-1 text-[9px] text-primary">đã thêm</span>}
+                {f.source === "bundled" && <span className="rounded bg-success/15 px-1 text-[9px] text-success">có sẵn</span>}
                 {!f.vi && <span className="text-[10px] text-warning">thiếu dấu</span>}
                 {f.family === value && <Check className="size-3.5 text-primary" />}
               </button>
@@ -159,6 +165,11 @@ export function SubtitleStyleEditor({ base, custom, onChange }: {
         </Field>
       </div>
       <ColorField label="Màu chữ" value={text.hex} onChange={(hex) => set({ sub_font_color: hex })} />
+      {(s.sub_border_width ?? 3) > 0 && (
+        <ColorField label="Màu viền" value={parseColor(s.sub_border_color || "black").hex} onChange={(hex) => set({ sub_border_color: hex })} />
+      )}
+      <ToggleRow label="Nền mờ sau chữ" checked={!!s.sub_bg_blur} onChange={(v) => set({ sub_bg_blur: v })}
+        desc="Làm mờ hình ngay phía sau dòng chữ (khung vừa khít chữ) — chữ nổi rõ mà không cần nền màu, che luôn chữ cũ nằm cùng chỗ." />
       <ToggleRow label="Nền sau chữ" checked={!!s.sub_box_enabled} onChange={(v) => set({ sub_box_enabled: v })} />
       {s.sub_box_enabled && (
         <ColorField label="Màu nền" value={bg.hex} alpha={bg.alpha}

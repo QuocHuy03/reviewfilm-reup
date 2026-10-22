@@ -115,7 +115,7 @@ export function StatusBadge({ status, queuePos }: { status: JobStatus; queuePos?
 /** Tiêu đề job là "<Loại> · <tên file>" — bỏ phần loại khi đã có cột/nhãn loại riêng. */
 export const jobFileName = (title: string) => title.split(" · ").slice(1).join(" · ") || title
 
-export const KIND_LABEL: Record<JobKind, string> = { review: "Review", reup: "Dịch & Reup", srt: "Tách SRT", burn: "Ghép phụ đề", download: "Tải video" }
+export const KIND_LABEL: Record<JobKind, string> = { review: "Review", reup: "Dịch & Reup", vietsub: "Dịch phụ đề", srt: "Tách SRT", burn: "Ghép phụ đề", download: "Tải video" }
 
 export function EmptyState({ icon, title, desc, action, className }: { icon: ReactNode; title: string; desc: string; action?: ReactNode; className?: string }) {
   return (

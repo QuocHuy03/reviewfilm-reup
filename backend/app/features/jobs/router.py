@@ -4,12 +4,13 @@ import os
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.config import load_settings
 from .manager import TERMINAL, manager
 from .models import (AiPolishRequest, BurnJobRequest, ConfirmRequest, DownloadJobRequest, DraftRequest, PublishRequest, ReeditRequest, RegenRequest, SrtJobRequest,
                      ThumbnailRequest, VideoJobRequest)
-from . import pipelines
+from . import pipelines, vietsub
 
 router = APIRouter(prefix='/api/jobs', tags=['jobs'])
 
@@ -23,6 +24,7 @@ def _title(inp, prefix):
 RUNNERS = {
     'review': (pipelines.run_video_pipeline, 'Review'),
     'reup': (pipelines.run_video_pipeline, 'Dịch & Reup'),
+    'vietsub': (vietsub.run_vietsub_pipeline, 'Dịch phụ đề'),
     'srt': (pipelines.run_srt_pipeline, 'Tách SRT'),
     'burn': (pipelines.run_burn_pipeline, 'Ghép phụ đề'),
     'download': (pipelines.run_download_pipeline, 'Tải video'),
@@ -222,6 +224,128 @@ def ai_polish(job_id: str, req: AiPolishRequest):
         raise HTTPException(400, str(e))
     job.log(f'   [AI hậu kỳ] {len(edits)} đề xuất', 'info')
     return {'edits': edits}
+
+
+# ---------- Hậu kỳ: AI quét chữ Trung trên video gốc → vùng che theo từng đoạn (sửa được trước khi dựng) ----------
+_scans: dict[str, dict] = {}
+
+
+class TextScanRequest(BaseModel):
+    interval: float = Field(1.0, ge=0.5, le=5)
+    scenes: list[dict] = Field(default_factory=list)      # cảnh đang sửa (khoảng hình có thể đã đổi so với job)
+
+
+@router.post('/{job_id}/text-scan')
+def start_text_scan(job_id: str, req: TextScanRequest):
+    import threading
+    from core import text_cover
+    try:
+        job = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    video = job.result.get('video_path') or job.config.get('inp', '')
+    if not video or not os.path.isfile(video):
+        raise HTTPException(409, 'Không còn file video gốc để quét.')
+    if not text_cover.available():
+        raise HTTPException(409, 'Chưa cài bộ quét chữ (rapidocr) — khởi động lại app để tự cài.')
+    st = _scans.get(job_id)
+    if st and st.get('running'):
+        return st
+    st = _scans[job_id] = {'running': True, 'done': 0, 'total': 0, 'regions': None, 'error': ''}
+    ranges = pipelines.scan_ranges(req.scenes or job.scenes, job.kind == 'review')
+
+    def work():
+        try:
+            def prog(d, t):
+                st.update(done=d, total=t)
+            regs = text_cover.scan(video, ranges, req.interval, log_fn=lambda m, *a: None,
+                                   should_stop=lambda: st.get('cancel', False), progress=prog)
+            st['regions'] = None if st.get('cancel') else regs      # huỷ giữa chừng → không coi là "không có chữ"
+        except Exception as e:
+            st['error'] = str(e)[:300]
+        finally:
+            if st.get('regions') is not None:
+                st['done'] = st['total'] = max(st['done'], st['total'])
+            st['running'] = False
+    threading.Thread(target=work, daemon=True, name=f'text-scan-{job_id}').start()
+    return st
+
+
+@router.get('/{job_id}/text-scan')
+def get_text_scan(job_id: str):
+    return _scans.get(job_id) or {'running': False, 'done': 0, 'total': 0, 'regions': None, 'error': ''}
+
+
+@router.post('/{job_id}/text-scan/cancel')
+def cancel_text_scan(job_id: str):
+    st = _scans.get(job_id)
+    if st:
+        st['cancel'] = True
+    return st or {}
+
+
+class RedubRequest(BaseModel):
+    voice: str = ''
+    voice_female: str = ''
+    dub_by_gender: bool = False
+    dub_orig_volume: int = Field(20, ge=0, le=100)
+    char_voices: dict[str, str] = Field(default_factory=dict)   # {mã nhân vật: giọng} — đổi giọng từng nhân vật
+    reuse_cast: bool = True                                     # giữ phân vai lần trước (không phân tích lại)
+
+
+class SubBoxRequest(BaseModel):
+    inp: str
+    target_resolution: str = '1920x1080'
+    crop_box: list[float] = Field(default_factory=list)
+    crop_fill: bool = True
+
+
+@router.post('/detect-sub-box')
+def detect_sub_box(req: SubBoxRequest):
+    """AI dò chỗ phụ đề cũ trên video (24 khung rải cả phim, ~30 giây) → vùng che % khung xuất."""
+    import time
+    from core import text_cover
+    from .vietsub import auto_cover_box
+    if not os.path.isfile(req.inp):
+        raise HTTPException(400, 'Chọn file video trên máy để dò.')
+    if not text_cover.available():
+        raise HTTPException(409, 'Chưa cài bộ quét chữ (rapidocr) — khởi động lại app để tự cài.')
+    t = time.time()
+    (_, _, dur) = text_cover._probe(req.inp)
+    regs = text_cover.scan(req.inp, text_cover.sample_ranges(dur), 1.0, log_fn=lambda *a: None)
+    (w, h) = [int(v) for v in req.target_resolution.split('x')]
+    box = auto_cover_box({'crop_box': req.crop_box, 'crop_fill': req.crop_fill}, regs, req.inp, w, h)
+    return {'box': box, 'found': box is not None, 'seconds': round(time.time() - t, 1)}
+
+
+@router.post('/{job_id}/redub')
+def redub_job(job_id: str, req: RedubRequest):
+    """Dịch phụ đề đã xong → job mới LỒNG TIẾNG từ bản dịch có sẵn (không chạy lại Whisper / dịch). Video cũ giữ nguyên."""
+    try:
+        old = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if old.kind != 'vietsub' or old.status != 'done':
+        raise HTTPException(409, 'Chỉ lồng tiếng lại được job Dịch phụ đề đã xong.')
+    video = old.result.get('video_path') or (old.config.get('inp') if os.path.isfile(old.config.get('inp', '')) else '')
+    if not video or not os.path.isfile(video):
+        raise HTTPException(409, 'Không còn file video gốc (video tải từ link đã bị dọn) — hãy chạy lại từ đầu.')
+    vi = old.result.get('vi_srt') or ''
+    if not os.path.isfile(vi):
+        raise HTTPException(409, 'Không còn file phụ đề tiếng Việt của job này.')
+    cfg = dict(old.config)
+    cfg.update(inp=video, vi_srt_path=vi, orig_srt_path=old.result.get('original_srt') or '', dub_voice=True,
+               voice=req.voice or cfg.get('voice', ''), voice_female=req.voice_female, dub_by_gender=req.dub_by_gender and bool(req.voice_female),
+               dub_orig_volume=req.dub_orig_volume, script_edit=True, char_voices=req.char_voices, cast_reuse=None)
+    if old.result.get('dub_units'):              # câu lồng tiếng theo thời gian nói thật + vai từng câu (phân tích trên SRT gốc)
+        cfg['dub_plan_reuse'] = {'units': old.result['dub_units'], 'res': old.result.get('dub_cast') if req.reuse_cast else None}
+    if req.reuse_cast and old.result.get('cast_labels') and old.result.get('cast'):
+        cfg['cast_reuse'] = {'labels': old.result['cast_labels'],
+                             'speakers': {str(c['id']): {'gender': c['gender'], 'count': c['count'], 'name': c['name']} for c in old.result['cast']}}
+    (runner, prefix) = RUNNERS['vietsub']
+    name = old.title.split(' · ', 1)[-1]
+    job = manager.start('vietsub', cfg, runner, f'{prefix} · {name} (lồng tiếng)')
+    return job.summary()
 
 
 @router.post('/{job_id}/qa')

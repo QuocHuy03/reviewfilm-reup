@@ -97,12 +97,17 @@ def _extract_json(text):
     try:
         return json.loads(text)
     except ValueError:
-        m = re.search(r'\{[\s\S]*\}', text)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except ValueError:
-                return None
+        pass
+    # ChatGPT web đôi khi bọc <CodeBlock language="json" editable={false}>…</CodeBlock> → bỏ thẻ, rồi đọc khối JSON đầu tiên hợp lệ
+    text = re.sub(r'</?CodeBlock[^>]*>', '', text).replace('&quot;', '"').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    dec = json.JSONDecoder()
+    for m in re.finditer(r'[\[{]', text):
+        try:
+            obj, _ = dec.raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if obj:
+            return obj
     return None
 
 

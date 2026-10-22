@@ -9,7 +9,8 @@ from app.srt_utils import cues_to_srt, parse_srt
 router = APIRouter(prefix='/api', tags=['media'])
 
 _MEDIA_EXT = {'.mp4', '.mkv', '.mov', '.webm', '.m4v', '.avi', '.ts', '.flv', '.wmv',
-              '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.flac', '.png', '.jpg', '.jpeg'}
+              '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.flac', '.png', '.jpg', '.jpeg',
+              '.ttf', '.otf'}       # font đóng gói / font người dùng thêm — để khung xem trước phụ đề hiện đúng font
 
 
 @router.get('/media')

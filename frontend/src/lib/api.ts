@@ -1,5 +1,5 @@
 import type {
-  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, Voice,
+  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, TextScanState, VieneuStatus, Voice,
 } from "./types"
 
 export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
@@ -37,6 +37,18 @@ export const api = {
   importFont: (path: string) => request<{ family: string; vi: boolean; path: string }>("POST", "/api/fonts/import", { path }),
   saveKeys: (values: Record<string, string>) => request<ApiKey[]>("PUT", "/api/keys", { values }),
   voices: () => request<Voice[]>("GET", "/api/voices"),
+  detectSubBox: (body: { inp: string; target_resolution: string; crop_box: number[]; crop_fill: boolean }) =>
+    request<{ box: number[] | null; found: boolean; seconds: number }>("POST", "/api/jobs/detect-sub-box", body),
+  redub: (id: string, body: { voice: string; voice_female: string; dub_by_gender: boolean; dub_orig_volume: number; char_voices?: Record<string, string> }) =>
+    request<JobSummary>("POST", `/api/jobs/${id}/redub`, body),
+  textScan: (id: string, interval: number, scenes: Scene[]) =>
+    request<TextScanState>("POST", `/api/jobs/${id}/text-scan`, { interval, scenes: scenes.map((s) => ({ clip_start: s.clip_start, clip_end: s.clip_end, excluded: s.excluded, tts_duration: s.tts_duration })) }),
+  textScanState: (id: string) => request<TextScanState>("GET", `/api/jobs/${id}/text-scan`),
+  textScanCancel: (id: string) => request<TextScanState>("POST", `/api/jobs/${id}/text-scan/cancel`),
+  vieneu: () => request<VieneuStatus>("GET", "/api/voices/vieneu"),
+  vieneuInstall: () => request<VieneuStatus>("POST", "/api/voices/vieneu/install"),
+  vieneuCancel: () => request<VieneuStatus>("POST", "/api/voices/vieneu/cancel"),
+  vieneuUninstall: () => request<VieneuStatus>("DELETE", "/api/voices/vieneu"),
   testVoice: (voice: string, text?: string) =>
     request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text }),
 
@@ -45,7 +57,7 @@ export const api = {
   createVideoJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/video", cfg),
   createSrtJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/srt", cfg),
   createBurnJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/burn", cfg),
-  confirm: (id: string, body: { confirmed: boolean; scenes?: Scene[]; mixer?: Record<string, unknown> }) =>
+  confirm: (id: string, body: { confirmed: boolean; scenes?: Scene[]; mixer?: Record<string, unknown>; char_voices?: Record<string, string> }) =>
     request<{ ok: boolean }>("POST", `/api/jobs/${id}/confirm`, body),
   /** Tạo lại giọng 1 cảnh. Gửi kèm cảnh hiện tại ở client (đã có thể bị đổi thứ tự / cắt) → server không phụ thuộc số thứ tự cũ. */
   regenScene: (id: string, idx: number, text: string, scene?: Scene) =>

@@ -83,7 +83,7 @@ def availability(vid):
     if vid.startswith('capcut-'):
         return True, ''          # cookie CapCut tuỳ chọn
     if vid.startswith(('vieneu3-', 'vieneu-')):
-        return (True, '') if _vieneu_available() else (False, 'Cần cài Model Pack VieNeu')
+        return (True, '') if _vieneu_available() else (False, 'Cần tải model VieNeu (nút "Tải model" ở trang Giọng đọc)')
     return (True, '') if get_key('FPT_API_KEY') else (False, 'Cần FPT_API_KEY (Cài đặt → Key giọng đọc)')
 
 
@@ -130,3 +130,34 @@ def test_voice(req: TestVoiceRequest):
         return {**out, 'cached': False}
     finally:
         _busy.release()
+
+
+# ---------- VieNeu: tải / gỡ model ngay trong app ----------
+@router.get('/vieneu')
+def vieneu_status():
+    from core import vieneu_setup
+    return {**vieneu_setup.status(), 'available': _vieneu_available()}
+
+
+@router.post('/vieneu/install')
+def vieneu_install():
+    from core import vieneu_setup
+    vieneu_setup.start()
+    return vieneu_status()
+
+
+@router.post('/vieneu/cancel')
+def vieneu_cancel():
+    from core import vieneu_setup
+    vieneu_setup.cancel()
+    return vieneu_status()
+
+
+@router.delete('/vieneu')
+def vieneu_uninstall():
+    from core import vieneu_setup
+    try:
+        vieneu_setup.uninstall()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return vieneu_status()

@@ -113,7 +113,7 @@ def _base_name(video_path):
 
 
 def _voice_id(label):
-    return C.VOICE_OPTIONS.get(label, label or 'vi-VN-HoaiMyNeural')
+    return C.VOICE_OPTIONS.get(label) or C.LEGACY_VOICE_OPTIONS.get(label) or label or 'vi-VN-HoaiMyNeural'
 
 
 def _speed(cfg):
@@ -145,8 +145,22 @@ def _sub_style(cfg):
         style['sub_margin_v_pct'] = float(cfg['sub_margin_pct']) / 100.0
     if cfg.get('sub_width_pct') is not None:
         style['sub_max_width_pct'] = float(cfg['sub_width_pct']) / 100.0
+    cy = sub_cover_center(cfg)
+    if cy is not None:                            # phụ đề mới nằm giữa vùng che phụ đề cũ (đè đúng chỗ chữ cũ)
+        style['sub_center_y_pct'] = cy
     style.pop('sub_max_lines', None)
     return style
+
+
+def sub_cover_center(cfg):
+    """Tâm dọc (0-1) của vùng che phụ đề cũ — vùng RỘNG nhất (dải phụ đề, không phải logo) — khi bật "phụ đề nằm giữa vùng che"."""
+    if not (cfg.get('remove_old_sub') and cfg.get('sub_in_cover', False)):
+        return None
+    boxes = [b for b in cfg.get('cover_boxes') or [] if isinstance(b, (list, tuple)) and len(b) >= 4]
+    if not boxes:
+        return None
+    (_, y, _, h) = [float(v) for v in max(boxes, key=lambda b: float(b[2]))[:4]]
+    return max(0.05, min(0.95, (y + h / 2) / 100.0))
 
 
 # AI chạy bằng tài khoản ChatGPT/Gemini đăng nhập trong app (core.web_llm) — các tham số key của
@@ -184,14 +198,15 @@ def _is_hallucination(text):
     return len(words) >= 6 and len(set(w.lower() for w in words)) / len(words) < 0.2
 
 
-def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False):
+def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False, words=False):
     """Whisper. allow_empty=True (Review): video không có lời thoại vẫn chạy tiếp — AI viết kịch bản từ hình ảnh."""
     from core.transcriber import transcribe_audio
     job.set_progress(10, 'Nhận dạng giọng nói (Whisper)')
     job.log('[2] Whisper nhận dạng giọng nói...', 'info')
     lang = C.LANGUAGE_MAP.get(cfg.get('source_lang', 'Tự động'), 'auto')
     transcript = transcribe_audio(video_path, cfg.get('whisper_model', 'base'), temp_dir, lang, job.log,
-                                  device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam, should_stop=lambda: job.cancelled)
+                                  device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam, should_stop=lambda: job.cancelled,
+                                  word_timestamps=words)
     job.check()
     if transcript is None:
         # None = Whisper/trích audio LỖI (khác với "không có lời thoại"). Chỉ coi là không lời khi video không có tiếng.
@@ -355,7 +370,10 @@ def _step_script(run):
     vid_dur = get_video_duration(run.video_path)
     if vid_dur <= 0:
         raise RuntimeError('Không đọc được thời lượng video (ffprobe lỗi).')
-    mins = int(cfg.get('minutes', 12))
+    mins = float(cfg.get('minutes') or 0)
+    if mins <= 0:                                # tự động: bám theo độ dài video gốc
+        mins = auto_review_minutes(vid_dur)
+        run.log(f'   Độ dài review tự động: ~{mins:g} phút (phim {vid_dur / 60:.0f} phút)', 'info')
     # Lời đọc không được dài hơn video gốc: video 1 phút mà xin review 12 phút → mỗi cảnh ~500 từ cho ~13s hình,
     # hình bị kéo chậm/lặp và lời lệch cảnh. Giới hạn ≈ 95% độ dài video gốc.
     src_min = vid_dur / 60.0
@@ -554,6 +572,21 @@ def _step_preview(run):
         run.cfg['remove_old_sub'] = bool(cover.get('remove_old_sub', True)) and bool(boxes)
     if cover.get('sub_margin_pct') is not None:
         run.cfg['sub_margin_pct'] = max(1.0, min(60.0, float(cover['sub_margin_pct'])))
+    if 'crop_box' in cover:
+        box = cover.get('crop_box')
+        run.cfg['crop_box'] = [float(v) for v in box][:4] if isinstance(box, (list, tuple)) and len(box) >= 4 else []
+        run.cfg['crop_fill'] = bool(cover.get('crop_fill', True))
+    if 'sub_in_cover' in cover:
+        run.cfg['sub_in_cover'] = bool(cover['sub_in_cover'])
+    if 'burn_subtitles' in cover:
+        run.cfg['burn_subtitles'] = bool(cover['burn_subtitles'])
+    if 'auto_cover_text' in cover:
+        run.cfg['auto_cover_text'] = bool(cover['auto_cover_text'])
+        run.cfg['text_scan_interval'] = max(0.5, min(5.0, float(cover.get('text_scan_interval') or 2.0)))
+        run.cfg['text_blur_strength'] = max(8, min(60, int(cover.get('text_blur_strength') or 22)))
+    if 'text_regions' in cover:                 # danh sách vùng che chữ đã quét + sửa ở Hậu kỳ (None = để app tự quét lúc dựng)
+        tr = cover.get('text_regions')
+        run.cfg['text_regions_manual'] = clean_regions(tr) if isinstance(tr, list) else None
     # Hiệu ứng / chuyển cảnh chọn ở Hậu kỳ (job tạo trước khi có tuỳ chọn này vẫn bật được)
     fx = run.mixer.pop('fx', None) or {}
     for (key, conv) in (('transition', str), ('transition_duration', float), ('color_preset', str),
@@ -569,6 +602,8 @@ def _render_options(cfg, mixer):
     opts = {}
     if cfg.get('remove_old_sub') and cfg.get('cover_boxes'):
         opts.update(remove_old_sub=True, sub_cover_boxes=cfg['cover_boxes'])
+    if cfg.get('crop_box'):           # cắt khung hình gốc (vd bỏ dải phụ đề cũ) rồi phóng đầy khung / giữ viền đen
+        opts.update(crop_box=cfg['crop_box'], crop_fill=bool(cfg.get('crop_fill', True)))
     if mixer:
         opts['original_volume'] = float(mixer.get('original_volume', 0.08))
         if mixer.get('bgm_path') and os.path.isfile(mixer['bgm_path']):
@@ -623,6 +658,79 @@ def _step_render(run):
             run.log(f'   [WARN] Chưa viết được bài đăng: {e} — bấm "Bài đăng AI" ở màn Hoàn thành để thử lại.', 'warn')
 
 
+# Độ dài review tự động theo độ dài phim: phim ngắn kể gần hết, phim dài tóm gọn (cùng bảng với trang Tạo video)
+_AUTO_POINTS = ((5, 0.75), (10, 0.6), (20, 0.4), (40, 0.25), (90, 0.15), (150, 0.12))
+
+
+def auto_review_minutes(video_sec):
+    m = max(0.1, video_sec / 60.0)
+    pts = _AUTO_POINTS
+    if m <= pts[0][0]:
+        r = pts[0][1]
+    elif m >= pts[-1][0]:
+        r = pts[-1][1]
+    else:
+        for ((x0, y0), (x1, y1)) in zip(pts, pts[1:]):
+            if x0 <= m <= x1:
+                r = y0 + (y1 - y0) * (m - x0) / (x1 - x0)
+                break
+    return round(max(0.5, min(25.0, m * r)), 1)
+
+
+def scan_ranges(scenes, is_review):
+    """Đoạn video gốc cần quét chữ: từng cảnh (Review: kéo dài thêm nếu lời đọc dài hơn hình). None = cả phim."""
+    out = []
+    for s in scenes or []:
+        try:
+            (a, b) = (float(s['clip_start']), float(s['clip_end']))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if s.get('excluded'):
+            continue
+        extra = max(0.0, float(s.get('tts_duration') or 0) - (b - a)) if is_review else 0.0
+        out.append((a, b + extra + 0.5))
+    return out or None
+
+
+def clean_regions(items):
+    """Vùng che chữ gửi từ Hậu kỳ → [{'box': [x1, y1, x2, y2] (0-1 hình gốc), 't_start', 't_end'}] hợp lệ."""
+    out = []
+    for r in items or []:
+        try:
+            (x1, y1, x2, y2) = [max(0.0, min(1.0, float(v))) for v in r['box']][:4]
+            (a, b) = (max(0.0, float(r['t_start'])), float(r['t_end']))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if x2 - x1 >= 0.005 and y2 - y1 >= 0.005 and b > a:
+            out.append({'box': [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)], 't_start': round(a, 2), 't_end': round(b, 2)})
+    return out[:600]
+
+
+def _text_regions(run):
+    """Bật "tự che chữ Trung" → AI quét đoạn video được dùng (Review: các cảnh; Reup: cả phim) → vùng làm mờ.
+    Kết quả lưu theo file video nên dựng lại / tự sửa lỗi không phải quét lại."""
+    (job, cfg) = (run.job, run.cfg)
+    sigma = int(cfg.get('text_blur_strength') or 22)
+    manual = cfg.get('text_regions_manual')
+    if isinstance(manual, list):                 # đã quét & chỉnh tay ở Hậu kỳ → dùng đúng danh sách đó
+        job.log(f'   Che chữ: {len(manual)} vùng đã chỉnh ở Hậu kỳ', 'info')
+        return {'text_regions': manual, 'text_blur_sigma': sigma, 'cover_style': 'blur' if cfg.get('cover_style') == 'blur' else 'erase'} if manual else {}
+    if not cfg.get('auto_cover_text'):
+        return {}
+    from core import text_cover
+    if not text_cover.available():
+        job.log('   [WARN] Chưa cài bộ quét chữ (rapidocr) — bỏ qua tự che chữ Trung', 'warn')
+        return {}
+    ranges = scan_ranges(job.scenes, True) if run.is_review else None
+    try:
+        regions = text_cover.scan(run.video_path, ranges, float(cfg.get('text_scan_interval') or 2.0), job.log, should_stop=lambda: job.cancelled)
+    except Exception as e:                       # quét lỗi không được làm hỏng cả video
+        job.log(f'   [WARN] Quét chữ Trung lỗi ({str(e)[:120]}) — dựng không che', 'warn')
+        return {}
+    job.check()
+    return {'text_regions': regions, 'text_blur_sigma': sigma, 'cover_style': 'blur' if cfg.get('cover_style') == 'blur' else 'erase'} if regions else {}
+
+
 def _render(run, out_path):
     """Dựng job.scenes ra out_path."""
     from core.video_editor import build_review_video
@@ -633,7 +741,7 @@ def _render(run, out_path):
                                 sub_source_mode=sub_source, is_reup=not run.is_review,
                                 mirror_video=bool(cfg.get('mirror_video')), video_speed=_speed(cfg),
                                 should_stop=lambda: job.cancelled,
-                                **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer))
+                                **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer), **_text_regions(run))
     job.check()
     if not result or not os.path.isfile(out_path):
         raise RuntimeError('Dựng video thất bại.')
@@ -714,7 +822,7 @@ def _multi_voice(job, voice_label, audio_dir, cast_key, cfg):
         else:
             vmap[c['ten']] = C.VOICE_OPTIONS[C.VIENEU_CAST_MALE[mi % len(C.VIENEU_CAST_MALE)]]
             mi += 1
-    narrator = voice_label if voice_label in C.VIENEU_CAST_MALE + C.VIENEU_CAST_FEMALE else 'VieNeu — Bình An (Nam)'
+    narrator = voice_label if voice_label in C.VIENEU_CAST_MALE + C.VIENEU_CAST_FEMALE else C.VIENEU_CAST_MALE[0]
     job.log(f"   Phân vai: người kể + {len(characters)} nhân vật ({', '.join(vmap)})", 'ok')
     return generate_tts_multi_voice(scenes, vmap, C.VOICE_OPTIONS[narrator], audio_dir, log_fn=job.log,
                                     strict_voice=cfg.get('strict_voice', False))
@@ -875,10 +983,10 @@ def run_burn_pipeline(job):
         cues = _rechunk(cues, _layout(cfg))
         _write_srt(os.path.join(temp_dir, 'subs.srt'), cues)
         # Font người dùng thêm (<data>/fonts) không nằm trong Windows Fonts → chép cạnh file sub, trỏ fontsdir tương đối
-        from core.fonts import custom_font_files
+        from core.fonts import render_font_files
         fonts_tmp = os.path.join(temp_dir, 'fonts')
         os.makedirs(fonts_tmp, exist_ok=True)
-        for fp in custom_font_files():
+        for fp in render_font_files(style.get('sub_font_name', '')):
             shutil.copy2(fp, fonts_tmp)
         out_path = _unique_path(os.path.join(out_dir, _base_name(video) + '_sub.mp4'))
         job.set_progress(15, 'Ghép phụ đề (ffmpeg)')

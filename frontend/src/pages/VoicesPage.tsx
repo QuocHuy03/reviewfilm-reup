@@ -1,5 +1,5 @@
-import { AlertTriangle, Check, KeyRound, Loader2, Mars, Package, Pause, Play, Search, Sparkles, Star, Venus } from "lucide-react"
-import { useMemo, useState } from "react"
+import { AlertTriangle, Check, KeyRound, ListMusic, Loader2, Mars, Package, Pause, Play, Search, Sparkles, Square, Star, Venus, Wand2 } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Segmented, VnFlag } from "@/components/common"
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { VieneuSetup } from "@/components/VieneuSetup"
 import { useAudio } from "@/hooks/useAudio"
 import { api, mediaUrl } from "@/lib/api"
 import type { Voice } from "@/lib/types"
@@ -15,15 +16,20 @@ import { cn } from "@/lib/utils"
 type Gender = "all" | "male" | "female"
 
 export function VoicesPage() {
-  const { voices, settings, setSettings, go } = useStore()
+  const { voices, settings, setSettings, go, refreshSystem } = useStore()
   const [onlyReady, setOnlyReady] = useState(true)
-  const { play, playing } = useAudio()
+  const { play, playing, playList, queueKey, stop } = useAudio()
   const [group, setGroup] = useState("Tất cả")
   const [gender, setGender] = useState<Gender>("all")
   const [q, setQ] = useState("")
   const [text, setText] = useState("Xin chào các bạn, hôm nay chúng ta sẽ cùng xem một bộ phim cực kỳ hấp dẫn.")
   const [busy, setBusy] = useState<string | null>(null)
   const [generated, setGenerated] = useState<Record<string, string>>({})
+  // Tạo thử hàng loạt: lần lượt từng giọng (máy chủ chỉ tạo 1 giọng thử một lúc), huỷ được giữa chừng
+  const [batch, setBatch] = useState<{ done: number; total: number; failed: number } | null>(null)
+  const cancelBatch = useRef(false)
+  // đổi câu thử → bản đã tạo không còn đúng câu, tạo lại khi bấm
+  useEffect(() => { setGenerated({}) }, [text])
 
   // Tập giọng đang xét: mặc định chỉ giọng dùng được ngay; bật công tắc để xem cả giọng cần key / cần cài thêm
   const pool = useMemo(() => (onlyReady ? voices.filter((v) => v.available) : voices), [voices, onlyReady])
@@ -49,6 +55,38 @@ export function VoicesPage() {
     } catch (e) { toast.error((e as Error).message) } finally { setBusy(null) }
   }
 
+  /** Tạo câu thử cho mọi giọng đang hiện (theo bộ lọc), bỏ qua giọng đã tạo với câu này. */
+  const generateAll = async () => {
+    const todo = list.filter((v) => v.available && !generated[v.label])
+    if (!todo.length) { toast.info("Các giọng đang hiện đã có bản thử — bấm \"Nghe lần lượt\""); return }
+    cancelBatch.current = false
+    let failed = 0
+    setBatch({ done: 0, total: todo.length, failed: 0 })
+    for (const [k, v] of todo.entries()) {
+      if (cancelBatch.current) break
+      setBusy(v.label)
+      try {
+        const r = await api.testVoice(v.label, text)
+        const url = mediaUrl(r.path)
+        setGenerated((g) => ({ ...g, [v.label]: url }))
+      } catch { failed++ }
+      setBatch({ done: k + 1, total: todo.length, failed })
+    }
+    setBusy(null)
+    setBatch(null)
+    if (cancelBatch.current) toast("Đã dừng tạo thử")
+    else toast.success(`Đã tạo thử ${todo.length - failed}/${todo.length} giọng`, {
+      description: failed ? `${failed} giọng lỗi (thường do mạng / CapCut chặn) — bấm Tạo thử riêng từng giọng.` : "Bấm \"Nghe lần lượt\" để nghe nhanh từng giọng.",
+    })
+  }
+  /** Phát lần lượt: bản đã tạo với câu ở trên, chưa có thì phát mẫu dựng sẵn. */
+  const queueItems = list.map((v) => ({ key: v.label, url: generated[v.label] || (v.sample ? mediaUrl(v.sample) : "") })).filter((x) => x.url)
+  const playAll = () => {
+    if (queueKey) { stop(); return }
+    if (!queueItems.length) { toast.info("Chưa có bản nghe — bấm \"Tạo thử tất cả\" trước"); return }
+    playList(queueItems)
+  }
+
   const setDefault = async (v: Voice) => {
     const s = await api.saveSettings({ voice: v.label }); setSettings(s); toast.success(`Giọng mặc định: ${v.label}`)
   }
@@ -65,6 +103,7 @@ export function VoicesPage() {
           {defaultVoice.tier === "key" && <Button size="sm" variant="outline" onClick={() => go("settings")}><KeyRound /> Thêm key</Button>}
         </div>
       )}
+      <VieneuSetup onChange={refreshSystem} />
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
           <span className="flex items-center gap-1.5 font-semibold"><VnFlag /> {voices.length} giọng tiếng Việt</span>
@@ -83,7 +122,23 @@ export function VoicesPage() {
             { value: "all", label: `Tất cả · ${inGender("all")}` },
             { value: "male", label: `Nam · ${inGender("male")}`, icon: <Mars /> },
             { value: "female", label: `Nữ · ${inGender("female")}`, icon: <Venus /> }]} />
-          <div className="relative ml-auto w-60">
+          <div className="ml-auto flex items-center gap-1.5">
+            {batch ? (
+              <Button size="sm" variant="outline" onClick={() => { cancelBatch.current = true }} title="Dừng tạo thử">
+                <Loader2 className="animate-spin" /> Đang tạo {batch.done}/{batch.total} <Square className="size-3" />
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" disabled={busy !== null || !list.some((v) => v.available)} onClick={generateAll}
+                title="Đọc câu ở trên bằng mọi giọng đang hiện">
+                <Wand2 /> Tạo thử tất cả
+              </Button>
+            )}
+            <Button size="sm" variant={queueKey ? "default" : "outline"} onClick={playAll} disabled={!queueKey && !queueItems.length}
+              title="Nghe lần lượt từng giọng đang hiện">
+              {queueKey ? <><Square className="size-3" /> Dừng nghe</> : <><ListMusic /> Nghe lần lượt</>}
+            </Button>
+          </div>
+          <div className="relative w-60">
             <Search className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Tìm giọng…" className="pl-8" />
           </div>
@@ -97,7 +152,9 @@ export function VoicesPage() {
           const gen = generated[v.label]
           const name = v.label.split(" — ")[1] ?? v.label
           return (
-            <div key={v.label} className={cn("flex flex-col gap-3 rounded-xl border bg-card p-3.5 transition", isDefault ? "border-primary/60 ring-1 ring-primary/30" : "border-border hover:border-foreground/20")}>
+            <div key={v.label} ref={queueKey === v.label ? (el) => el?.scrollIntoView({ block: "nearest", behavior: "smooth" }) : undefined}
+              className={cn("flex flex-col gap-3 rounded-xl border bg-card p-3.5 transition",
+                queueKey === v.label ? "border-primary ring-2 ring-primary/40" : isDefault ? "border-primary/60 ring-1 ring-primary/30" : "border-border hover:border-foreground/20")}>
               <div className="flex items-start gap-2.5">
                 <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
                   v.gender === "neutral" ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary")}>
@@ -111,6 +168,7 @@ export function VoicesPage() {
                   </p>
                   <TierBadge v={v} onFix={() => go("settings")} />
                 </div>
+                {queueKey === v.label && <span className="flex items-center gap-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"><Play className="size-2.5 fill-current" /> Đang nghe</span>}
                 {isDefault && <Star className="size-3.5 fill-primary text-primary" />}
               </div>
               <div className="flex gap-1.5">
@@ -142,5 +200,5 @@ function TierBadge({ v, onFix }: { v: Voice; onFix: () => void }) {
         <KeyRound className="size-3" /> Cần API key — mở Cài đặt
       </button>
     )
-  return <p className="flex items-center gap-1 truncate text-[10.5px] text-muted-foreground" title={v.need}><Package className="size-3 shrink-0" /> Cần cài thêm trên máy</p>
+  return <p className="flex items-center gap-1 truncate text-[10.5px] text-muted-foreground" title={v.need}><Package className="size-3 shrink-0" /> {v.group.startsWith("VieNeu") ? "Cần tải model (thẻ trên cùng)" : "Cần cài thêm trên máy"}</p>
 }

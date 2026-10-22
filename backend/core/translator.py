@@ -409,7 +409,14 @@ def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, 
             if content:
                 content = re.sub('^```(?:json)?\\s*', '', content)
                 content = re.sub('\\s*```$', '', content).strip()
-                data = json.loads(_clean_json_newlines(content))
+                try:
+                    data = json.loads(_clean_json_newlines(content))
+                except ValueError:
+                    # AI hay viết thêm câu dẫn trước / sau khối JSON → lấy đúng khối {...}
+                    m = re.search(r'\{[\s\S]*\}', content)
+                    if not m:
+                        raise
+                    data = json.loads(_clean_json_newlines(m.group(0)))
                 gloss = []
                 for g in data.get('glossary', []) or []:
                     try:

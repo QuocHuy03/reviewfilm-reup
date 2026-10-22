@@ -74,10 +74,33 @@ _VOICE_MAP = {
     "trong-huu": "Trọng Hữu",
 }
 
+# Giọng có ở model cũ nhưng model mới (vieneu 3.8) đã bỏ → đọc bằng giọng gần nhất (cùng giới, cùng chất giọng)
+_LEGACY_VOICE = {"binh-an": "Thanh Bình", "gia-bao": "Hải Đăng", "trong-huu": "Thiện Minh", "ngoc-lan": "Ngọc Huyền"}
+
+
+def _slug(name):
+    import unicodedata
+    n = unicodedata.normalize("NFD", name.replace("đ", "d").replace("Đ", "D"))
+    return "".join(c for c in n if unicodedata.category(c) != "Mn").lower().replace(" ", "-")
+
+
+def _resolve_voice(tts, voice_id):
+    """id giọng (vd "hai-dang") → tên giọng có sẵn trong model đang chạy; không có → None (giọng mặc định)."""
+    try:
+        names = [vid for (_, vid) in tts.list_preset_voices()]
+    except Exception:
+        names = []
+    by_slug = {_slug(n): n for n in names}
+    for cand in (_VOICE_MAP.get(voice_id), by_slug.get(voice_id), _LEGACY_VOICE.get(voice_id)):
+        if cand and (not names or cand in names):
+            return cand
+    return None
+
+
 # Dấu phiên bản worker — để smoke KHÔNG test nhầm bản cũ + khách/support biết đang
 # chạy bản nào. Hậu tố "-cpu" = bản ép device="cpu" (từ 07-05), phân biệt với binary
 # GPU-era 06-25 (md5 612f8278…) đang ở gói khách. Chỉ là nhãn — KHÔNG manifest/hash.
-BUILD_TAG = "VieNeu Worker 1.36-cpu"
+BUILD_TAG = "VieNeu Worker 1.38-cpu"
 
 
 def main():
@@ -129,9 +152,7 @@ def main():
         print("[VIENEU_WORKER] Chưa cài vieneu: pip install vieneu", file=sys.stderr)
         sys.exit(1)
 
-    vn_voice_name = _VOICE_MAP.get(voice_id)
-    display = vn_voice_name if vn_voice_name else ("clone từ " + os.path.basename(ref_audio))
-    print(f"[VIENEU_WORKER] Khởi tạo VieNeu v3 Turbo ({display})...")
+    print("[VIENEU_WORKER] Khởi tạo VieNeu v3 Turbo...")
     sys.stdout.flush()
 
     # ÉP LUÔN CHẠY CPU/ONNX — KHÔNG dùng GPU/PyTorch cho VieNeu. Lý do (đã test kỹ
@@ -159,14 +180,21 @@ def main():
     except Exception as e:
         print(f"[VIENEU_WORKER] Lỗi khởi tạo: {e}", file=sys.stderr)
         sys.exit(1)
-    print("[VIENEU_WORKER] Model đã sẵn sàng, bắt đầu xử lý từng cảnh...")
+    vn_voice_name = None if is_clone else _resolve_voice(tts, voice_id)
+    display = ("clone từ " + os.path.basename(ref_audio)) if is_clone else (vn_voice_name or "giọng mặc định")
+    print(f"[VIENEU_WORKER] Model đã sẵn sàng ({display}), bắt đầu xử lý từng cảnh...")
     sys.stdout.flush()
 
     total = len(batch)
     ok_count = 0
+    voice_cache = {}
 
     import gc
-    import torch
+    try:                     # bản ONNX (cài qua nút "Tải model") không có torch — chỉ dọn VRAM khi có
+        import torch
+        _cuda = torch.cuda.is_available()
+    except ImportError:
+        (torch, _cuda) = (None, False)
 
     for i, item in enumerate(batch):
         text = item.get("text", "").strip()
@@ -176,14 +204,24 @@ def main():
         
         # Clear CUDA memory before each inference to ensure maximum free VRAM
         gc.collect()
-        if torch.cuda.is_available():
+        if _cuda:
             torch.cuda.empty_cache()
 
         print(f"[VIENEU_WORKER] Đang đọc cảnh {i+1}/{total}...")
         sys.stdout.flush()
 
         try:
-            if is_clone:
+            # lô nhiều nhân vật: mỗi câu có thể mang giọng riêng ("voice") hoặc file mẫu clone riêng ("ref") — nạp model 1 lần
+            item_ref = item.get("ref") or ""
+            item_voice = (item.get("voice") or "").lower()
+            if item_ref and os.path.exists(item_ref):
+                audio = tts.infer(text, ref_audio=item_ref, apply_watermark=False, temperature=0.3, top_k=10)
+            elif item_voice:
+                if item_voice not in voice_cache:
+                    voice_cache[item_voice] = _resolve_voice(tts, item_voice)
+                vname = voice_cache[item_voice]
+                audio = tts.infer(text, voice=vname, apply_watermark=False) if vname else tts.infer(text, apply_watermark=False)
+            elif is_clone:
                 # Nhiet do/top_k thap hon mac dinh (0.8/25) de bam sat giong mau hon —
                 # da do bang spectral centroid + F0: 0.3/10 cho F0 gan voi giong goc hon
                 # ro ret (lech ~25Hz) so voi mac dinh (lech ~45Hz). Mac dinh qua "sang tao"
@@ -206,7 +244,7 @@ def main():
         finally:
             audio = None
             gc.collect()
-            if torch.cuda.is_available():
+            if _cuda:
                 torch.cuda.empty_cache()
 
         if (i + 1) % 5 == 0 or i == total - 1:
@@ -215,7 +253,7 @@ def main():
 
     # Clear CUDA memory at the end
     gc.collect()
-    if torch.cuda.is_available():
+    if _cuda:
         torch.cuda.empty_cache()
 
     print(f"[VIENEU_WORKER] Hoàn tất: {ok_count}/{total} cảnh")

@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react"
+import { ensureFont } from "@/lib/fonts"
 import type { SubStyle } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -13,21 +15,28 @@ export function cssColor(spec: string | undefined, fallbackAlpha = 1) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
-export function SubtitlePreview({ style, text = "Đây là dòng phụ đề mẫu cho video của bạn", className, compact, poster, marginPct }: {
+export function SubtitlePreview({ style, text = "Đây là dòng phụ đề mẫu cho video của bạn", className, compact, poster, marginPct, centerPct }: {
   style?: SubStyle; text?: string; className?: string; compact?: boolean; poster?: string; marginPct?: number
+  /** có → tâm phụ đề ở đúng % chiều cao này (phụ đề nằm giữa vùng che) thay vì cách đáy */
+  centerPct?: number | null
 }) {
   const s = style
   const scale = compact ? 0.55 : 1
   const border = (s?.sub_border_width ?? 3) * scale * 0.6
+  const edge = cssColor(s?.sub_border_color || "black")
   const shadow = border > 0 && !s?.sub_box_enabled
-    ? [-1, 0, 1].flatMap((x) => [-1, 0, 1].map((y) => `${x * border}px ${y * border}px 0 #000`)).join(",")
+    ? [-1, 0, 1].flatMap((x) => [-1, 0, 1].map((y) => `${x * border}px ${y * border}px 0 ${edge}`)).join(",")
     : "none"
+  const [, bump] = useState(0)
+  useEffect(() => { ensureFont(s?.sub_font_name, () => bump((n) => n + 1)) }, [s?.sub_font_name])
+  const blur = !!s?.sub_bg_blur && !s?.sub_box_enabled
   return (
     <div className={cn("relative aspect-video w-full overflow-hidden rounded-lg bg-neutral-900", className)}>
       {poster
         ? <video src={poster} className="absolute inset-0 size-full object-contain" muted preload="metadata" />
         : <div className="absolute inset-0 bg-[linear-gradient(160deg,#3a3a40_0%,#202024_55%,#111113_100%)]" />}
-      <div className="absolute inset-x-0 flex justify-center px-[9%]" style={{ bottom: `${(marginPct ?? (s?.sub_margin_v_pct ?? 0.06) * 100)}%` }}>
+      <div className={cn("absolute inset-x-0 flex justify-center px-[9%]", centerPct != null && "-translate-y-1/2")}
+        style={centerPct != null ? { top: `${centerPct}%` } : { bottom: `${(marginPct ?? (s?.sub_margin_v_pct ?? 0.06) * 100)}%` }}>
         <span
           className="text-center leading-snug font-bold"
           style={{
@@ -35,7 +44,8 @@ export function SubtitlePreview({ style, text = "Đây là dòng phụ đề m�
             fontSize: `${(compact ? 11 : 17) * (s?.sub_font_size_factor ?? 1)}px`,
             color: cssColor(s?.sub_font_color),
             background: s?.sub_box_enabled ? cssColor(s?.sub_box_color, 0.5) : "transparent",
-            padding: s?.sub_box_enabled ? `${(s.sub_box_padding ?? 12) * scale * 0.35}px ${(s.sub_box_padding ?? 12) * scale * 0.7}px` : 0,
+            padding: s?.sub_box_enabled || blur ? `${(s?.sub_box_padding ?? 12) * scale * 0.35}px ${(s?.sub_box_padding ?? 12) * scale * 0.7}px` : 0,
+            backdropFilter: blur ? "blur(8px)" : undefined,
             borderRadius: 4,
             textShadow: shadow,
             textTransform: s?.sub_text_transform === "uppercase" ? "uppercase" : "none",

@@ -8,7 +8,7 @@ import { useStore } from "@/app/store"
 import { PathInput, Segmented, ToggleRow } from "@/components/common"
 import { Monitor, subtitleChunk, type CoverBox } from "@/components/timeline/Monitor"
 import { Timeline } from "@/components/timeline/Timeline"
-import { useTimelinePlayer } from "@/components/timeline/useTimelinePlayer"
+import { sourceRate, useTimelinePlayer } from "@/components/timeline/useTimelinePlayer"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useAudio } from "@/hooks/useAudio"
 import { api, bridge, mediaUrl } from "@/lib/api"
 import { basename, fmtClock, fmtDuration } from "@/lib/format"
-import type { AiEdit, JobDetail, Scene } from "@/lib/types"
+import type { AiEdit, JobDetail, Scene, TextRegion } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { checkScenes, fixDurations, issueLevels, type Issue } from "./checks"
 import { SaveBadge } from "./SaveBadge"
@@ -26,9 +26,20 @@ import { StageHeader } from "./StageHeader"
 import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
 import { confirmAction } from "@/components/ConfirmHost"
 import { DEFAULT_FX, FxPicker, fxSummary, type Fx } from "@/components/FxPicker"
+import { DEFAULT_TEXT_COVER, TextCoverOptions, type TextCover } from "@/components/TextCoverOptions"
+import { subCoverCenter } from "@/components/CoverBoxEditor"
+import { TextRegionsPanel, type SceneSpan } from "./TextRegionsPanel"
 
-/** Che sub gốc: vùng mờ (% khung hình xuất) + vị trí phụ đề mới (cách đáy %). */
-type Cover = { remove_old_sub: boolean; cover_boxes: CoverBox[]; sub_margin_pct: number }
+/** Khung & phụ đề: vùng che mờ (% khung xuất), khung cắt (% hình gốc), phụ đề mới (bật/tắt, cách đáy %). */
+type Cover = {
+  remove_old_sub: boolean; cover_boxes: CoverBox[]; sub_margin_pct: number
+  crop_on: boolean; crop_box: CoverBox; crop_fill: boolean; burn_subtitles: boolean
+  /** phụ đề mới căn giữa vùng che phụ đề cũ (vùng rộng nhất) */
+  sub_in_cover?: boolean
+  /** vùng che chữ đã quét + sửa ở Hậu kỳ; null = để app tự quét lúc dựng */
+  text_regions?: TextRegion[] | null
+} & TextCover
+const FULL_CROP: CoverBox = [0, 0, 100, 100]
 type Mixer = { original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean; cover?: Cover; fx?: Fx }
 const DEFAULT_BOX: CoverBox = [10, 84, 80, 10]
 
@@ -67,9 +78,23 @@ export function PostEditor({ job }: { job: JobDetail }) {
     remove_old_sub: Boolean(jcfg.remove_old_sub),
     cover_boxes: Array.isArray(jcfg.cover_boxes) && jcfg.cover_boxes.length ? (jcfg.cover_boxes as CoverBox[]) : [[...DEFAULT_BOX]],
     sub_margin_pct: typeof jcfg.sub_margin_pct === "number" ? jcfg.sub_margin_pct : 6,
+    crop_on: Array.isArray(jcfg.crop_box) && jcfg.crop_box.length === 4,
+    crop_box: Array.isArray(jcfg.crop_box) && jcfg.crop_box.length === 4 ? (jcfg.crop_box as CoverBox) : [...FULL_CROP],
+    crop_fill: jcfg.crop_fill !== false,
+    burn_subtitles: jcfg.burn_subtitles !== false,
+    sub_in_cover: jcfg.sub_in_cover === true,
+    auto_cover_text: Boolean(jcfg.auto_cover_text),
+    text_scan_interval: typeof jcfg.text_scan_interval === "number" ? jcfg.text_scan_interval : DEFAULT_TEXT_COVER.text_scan_interval,
+    text_blur_strength: typeof jcfg.text_blur_strength === "number" ? jcfg.text_blur_strength : DEFAULT_TEXT_COVER.text_blur_strength,
+    text_regions: Array.isArray(jcfg.text_regions_manual) ? (jcfg.text_regions_manual as TextRegion[]) : null,
   }
   const setCover = (patch: Partial<Cover>) => setMixer((m) => ({ ...m, cover: { ...cover, ...(m.cover ?? {}), ...patch } }))
   const [coverEdit, setCoverEdit] = useState(false)
+  const [cropEdit, setCropEdit] = useState(false)
+  const [textEdit, setTextEdit] = useState(false)
+  // cover cũ trong bản nháp (trước khi có cắt khung) thiếu trường mới → bổ sung mặc định
+  if (cover.crop_box === undefined) Object.assign(cover, { crop_on: false, crop_box: [...FULL_CROP], crop_fill: true, burn_subtitles: true })
+  if (cover.auto_cover_text === undefined) Object.assign(cover, DEFAULT_TEXT_COVER)
   // Hiệu ứng: lấy từ cấu hình lúc tạo job, chỉnh ở tab "Hiệu ứng" (job cũ chưa có tuỳ chọn này vẫn bật được)
   const fx: Fx = mixer.fx ?? Object.fromEntries(Object.entries(DEFAULT_FX).map(([k, v]) => [k, jcfg[k] ?? v])) as Fx
   const setFx = (patch: Partial<Fx>) => setMixer((m) => ({ ...m, fx: { ...fx, ...(m.fx ?? {}), ...patch } }))
@@ -274,7 +299,13 @@ export function PostEditor({ job }: { job: JobDetail }) {
     try {
       await api.confirm(job.id, confirmed ? {
         confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking,
-          cover: mixer.cover ? { ...cover, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [] } : undefined, fx: mixer.fx },
+          cover: mixer.cover ? {
+            remove_old_sub: cover.remove_old_sub, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [], sub_margin_pct: cover.sub_margin_pct,
+            crop_box: cover.crop_on ? cover.crop_box : [], crop_fill: cover.crop_fill, burn_subtitles: cover.burn_subtitles, sub_in_cover: !!cover.sub_in_cover,
+            auto_cover_text: cover.auto_cover_text, text_scan_interval: cover.text_scan_interval, text_blur_strength: cover.text_blur_strength,
+            // tắt che chữ → danh sách rỗng (không che); bật mà chưa quét → null (app tự quét lúc dựng)
+            text_regions: !cover.auto_cover_text ? [] : cover.text_regions ? cover.text_regions.filter((r) => !r.off) : null,
+          } : undefined, fx: mixer.fx },
       } : { confirmed })
       toast.success(confirmed ? "Đang dựng video…" : "Đã huỷ job")
     } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
@@ -282,6 +313,19 @@ export function PostEditor({ job }: { job: JobDetail }) {
 
   const current = player.currentClip
   const currentScene = current ? scenes[current.index] : null
+  // đoạn hình gốc của từng cảnh (Reup kéo giãn theo lời) — để vùng chữ hiện đúng lúc & nhảy tới đúng chỗ
+  const spans: SceneSpan[] = useMemo(() => player.clips.map((c, k) => ({
+    n: k + 1, srcStart: c.scene.clip_start, srcEnd: c.scene.clip_start + c.dur * sourceRate(c, mode),
+  })), [player.clips, mode])
+  const srcTime = current ? current.scene.clip_start + (player.time - current.start) * sourceRate(current, mode) : 0
+  const currentSpan = current ? spans[player.clips.indexOf(current)] ?? null : null
+  const jumpToSource = (t: number) => {
+    const k = spans.findIndex((sp) => t >= sp.srcStart && t < sp.srcEnd)
+    if (k < 0) return
+    const c = player.clips[k]
+    stop(); player.pause()
+    player.seek(c.start + (t - spans[k].srcStart) / sourceRate(c, mode))
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -322,18 +366,24 @@ export function PostEditor({ job }: { job: JobDetail }) {
         <>
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(360px,430px)]">
             <Monitor videoPath={job.result.video_path} attachVideo={player.attachVideo} time={player.time} total={player.total}
-              subtitle={subVisible && currentScene && current
+              subtitle={subVisible && cover.burn_subtitles && currentScene && current
                 ? subtitleChunk(currentScene.subtitle || currentScene.voiceover || "", player.time - current.start, current.dur, subChars)
                 : ""}
               label={current ? `Cảnh ${player.clips.indexOf(current) + 1}/${player.clips.length}` : ""}
               aspect={rw && rh ? rw / rh : 16 / 9} subMarginPct={cover.sub_margin_pct}
+              subCenterPct={cover.remove_old_sub && cover.sub_in_cover ? subCoverCenter(cover.cover_boxes) : null}
               cover={cover.remove_old_sub || coverEdit ? cover.cover_boxes : undefined} coverEdit={coverEdit && tab === "cover"}
-              onCoverChange={(b) => setCover({ cover_boxes: b, remove_old_sub: true })} />
+              onCoverChange={(b) => setCover({ cover_boxes: b, remove_old_sub: true })}
+              crop={cover.crop_on || cropEdit ? cover.crop_box : null} cropFill={cover.crop_fill} cropEdit={cropEdit && tab === "cover"}
+              onCropChange={(b) => setCover({ crop_box: b, crop_on: true })}
+              textRegions={cover.auto_cover_text && cover.text_regions ? cover.text_regions : undefined} srcTime={srcTime}
+              textEdit={textEdit && tab === "cover"} textBlurPx={Math.round(cover.text_blur_strength * 0.55)}
+              onTextRegionChange={(i, r) => setCover({ text_regions: (cover.text_regions ?? []).map((x, j) => (j === i ? r : x)) })} />
 
             <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-col gap-0 border-l border-border">
               <TabsList className="m-2 grid w-auto grid-cols-6 [&>button]:gap-1 [&>button]:px-0.5 [&>button]:text-[12px] [&>button>svg]:hidden">
                 <TabsTrigger value="scene"><Scissors /> Cảnh</TabsTrigger>
-                <TabsTrigger value="cover"><SquareDashed /> Che sub</TabsTrigger>
+                <TabsTrigger value="cover"><SquareDashed /> Khung &amp; sub</TabsTrigger>
                 <TabsTrigger value="fx" className="gap-1"><Sparkles /> Hiệu ứng{fxSummary(fx) && <span className="size-1.5 rounded-full bg-primary" />}</TabsTrigger>
                 <TabsTrigger value="audio"><Music /> Âm thanh</TabsTrigger>
                 <TabsTrigger value="checks" className="gap-1">
@@ -348,7 +398,14 @@ export function PostEditor({ job }: { job: JobDetail }) {
                     update={edit} regenerate={regenerate} onPlay={(i) => { const c = player.clips.find((x) => x.index === i); stop(); if (c) player.play(c.start) }} />
                 </TabsContent>
                 <TabsContent value="cover">
-                  <CoverTab cover={cover} setCover={setCover} editing={coverEdit} setEditing={(v) => { setCoverEdit(v); if (v) player.pause() }} />
+                  <CoverTab cover={cover} setCover={setCover} editing={coverEdit} cropEditing={cropEdit} reup={mode === "reup"}
+                    textPanel={<TextRegionsPanel jobId={job.id} scenes={scenes} spans={spans} regions={cover.text_regions}
+                      interval={cover.text_scan_interval} onInterval={(v) => setCover({ text_scan_interval: v })}
+                      onRegions={(r) => setCover({ text_regions: r })} currentSpan={currentSpan} onJump={jumpToSource}
+                      editing={textEdit} setEditing={(v) => { setTextEdit(v); if (v) { setCoverEdit(false); setCropEdit(false); player.pause() } }} />}
+                    scanMinutes={mode === "reup" ? undefined : scenes.reduce((a, s) => a + Math.max(0, s.clip_end - s.clip_start), 0) / 60}
+                    setEditing={(v) => { setCoverEdit(v); if (v) { setCropEdit(false); player.pause() } }}
+                    setCropEditing={(v) => { setCropEdit(v); if (v) { setCoverEdit(false); player.pause() } }} />
                 </TabsContent>
                 <TabsContent value="fx">
                   <div className="flex flex-col gap-4 pt-1">
@@ -512,50 +569,89 @@ function TimeField({ label, value, onNudge, onSet }: { label: string; value: num
 }
 
 /* ─────────────────────────────── Tab: Âm thanh ─────────────────────────────── */
-/* ─────────── Tab Che sub: vùng làm mờ phụ đề cứng của video gốc + đặt phụ đề mới ─────────── */
-function CoverTab({ cover, setCover, editing, setEditing }: {
+/* ─────────── Tab Khung & sub: phụ đề mới, cắt khung hình gốc, che mờ chữ cứng ─────────── */
+function CoverTab({ cover, setCover, editing, setEditing, cropEditing, setCropEditing, reup, scanMinutes, textPanel }: {
   cover: Cover; setCover: (p: Partial<Cover>) => void; editing: boolean; setEditing: (v: boolean) => void
+  cropEditing: boolean; setCropEditing: (v: boolean) => void; reup: boolean; scanMinutes?: number; textPanel?: React.ReactNode
 }) {
   const boxes = cover.cover_boxes
   const setBox = (i: number, k: number, v: number) => setCover({ cover_boxes: boxes.map((b, j) => (j === i ? b.map((x, n) => (n === k ? v : x)) : b)) })
-  /** Phụ đề mới đè đúng vùng sub cũ: đáy chữ mới = đáy vùng che (nền chữ phủ luôn phần còn sót). */
-  const alignToBox = (b: CoverBox) => setCover({ sub_margin_pct: Math.max(1, Math.round((100 - b[1] - b[3]) * 10) / 10) })
-  useEffect(() => () => setEditing(false), []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { setEditing(false); setCropEditing(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const [cx, cy, cw, ch] = cover.crop_box
   return (
-    <div className="flex flex-col gap-4 pt-1">
-      <ToggleRow label="Che phụ đề gốc / logo" checked={cover.remove_old_sub} onChange={(v) => setCover({ remove_old_sub: v })}
-        desc="Làm mờ chữ cứng có sẵn trong video gốc. Màn xem trước hiện mờ y như lúc xuất." />
-      <Button variant={editing ? "default" : "outline"} onClick={() => setEditing(!editing)}>
-        <Move /> {editing ? "Xong — thoát sửa vùng che" : "Sửa vùng che trên màn hình"}
-      </Button>
-      {editing && <p className="-mt-2 text-[11px] text-muted-foreground">Kéo khung để dời · kéo ô vàng góc phải-dưới để đổi cỡ. Tua timeline tới cảnh có chữ gốc để căn cho khít.</p>}
+    <div className="flex flex-col gap-5 pt-1">
+      {/* Phụ đề mới */}
+      <section className="flex flex-col gap-3">
+        <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Phụ đề mới</h4>
+        <ToggleRow label="Hiện phụ đề tiếng Việt trên video" checked={cover.burn_subtitles} onChange={(v) => setCover({ burn_subtitles: v })}
+          desc="Tắt nếu chỉ cần lời đọc (vẫn xuất file .srt riêng để đăng kèm)." />
+        {cover.burn_subtitles && cover.remove_old_sub && (
+          <ToggleRow label="Nằm giữa vùng che phụ đề" checked={!!cover.sub_in_cover} onChange={(v) => setCover({ sub_in_cover: v })}
+            desc="Chữ mới đè đúng chỗ phụ đề cũ — kéo vùng che tới đâu, phụ đề theo tới đó." />
+        )}
+        {cover.burn_subtitles && !(cover.remove_old_sub && cover.sub_in_cover) && (
+          <Group label="Cách đáy" hint={`${cover.sub_margin_pct}%`}>
+            <Slider value={[cover.sub_margin_pct]} min={1} max={60} step={0.5} onValueChange={([v]) => setCover({ sub_margin_pct: v })} />
+          </Group>
+        )}
+      </section>
 
-      {boxes.map((b, i) => (
-        <div key={i} className={cn("flex flex-col gap-2 rounded-lg border border-border p-3", !cover.remove_old_sub && "opacity-50")}>
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] font-medium">Vùng {i + 1}</span>
-            <div className="flex gap-1">
-              <Button size="xs" variant="outline" title="Đặt phụ đề mới đè lên đúng vùng này" onClick={() => alignToBox(b)}>Đặt phụ đề vào đây</Button>
-              {boxes.length > 1 && <Button size="icon-xs" variant="ghost" title="Xoá vùng" onClick={() => setCover({ cover_boxes: boxes.filter((_, j) => j !== i) })}><Trash2 /></Button>}
-            </div>
-          </div>
-          {(["Ngang", "Dọc", "Rộng", "Cao"] as const).map((name, k) => (
-            <div key={name} className="grid grid-cols-[44px_1fr_44px] items-center gap-2 text-[11px] text-muted-foreground">
-              {name}
-              <Slider value={[b[k]]} min={k >= 2 ? 2 : 0} max={100 - (k >= 2 ? b[k - 2] : b[k + 2])} step={0.5} onValueChange={([v]) => setBox(i, k, v)} />
-              <span className="tabular text-right">{b[k].toFixed(1)}%</span>
-            </div>
-          ))}
+      {/* Cắt khung */}
+      <section className="flex flex-col gap-3 border-t border-border pt-4">
+        <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Cắt khung hình</h4>
+        <ToggleRow label="Cắt bỏ phần mép video gốc" checked={cover.crop_on} onChange={(v) => { setCover({ crop_on: v }); if (!v) setCropEditing(false) }}
+          desc="Cắt bỏ hẳn dải phụ đề cứng / logo / viền đen ở mép rồi phóng phần còn lại cho đầy khung — sạch hơn làm mờ." />
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant={cropEditing ? "default" : "outline"} size="sm" onClick={() => { setCover({ crop_on: true }); setCropEditing(!cropEditing) }}>
+            <Scissors /> {cropEditing ? "Xong" : "Chỉnh trên màn hình"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setCover({ crop_on: true, crop_box: [0, 0, 100, 84] })} title="Cắt bỏ 16% phía dưới — chỗ phụ đề cứng hay nằm">
+            Bỏ dải phụ đề dưới
+          </Button>
         </div>
-      ))}
-      <Button variant="ghost" size="sm" className="self-start" onClick={() => setCover({ cover_boxes: [...boxes, [70, 4, 26, 10]], remove_old_sub: true })}>
-        <Plus /> Thêm vùng (logo, chữ góc…)
-      </Button>
+        {cropEditing && <p className="-mt-1 text-[11px] text-muted-foreground">Kéo 4 góc / 4 cạnh để đổi khung, kéo giữa để dời. Phần tối bên ngoài sẽ bị cắt bỏ.</p>}
+        {cover.crop_on && <>
+          <Segmented size="sm" value={cover.crop_fill ? "fill" : "fit"} onChange={(v) => setCover({ crop_fill: v === "fill" })}
+            items={[{ value: "fill", label: "Phủ kín khung" }, { value: "fit", label: "Giữ trọn (viền đen)" }]} />
+          <p className="text-[11px] text-muted-foreground">
+            Giữ lại {Math.round(cw)}% × {Math.round(ch)}% hình gốc (từ {Math.round(cx)}%, {Math.round(cy)}%).
+            {cover.crop_fill ? " Phủ kín: phóng to cho đầy khung, có thể cắt thêm chút mép nếu khác tỉ lệ." : " Giữ trọn: thấy hết phần đã chọn, thêm viền đen."}
+            {" "}<button className="text-primary hover:underline" onClick={() => setCover({ crop_box: [...FULL_CROP] })}>Đặt lại</button>
+          </p>
+        </>}
+      </section>
 
-      <Group label="Phụ đề mới cách đáy" hint={`${cover.sub_margin_pct}%`}>
-        <Slider value={[cover.sub_margin_pct]} min={1} max={60} step={0.5} onValueChange={([v]) => setCover({ sub_margin_pct: v })} />
-      </Group>
-      <p className="text-[11px] text-muted-foreground">Mẹo: vùng che phủ kín chữ gốc rồi bấm <b>Đặt phụ đề vào đây</b> — phụ đề tiếng Việt nằm đè đúng chỗ, nền chữ che nốt phần còn sót.</p>
+      {/* Che mờ */}
+      <section className="flex flex-col gap-3 border-t border-border pt-4">
+        <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Che mờ chữ cứng / logo</h4>
+        <TextCoverOptions value={cover} onChange={(p) => setCover(p)} reup={reup} minutes={scanMinutes} />
+        {cover.auto_cover_text && textPanel}
+        <ToggleRow label="Làm mờ vùng có chữ gốc" checked={cover.remove_old_sub} onChange={(v) => setCover({ remove_old_sub: v })}
+          desc="Dùng khi không muốn cắt hình: làm mờ đúng vùng chữ cứng. Màn xem trước hiện mờ y như lúc xuất." />
+        <Button variant={editing ? "default" : "outline"} size="sm" onClick={() => setEditing(!editing)}>
+          <Move /> {editing ? "Xong — thoát sửa vùng che" : "Sửa vùng che trên màn hình"}
+        </Button>
+        {boxes.map((b, i) => (
+          <div key={i} className={cn("flex flex-col gap-2 rounded-lg border border-border p-3", !cover.remove_old_sub && "opacity-50")}>
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-medium">Vùng {i + 1}</span>
+              <div className="flex gap-1">
+                {boxes.length > 1 && <Button size="icon-xs" variant="ghost" title="Xoá vùng" onClick={() => setCover({ cover_boxes: boxes.filter((_, j) => j !== i) })}><Trash2 /></Button>}
+              </div>
+            </div>
+            {(["Ngang", "Dọc", "Rộng", "Cao"] as const).map((name, k) => (
+              <div key={name} className="grid grid-cols-[44px_1fr_44px] items-center gap-2 text-[11px] text-muted-foreground">
+                {name}
+                <Slider value={[b[k]]} min={k >= 2 ? 2 : 0} max={100 - (k >= 2 ? b[k - 2] : b[k + 2])} step={0.5} onValueChange={([v]) => setBox(i, k, v)} />
+                <span className="tabular text-right">{b[k].toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        ))}
+        <Button variant="ghost" size="sm" className="self-start" onClick={() => setCover({ cover_boxes: [...boxes, [70, 4, 26, 10]], remove_old_sub: true })}>
+          <Plus /> Thêm vùng (logo, chữ góc…)
+        </Button>
+      </section>
     </div>
   )
 }

@@ -1,4 +1,4 @@
-export type JobKind = "review" | "reup" | "srt" | "burn" | "download"
+export type JobKind = "review" | "reup" | "vietsub" | "srt" | "burn" | "download"
 export type JobStatus = "queued" | "running" | "waiting" | "done" | "error" | "cancelled"
 
 export type Scene = {
@@ -7,6 +7,7 @@ export type Scene = {
   clip_start: number
   clip_end: number
   orig_text?: string
+  speaker_id?: number          // lồng tiếng: nhân vật nói câu này (-1 = không phải lời thoại, không lồng tiếng)
   description?: string
   tts_path?: string
   tts_duration?: number
@@ -26,7 +27,11 @@ export type JobResult = {
   publish?: PublishPack
   items?: DownloadItem[]      // job tải video
   out_dir?: string
+  cast?: CastMember[]         // lồng tiếng: nhân vật AI nhận ra + giọng đang đọc
+  dub_cast?: { labels: number[]; speakers: Record<string, { name?: string; gender?: string; count?: number }> }
 }
+
+export type CastMember = { id: number; name: string; gender: "male" | "female"; count: number; voice: string; samples: string[] }
 
 /** Bài đăng AI theo nền tảng (backend jobs/publish.py). */
 export type PublishPost = {
@@ -116,6 +121,9 @@ export type SubStyle = {
   sub_margin_v_pct: number
   sub_line_spacing: number
   sub_text_transform: string
+  sub_border_color?: string
+  /** làm mờ hình ngay sau dòng chữ (khung vừa khít chữ) */
+  sub_bg_blur?: boolean
 }
 
 export type Options = {
@@ -155,4 +163,24 @@ export type SystemInfo = {
 export type AiEdit = { id: number; voiceover?: string; subtitle?: string; exclude: boolean; reason: string }
 
 /** Font cho phụ đề (GET /api/fonts). vi=false → thiếu dấu tiếng Việt, chữ sẽ lỗi. */
-export type FontInfo = { family: string; vi: boolean; styles: string[]; source: "system" | "user" | "custom"; path: string }
+export type FontInfo = { family: string; vi: boolean; styles: string[]; source: "system" | "user" | "custom" | "bundled"; path: string }
+
+/** Cài VieNeu ngay trong app: môi trường riêng + model (~1.2 GB). */
+export type VieneuStatus = {
+  installed: boolean
+  available: boolean
+  running: boolean
+  step: "" | "env" | "pip" | "model" | "test" | "done"
+  progress: number
+  message: string
+  error: string
+  log: string[]
+  steps: { id: string; label: string }[]
+  size_mb: number
+  info?: { version?: string; at?: string; size_mb?: number; test_seconds?: number }
+}
+
+/** Vùng chữ cần che (AI quét hoặc thêm tay): box = [x1, y1, x2, y2] theo tỉ lệ 0-1 của hình GỐC, thời gian = giây trên video gốc. */
+/** n = cảnh (1-based) chứa vùng; g = vùng gốc AI tìm (các mảnh cắt theo cảnh của cùng 1 vùng có chung g) */
+export type TextRegion = { box: number[]; t_start: number; t_end: number; off?: boolean; manual?: boolean; n?: number; g?: number }
+export type TextScanState = { running: boolean; done: number; total: number; regions: TextRegion[] | null; error: string }
