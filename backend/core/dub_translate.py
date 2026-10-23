@@ -13,6 +13,9 @@ Quy tắc:
 2. Xưng hô đúng vai và quan hệ giữa người nói với người nghe (ta/ngươi, tôi/cậu, anh/em, con/cha, tiểu thư/ta…), nhất quán cả phim.
 3. Văn nói tự nhiên như phim lồng tiếng Việt, đúng giọng nhân vật (nam / nữ, già / trẻ, sang / bình dân). Tên riêng đọc Hán Việt.
 4. Dòng "ai" là "(không phải thoại)" — tiếng động, lời bài hát — dịch thật ngắn.
+5. Mỗi câu là ĐÚNG 1 dòng phụ đề trên hình (không có dấu câu), 1 câu nói hay bị ngắt sang 2–3 dòng liền nhau. Đọc cả các dòng
+   liền nhau để hiểu đúng ý, nhưng mỗi "viet" chỉ dịch ĐÚNG phần của dòng đó (không dồn ý dòng sau lên, không lặp ý dòng trước)
+   — đọc nối các dòng thành câu tiếng Việt tự nhiên; mỗi dòng được lồng tiếng & hiện phụ đề đúng lúc dòng gốc hiện.
 {chars}{context}{glossary}{prev}
 Làm 2 bước cho TỪNG câu (như biên dịch chuyên nghiệp): "sat" = dịch SÁT NGHĨA lời gốc (đủ ý, chưa cần gọn);
 rồi tự soát lại "sat" (đúng nghĩa? đúng xưng hô? tự nhiên như người Việt nói?) và viết "viet" = câu lồng tiếng cuối cùng, gọn theo "toi_da".
@@ -65,7 +68,8 @@ def budgets(segments, wps=WPS, tolerance=1.5):
     for (i, s) in enumerate(segments):
         nxt = segments[i + 1]['start'] if i + 1 < len(segments) else s['end'] + tolerance
         room = max(0.4, s['end'] - s['start'] + min(max(0.0, nxt - s['end']), tolerance))
-        out.append(max(3, int(room * wps)))        # ≥ 3 từ: ít hơn AI phải bóp câu đến sai nghĩa
+        # đọc ở ~1.1× (giọng tua tối đa 1.2× nên còn dư chút) — ≥ 3 từ: ít hơn AI phải bóp câu đến sai nghĩa
+        out.append(max(3, int(room * 1.1 * wps)))
     return out
 
 

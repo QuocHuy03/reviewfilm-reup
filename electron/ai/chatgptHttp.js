@@ -18,6 +18,8 @@
 // sang ChatGPTWeb (trình duyệt) khi đường này bị chặn — chatgptClient.js làm đúng việc đó.
 
 import { randomUUID } from 'crypto';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { basename, join } from 'path';
 import { buildProofToken, solvePow, verifyPow, turnstileFailure } from './chatgptProof.js';
 import { ChatGPTError, classifyChatGPTError, decodeStream, chatBody } from './chatgptWeb.js';
 
@@ -150,24 +152,26 @@ export class ChatGPTHttp {
     return { powAnswer, tsAnswer, finalToken };
   }
 
-  async chat(message, { convId = null, parentMessageId = null, model = null } = {}) {
+  /** Header đã gắn Bearer — dùng chung cho chat, upload và tải ảnh. */
+  async _authHeaders() {
     if (!this.usable) throw new ChatGPTError('Chưa có cookie chatgpt.com — đăng nhập ở trang Accounts.', 'auth', 0);
     const boot = await this.bootstrap();
     const clientVersion = boot?.clientVersion || boot?.client_version || '';
     const clientBuild = String(boot?.buildNumber || boot?.build_number || '');
     const accessToken = await this.accessToken();
-    const sessionId = randomUUID();
-
     const h = {
       ...baseHeaders({
         cookies: this.cookies, userAgent: this.userAgent, deviceId: this.deviceId,
-        clientBuild, clientVersion, sessionId,
+        clientBuild, clientVersion, sessionId: randomUUID(),
       }),
       Authorization: `Bearer ${accessToken}`,
     };
+    return { h, clientVersion };
+  }
 
+  /** Qua sentinel rồi gửi một lượt hội thoại. Trả về văn bản SSE thô. */
+  async _send(h, clientVersion, body, label) {
     const { powAnswer, tsAnswer, finalToken } = await this.sentinel(h, clientVersion);
-
     const r = await this._req(CHAT, {
       method: 'POST',
       headers: {
@@ -179,17 +183,163 @@ export class ChatGPTHttp {
         'x-oai-turn-trace-id': randomUUID(),
         'x-openai-target-path': CHAT, 'x-openai-target-route': CHAT,
       },
-      body: JSON.stringify(chatBody(message, model || this.model, convId, parentMessageId)),
-      label: 'gửi chat',
+      body: JSON.stringify(body),
+      label,
     });
+    return r.text;
+  }
 
-    const dec = decodeStream(r.text);
+  async chat(message, { convId = null, parentMessageId = null, model = null } = {}) {
+    const { h, clientVersion } = await this._authHeaders();
+    const text = await this._send(h, clientVersion, chatBody(message, model || this.model, convId, parentMessageId), 'gửi chat');
+    const dec = decodeStream(text);
     if (!dec.message.trim() && dec.error) {
       throw new ChatGPTError(`chatgpt.com báo lỗi: ${JSON.stringify(dec.error).slice(0, 300)}`, 'stream', 200);
     }
     return { message: dec.message, convId: dec.conversationId, messageId: dec.messageId, finish: dec.finish, model: dec.model };
   }
 
+  /**
+   * Đưa một ảnh trên máy lên chatgpt.com để làm tham chiếu — đúng ba bước web app làm khi kéo ảnh vào
+   * ô chat: xin chỗ (`/files`) → PUT thẳng lên blob storage → báo đã xong (`/files/{id}/uploaded`).
+   */
+  async uploadImage(h, filePath) {
+    const buf = readFileSync(filePath);
+    const info = imageInfo(buf);
+    if (!info) throw new ChatGPTError(`Không đọc được ảnh tham chiếu (chỉ nhận PNG/JPEG/WEBP): ${filePath}`, 'input', 0);
+    const name = basename(filePath);
+    const r1 = await this._req('/backend-api/files', {
+      method: 'POST', headers: h, label: `xin chỗ upload ${name}`,
+      body: JSON.stringify({ file_name: name, file_size: buf.length, use_case: 'multimodal', width: info.width, height: info.height }),
+    });
+    const { file_id: id, upload_url: uploadUrl } = JSON.parse(r1.text);
+    if (!id || !uploadUrl) throw new ChatGPTError(`[upload ${name}] chatgpt.com không trả chỗ upload`, 'upload', r1.status);
+    // Blob storage của Azure, không phải chatgpt.com — KHÔNG gửi cookie/Bearer sang đây.
+    const put = await fetch(uploadUrl, {
+      method: 'PUT', body: buf,
+      headers: { 'x-ms-blob-type': 'BlockBlob', 'x-ms-version': '2020-04-08', 'Content-Type': info.mime },
+    });
+    if (put.status >= 300) throw new ChatGPTError(`[upload ${name}] blob storage trả HTTP ${put.status}`, 'upload', put.status);
+    await this._req(`/backend-api/files/${id}/uploaded`, { method: 'POST', headers: h, body: '{}', label: `xác nhận upload ${name}` });
+    return { id, name, size: buf.length, ...info };
+  }
+
+  /**
+   * Tạo ảnh (kèm 0..n ảnh tham chiếu) và tải kết quả về `outDir`.
+   *
+   * Ảnh kết quả là message của `tool` trong hội thoại, part `image_asset_pointer` dạng `sediment://`.
+   * Thường đã có ngay khi luồng SSE đóng, nhưng vẫn thăm dò thêm vì tool có thể ghi muộn hơn.
+   * Link tải (`estuary/content`) đòi cookie + Bearer — thiếu là nhận về JSON "access denied" 39 byte.
+   *
+   * @returns {Promise<{files: string[], convId: string, text: string}>}
+   */
+  async image(prompt, { refs = [], outDir, model = 'auto', pollMs = 5000, timeoutMs = 300000 } = {}) {
+    if (!outDir) throw new ChatGPTError('Thiếu outDir để lưu ảnh.', 'input', 0);
+    const { h, clientVersion } = await this._authHeaders();
+    const ups = await Promise.all(refs.map((p) => this.uploadImage(h, p)));
+
+    const body = chatBody(prompt, model);
+    const msg = body.messages[0];
+    if (ups.length) {
+      msg.content = {
+        content_type: 'multimodal_text',
+        parts: [
+          ...ups.map((u) => ({ content_type: 'image_asset_pointer', asset_pointer: `file-service://${u.id}`,
+            size_bytes: u.size, width: u.width, height: u.height })),
+          String(prompt ?? ''),
+        ],
+      };
+      msg.metadata.attachments = ups.map((u) => ({ id: u.id, size: u.size, name: u.name, mime_type: u.mime, width: u.width, height: u.height }));
+    }
+    body.system_hints = ['picture_v2'];
+    msg.metadata.system_hints = ['picture_v2'];
+
+    const text = await this._send(h, clientVersion, body, `tạo ảnh (${ups.length} tham chiếu)`);
+    const dec = decodeStream(text);
+    if (!dec.conversationId) {
+      throw new ChatGPTError(`chatgpt.com không mở hội thoại tạo ảnh: ${JSON.stringify(dec.error || '').slice(0, 300)}`, 'stream', 200);
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let pointers = [];
+    while (true) {
+      const r = await this._req(`/backend-api/conversation/${dec.conversationId}`, { headers: h, label: 'đọc hội thoại tạo ảnh' });
+      pointers = toolImagePointers(JSON.parse(r.text));
+      if (pointers.length || Date.now() > deadline) break;
+      await new Promise((res) => setTimeout(res, pollMs));
+    }
+    // Không có ảnh mà model trả lời bằng chữ — thường là từ chối nội dung. Đưa nguyên câu đó lên.
+    if (!pointers.length) {
+      throw new ChatGPTError(`chatgpt.com không trả ảnh. ${dec.message.trim().slice(0, 400) || 'Hết thời gian chờ.'}`, 'noimage', 200);
+    }
+
+    mkdirSync(outDir, { recursive: true });
+    const files = [];
+    for (const ptr of pointers) {
+      const fid = ptr.split('://')[1];
+      const r = await this._req(`/backend-api/files/download/${fid}?conversation_id=${dec.conversationId}&inline=false`,
+        { headers: h, label: 'lấy link tải ảnh' });
+      const url = JSON.parse(r.text)?.download_url;
+      if (!url) throw new ChatGPTError(`[tải ảnh] không có download_url cho ${fid}`, 'download', r.status);
+      const img = await fetch(url, { headers: { Cookie: this.cookies, 'User-Agent': this.userAgent, Authorization: h.Authorization, Referer: `${BASE}/` } });
+      const buf = Buffer.from(await img.arrayBuffer());
+      if (img.status >= 400 || !String(img.headers.get('content-type') || '').startsWith('image/')) {
+        throw new ChatGPTError(`[tải ảnh] HTTP ${img.status}: ${buf.toString('utf8', 0, 200)}`, 'download', img.status);
+      }
+      const ext = (imageInfo(buf)?.mime || 'image/png').split('/')[1].replace('jpeg', 'jpg');
+      const out = join(outDir, `${fid}.${ext}`);
+      writeFileSync(out, buf);
+      files.push(out);
+    }
+    return { files, convId: dec.conversationId, text: dec.message };
+  }
+
   /** Không có trình duyệt nào để đóng — có mặt để nơi gọi dùng chung một khuôn với ChatGPTWeb. */
   async close() {}
+}
+
+/** Con trỏ ảnh do tool tạo ra (bỏ qua ảnh tham chiếu người dùng gửi lên), theo thứ tự thời gian. */
+export function toolImagePointers(conv) {
+  const nodes = Object.values(conv?.mapping || {})
+    .map((n) => n?.message)
+    .filter((m) => m?.author?.role === 'tool')
+    .sort((a, b) => (a.create_time || 0) - (b.create_time || 0));
+  const out = [];
+  for (const m of nodes) {
+    for (const p of m.content?.parts || []) {
+      const ptr = p?.content_type === 'image_asset_pointer' ? p.asset_pointer : '';
+      if (ptr && !out.includes(ptr)) out.push(ptr);
+    }
+  }
+  return out;
+}
+
+/** Kích thước + mime đọc từ header file — chatgpt.com đòi width/height lúc xin chỗ upload. */
+export function imageInfo(buf) {
+  if (buf.length > 24 && buf.readUInt32BE(0) === 0x89504e47) {
+    return { mime: 'image/png', width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length > 30 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+    const kind = buf.toString('ascii', 12, 16);
+    if (kind === 'VP8X') return { mime: 'image/webp', width: 1 + buf.readUIntLE(24, 3), height: 1 + buf.readUIntLE(27, 3) };
+    if (kind === 'VP8L') {
+      const b = buf.readUInt32LE(21);
+      return { mime: 'image/webp', width: 1 + (b & 0x3fff), height: 1 + ((b >> 14) & 0x3fff) };
+    }
+    return { mime: 'image/webp', width: buf.readUInt16LE(26) & 0x3fff, height: buf.readUInt16LE(28) & 0x3fff };
+  }
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    // Lần theo các segment tới SOFn — chỗ duy nhất JPEG ghi kích thước.
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) { i++; continue; }
+      const marker = buf[i + 1];
+      const len = buf.readUInt16BE(i + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { mime: 'image/jpeg', height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+      }
+      i += 2 + len;
+    }
+  }
+  return null;
 }

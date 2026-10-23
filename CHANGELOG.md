@@ -12,7 +12,16 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-10-23
+
+### Added
+- 41 giọng tiếng Việt mới của CapCut (tổng 50 giọng: người kể chuyện, chàng trai / cô gái nhiều sắc thái, giọng ElevenLabs Sài Nữ / Hà Nữ / Duy Bắc / Nam Trầm…), có sẵn file nghe thử. Không cần cookie; nhóm giọng mà API web từ chối tự đi qua API bản PC của CapCut.
+- Tải phim ngắn (DramaBox, GoodShort, ShortMax, NetShort, FreeReels, Hồng Quả, KissKH…): 1 link = cả bộ phim, chọn tập bằng `#ep=1-10,15`, tải 3 tập song song, kèm phụ đề nếu nền tảng có.
+- Tải video xong tạo luôn phụ đề tiếng gốc + bản dịch Việt bằng CapCut (chọn ngôn ngữ gốc ở trang Tải video).
+
 ### Changed
+- Dịch phụ đề: SRT gốc đọc từ phụ đề trên hình được làm sạch trước khi phân vai / dịch (gộp dòng đọc lỗi lúc chữ mờ dần); mỗi dòng phụ đề gốc = 1 câu lồng tiếng, phụ đề Việt hiện / tắt đúng giờ dòng Trung.
+- Che phụ đề cũ: xoá sạch nét chữ Trung (phụ đề + chữ / logo 4 góc), lấp thêm đúng khung từng câu lúc câu hiện — hết vệt chữ sót trên nền sáng.
 - Tốc độ đọc lồng tiếng theo từng đoạn hội thoại (ngắt ở khoảng lặng ≥ 1.5s): mỗi đoạn chọn tốc độ thấp nhất (1.00–1.20×) mà giọng không trễ quá 0.25s, cùng 1 nhịp trong đoạn — phim dài không còn trễ dồn (bản cả phim chung 1 tốc độ trễ tới ~4.5s).
 - Đã làm mờ dải phụ đề cũ thì phụ đề Việt chỉ chữ trắng viền đen, không ô nền đen (hết mảng xám xịt).
 
@@ -205,7 +214,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.7...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.7...v2.5.0
 [2.4.7]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.6...v2.4.7
 [2.4.6]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...v2.4.6
 [2.4.5]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.4...v2.4.5

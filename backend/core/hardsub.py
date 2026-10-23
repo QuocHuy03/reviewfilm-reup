@@ -70,7 +70,7 @@ def _cache_file(video, band, step):
     import os
     from app.config import DATA_DIR
     st = os.stat(video)
-    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 1])
+    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 2])
     d = os.path.join(DATA_DIR, 'cache', 'hardsub')
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, hashlib.md5(key.encode()).hexdigest() + '.json')
@@ -141,7 +141,15 @@ def _extract(video, band, step, log, should_stop, progress):
                 n_ocr += 1
                 (rec, _) = ocr.text_rec(crops) if crops else ([], 0)
                 text = _clean(''.join(txt for (txt, sc) in rec if sc > 0.5))
-            frames.append((t, text))
+            box = None
+            if text:                                 # khung bao nét chữ của câu (để che đúng chỗ nếu xoá nét còn sót)
+                rows = np.where(pix.sum(axis=1) >= 3)[0]
+                cols = np.where(pix.sum(axis=0) > 0)[0]
+                if len(rows) and len(cols):
+                    (bw_, bh_) = (band[2] - band[0], band[3] - band[1])
+                    box = (band[0] + cols[0] / W * bw_, band[1] + rows[0] / H * bh_,
+                           band[0] + (cols[-1] + 1) / W * bw_, band[1] + (rows[-1] + 1) / H * bh_)
+            frames.append((t, text, box))
             (prev_sig, prev_text) = (sig, text)
             if progress and k % 50 == 0:
                 progress(min(100, int(k * 100 / total)))
@@ -158,21 +166,25 @@ def _extract(video, band, step, log, should_stop, progress):
         return []
     # gộp khung liên tiếp cùng câu → dòng phụ đề
     cues = []
-    for (t, text) in frames:
+    for (t, text, box) in frames:
         if not text:
             continue
         c = cues[-1] if cues else None
         if c and _same(text, c['text']) and t - c['end'] <= step * 1.5 + 1e-6:
             c['end'] = t + step
             c['votes'][text] = c['votes'].get(text, 0) + 1
+            if box:
+                c['box'] = box if not c.get('box') else (min(c['box'][0], box[0]), min(c['box'][1], box[1]),
+                                                          max(c['box'][2], box[2]), max(c['box'][3], box[3]))
         else:
-            cues.append({'start': t, 'end': t + step, 'text': text, 'votes': {text: 1}})
+            cues.append({'start': t, 'end': t + step, 'text': text, 'votes': {text: 1}, 'box': box})
     # chữ đứng yên quá lâu (watermark / tiêu đề nằm trong dải) hoặc lặp lại khắp phim → không phải lời thoại
     seen = {}
     for c in cues:
         c['text'] = max(c['votes'], key=c['votes'].get)       # bản đọc gặp nhiều nhất (OCR khung lẻ hay sai 1–2 chữ)
         seen[c['text']] = seen.get(c['text'], 0) + 1
-    out = [{'start': round(c['start'], 2), 'end': round(c['end'], 2), 'text': c['text']} for c in cues
+    out = [{'start': round(c['start'], 2), 'end': round(c['end'], 2), 'text': c['text'],
+            **({'box': [round(float(v), 4) for v in c['box']]} if c.get('box') else {})} for c in cues
            if c['end'] - c['start'] >= 0.3 and c['end'] - c['start'] <= 20 and seen[c['text']] <= 6]
     log(f'   Đọc phụ đề cứng xong: {len(out)} câu (OCR {n_ocr} lần / {len(frames)} khung)', 'ok')
     return out

@@ -74,8 +74,8 @@ export const api = {
   presets: () => request<Preset[]>("GET", "/api/presets"),
   savePreset: (name: string, mode: string, cfg: Record<string, unknown>) => request<Preset[]>("PUT", "/api/presets", { name, mode, cfg }),
   deletePreset: (name: string) => request<Preset[]>("DELETE", `/api/presets/${encodeURIComponent(name)}`),
-  createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}) =>
-    request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles }),
+  createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}, subs = "") =>
+    request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles, subs }),
   downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
   thumbUrl: (url: string) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}`,
   recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),

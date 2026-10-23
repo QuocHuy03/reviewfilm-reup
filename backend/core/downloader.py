@@ -5,6 +5,8 @@
                     Lỗi thì lùi về yt-dlp.
   Nền tảng khác   → yt-dlp (Bilibili, Weibo, AcFun, YouTube, Facebook, Instagram, X… hơn 1.800 trang).
   Link CDN / .mp4 → tải thẳng bằng HTTP.
+  Phim ngắn       → core/drama_downloader (DramaBox, GoodShort, ShortMax, NetShort, FreeReels, KissKH, Hồng Quả…):
+                    1 link = cả bộ, chọn tập bằng đuôi "#ep=1-10,15"; mỗi tập tải thẳng (mp4) hoặc qua ffmpeg (m3u8).
 """
 import json
 import os
@@ -121,6 +123,9 @@ def detect_platform(url):
     host = (urllib.parse.urlparse(url).hostname or '').lower()
     if is_direct_media(url):
         return 'direct', 'Link video trực tiếp'
+    dp = drama_platform(url)
+    if dp:
+        return 'drama', dp.display_name
     for (key, (label, domains)) in PLATFORMS.items():
         if any(host == d or host.endswith('.' + d) for d in domains):
             return key, label
@@ -203,6 +208,8 @@ def probe(url):
     if is_direct_media(url):
         return _probe_direct(url)
     (key, label) = detect_platform(url)
+    if key == 'drama':
+        return _probe_drama(url, label)
     if key in DTK_PLATFORMS:
         try:
             v = dtk_resolve(url)
@@ -281,6 +288,16 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
     url = normalize(url)
     if is_direct_media(url):
         return download_direct(url, output_dir, title, log_fn, progress_fn, should_stop)
+    if detect_platform(url)[0] == 'drama':     # 1 file → tập đầu tiên xem được (trong các tập đã chọn bằng #ep=)
+        try:
+            s, eps = drama_episodes(url)
+        except Exception as e:
+            raise RuntimeError(f'Không đọc được phim: {str(e)[:160]}')
+        ep = next((e for e in eps if not e.locked), None)
+        if not ep:
+            raise RuntimeError('Không có tập nào tải được (tập bị khoá hoặc sai số tập).')
+        log_fn(f'   {s.name} · tập {ep.num}')
+        return download_drama_episode(s, ep, output_dir, log_fn, progress_fn, should_stop)
     if detect_platform(url)[0] in DTK_PLATFORMS:
         try:
             v = dtk_resolve(url)
@@ -350,6 +367,147 @@ def download_video(url, output_dir, log_fn=print):
     except RuntimeError as e:
         log_fn(f'   [LỖI] {e}')
         return None
+
+
+# ── Phim ngắn (core/drama_downloader): 1 link = cả bộ phim, tải từng tập ──
+_EP_RE = re.compile(r'#ep=([\d,\s-]*)$', re.I)
+_SERIES = {}                       # link phim → (thời điểm, Series) — xem trước rồi tải không phải đọc lại
+
+
+def drama_platform(url):
+    """Nền tảng phim ngắn xử lý được link này (theo tên miền), không thì None."""
+    host = (urllib.parse.urlparse(url).hostname or '').lower()
+    if not host:
+        return None
+    try:
+        from core.drama_downloader import detect_platform as _detect
+    except ImportError:            # thiếu thư viện cryptography
+        return None
+    return _detect(host)
+
+
+def split_eps(url):
+    """'https://…/phim#ep=1-10,15' → ('https://…/phim', '1-10,15')."""
+    m = _EP_RE.search(url)
+    return (url[:m.start()], m.group(1).replace(' ', '')) if m else (url, '')
+
+
+def parse_eps(spec):
+    """'1-10,15' → {1..10, 15}; rỗng → None (tất cả tập)."""
+    want = set()
+    for part in (spec or '').split(','):
+        a, _, b = part.partition('-')
+        if a.isdigit():
+            want.update(range(int(a), int(b) + 1) if b.isdigit() else [int(a)])
+    return want or None
+
+
+def drama_series(url, max_age=1200):
+    import time
+    from core.drama_downloader import load_series
+    hit = _SERIES.get(url)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    s = load_series(url)
+    _SERIES[url] = (time.time(), s)
+    return s
+
+
+def drama_episodes(url):
+    """Link phim (có thể kèm #ep=…) → (Series, các tập được chọn)."""
+    base, spec = split_eps(url)
+    s = drama_series(base)
+    want = parse_eps(spec)
+    return s, [e for e in s.episodes if not want or e.num in want]
+
+
+def _probe_drama(url, label):
+    base, spec = split_eps(url)
+    info = {'url': base, 'platform': 'drama', 'platform_label': label}
+    try:
+        s = drama_series(base)
+    except Exception as e:
+        return {**info, 'error': f'Không đọc được phim: {str(e)[:160]}'}
+    if not s.episodes:
+        return {**info, 'error': 'Không tìm thấy tập nào — sai link, phim bị gỡ hoặc nền tảng đổi API.'}
+    return {**info, 'title': s.name, 'thumbnail': s.cover, 'uploader': f'{s.accessible_count}/{s.episode_count} tập xem được',
+            'episodes': [{'num': e.num, 'title': e.title, 'locked': e.locked} for e in s.episodes], 'ep': spec}
+
+
+def _download_hls(url, path, log_fn, should_stop=None):
+    """Luồng m3u8 → .mp4 bằng ffmpeg (chép nguyên luồng, không mã hoá lại)."""
+    import time
+    from core.utils import FFMPEG_EXE
+    part = path + '.part.mp4'
+    log_fn('   Luồng m3u8 — ghép bằng ffmpeg...')
+    p = subprocess.Popen([FFMPEG_EXE, '-y', '-loglevel', 'error', '-user_agent', UA, '-i', url, '-c', 'copy', '-bsf:a', 'aac_adtstoasc', part],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
+    register_process(p)
+    try:
+        while p.poll() is None:
+            if should_stop and should_stop():
+                p.kill()
+                p.wait()
+                raise RuntimeError('Đã huỷ.')
+            time.sleep(0.5)
+        if p.returncode != 0 or not os.path.isfile(part):
+            raise RuntimeError(f'ffmpeg không tải được luồng m3u8: {(p.stderr.read() or "").strip()[-200:]}')
+        os.replace(part, path)
+        return path
+    finally:
+        unregister_process(p)
+        if os.path.exists(part):
+            os.remove(part)
+
+
+def _save_drama_subs(ep, video_path, log_fn):
+    """Phụ đề đi kèm tập (nếu nền tảng có) → '<tên video>.<ngôn ngữ>.srt' cạnh video."""
+    import base64
+    import requests
+    from core.drama_downloader import vtt_to_srt
+    stem = os.path.splitext(video_path)[0]
+    for sub in ep.subs:
+        try:
+            if sub.url.startswith('data:'):
+                raw = base64.b64decode(sub.url.split(',', 1)[1])
+            else:
+                r = requests.get(sub.url, headers={'User-Agent': UA}, timeout=30)
+                r.raise_for_status()
+                raw = r.content
+            text = raw.decode('utf-8-sig', errors='replace')
+            if 'WEBVTT' in text[:50] or sub.url.split('?')[0].lower().endswith('.vtt'):
+                text = vtt_to_srt(text)
+            lang = re.sub(r'[^\w-]+', '', sub.lang)[:20] or 'sub'
+            with open(f'{stem}.{lang}.srt', 'w', encoding='utf-8') as f:
+                f.write(text)
+        except Exception as e:
+            log_fn(f'   [WARN] Phụ đề {sub.lang}: {str(e)[:120]}')
+
+
+def download_drama_episode(series, ep, output_dir, log_fn=print, progress_fn=None, should_stop=None):
+    """Tải 1 tập phim ngắn vào '<output_dir>/<tên phim>/EP01.mp4' (+ phụ đề). Tập đã tải rồi thì bỏ qua."""
+    from core.drama_downloader import get_video_url
+    folder = os.path.join(output_dir, _safe_name(series.name))
+    name = f'EP{ep.num:0{3 if len(series.episodes) >= 100 else 2}d}'
+    path = os.path.join(folder, name + '.mp4')
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        log_fn('   Đã có sẵn — bỏ qua')
+        return path
+    if ep.locked:
+        raise RuntimeError('Tập này bị khoá (phải trả phí trên nền tảng) — không tải được.')
+    try:
+        stream = get_video_url(ep, series.platform)
+    except Exception:
+        stream = None
+    if not stream:
+        raise RuntimeError('Không lấy được link video của tập này (link hết hạn / nền tảng đổi API) — thử lại sau.')
+    os.makedirs(folder, exist_ok=True)
+    if '.m3u8' in stream.split('?')[0].lower():
+        path = _download_hls(stream, path, log_fn, should_stop)
+    else:
+        path = download_direct(stream, folder, name, log_fn, progress_fn, should_stop)
+    _save_drama_subs(ep, path, log_fn)
+    return path
 
 
 def tool_version():

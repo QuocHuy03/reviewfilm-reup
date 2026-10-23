@@ -3,6 +3,7 @@
 //   GET  /rf/status               → { chatgpt: bool, gemini: bool }
 //   POST /v1/chat/completions     → khuôn OpenAI. model: "chatgpt" | "gpt-*" | "gemini*" | "auto"
 //   POST /rf/gemini/files         → { prompt, files: [đường dẫn ảnh/video trên máy], timeout? } → { content }
+//   POST /rf/chatgpt/image        → { prompt, refs?: [đường dẫn ảnh tham chiếu], outDir?, timeout? } → { files, convId, text }
 //
 // Chỉ nghe 127.0.0.1 + bắt buộc Bearer token (sinh mỗi lần chạy, truyền cho backend qua env):
 // đây là cửa vào tài khoản ChatGPT/Google của người dùng, không để tiến trình lạ trên máy gọi ké.
@@ -10,7 +11,7 @@
 import { createServer } from 'http';
 import { randomBytes } from 'crypto';
 import { existsSync } from 'fs';
-import { readiness, chatgptChat, geminiChat } from './accounts.js';
+import { readiness, chatgptChat, chatgptImage, geminiChat } from './accounts.js';
 
 let _server = null;
 let _port = 0;
@@ -117,6 +118,26 @@ async function handle(req, res) {
     try {
       const r = await geminiChat(body.prompt, { files: files.length ? files : null, timeout: body?.timeout || null });
       return sendJson(res, 200, { content: r.content || '' });
+    } catch (e) {
+      return sendJson(res, errStatus(e), { error: { message: e?.message || String(e), type: e?.kind || 'unknown' } });
+    }
+  }
+
+  if (req.method === 'POST' && url === '/rf/chatgpt/image') {
+    let body;
+    try { body = JSON.parse(await readBody(req)); } catch (e) {
+      return sendJson(res, 400, { error: { message: `body không phải JSON: ${e.message}` } });
+    }
+    if (!String(body?.prompt || '').trim()) return sendJson(res, 400, { error: { message: 'prompt rỗng.' } });
+    const refs = Array.isArray(body?.refs) ? body.refs : [];
+    // Ảnh tham chiếu thiếu thì báo luôn, KHÔNG lọc lặng lẽ: ảnh ra sẽ sai mà người gọi không biết vì sao.
+    const missing = refs.filter((f) => typeof f !== 'string' || !existsSync(f));
+    if (missing.length) return sendJson(res, 400, { error: { message: `không thấy ảnh tham chiếu: ${missing.join(', ')}` } });
+    try {
+      const r = await chatgptImage(body.prompt, {
+        refs, outDir: body?.outDir || undefined, timeoutMs: body?.timeout ? Number(body.timeout) * 1000 : undefined,
+      });
+      return sendJson(res, 200, r);
     } catch (e) {
       return sendJson(res, errStatus(e), { error: { message: e?.message || String(e), type: e?.kind || 'unknown' } });
     }

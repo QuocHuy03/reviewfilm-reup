@@ -65,17 +65,34 @@ function useStaticTimeline(scenes: Scene[], realTime = false) {
   const [time, setTime] = useState(0)
   const [selected, setSelected] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
-  /** Gắn thẻ <video> vào ref + theo dõi phát/dừng → nút Phát/Dừng trên timeline đổi icon đúng trạng thái. */
+  const el0 = useRef<HTMLVideoElement | null>(null)
+  /** Gắn thẻ <video> vào ref + theo dõi phát/dừng/tua → đầu phát (vạch đỏ) chạy theo video từng khung hình, nút Phát/Dừng đúng trạng thái. */
   const bindVideo = useCallback((ref: { current: HTMLVideoElement | null }) => (el: HTMLVideoElement | null) => {
     ref.current = el
+    if (el) el0.current = el
     if (!el || boundVideos.has(el)) return
     boundVideos.add(el)
     setPlaying(!el.paused)
-    el.addEventListener("play", () => setPlaying(true))
-    el.addEventListener("pause", () => setPlaying(false))
-    el.addEventListener("ended", () => setPlaying(false))
+    let raf = 0
+    const loop = () => { setTime(el.currentTime); if (!el.paused && !el.ended) raf = requestAnimationFrame(loop) }
+    el.addEventListener("play", () => { setPlaying(true); cancelAnimationFrame(raf); raf = requestAnimationFrame(loop) })
+    el.addEventListener("pause", () => { setPlaying(false); cancelAnimationFrame(raf); setTime(el.currentTime) })
+    el.addEventListener("ended", () => { setPlaying(false); cancelAnimationFrame(raf); setTime(el.currentTime) })
+    el.addEventListener("seeked", () => setTime(el.currentTime))
   }, [])
-  return { clips, total, time, setTime, selected, setSelected, playing, bindVideo }
+  /** Tua trên timeline → tua luôn video. */
+  const seek = useCallback((t: number) => {
+    setTime(t)
+    const el = el0.current
+    if (el && isFinite(t)) el.currentTime = Math.max(0, Math.min(t, el.duration || t))
+  }, [])
+  // Đang phát: cảnh dưới đầu phát được chọn (sáng lên) theo video
+  useEffect(() => {
+    if (!playing) return
+    const c = clips.find((x) => time >= x.start && time < x.start + x.dur)
+    if (c) setSelected((cur) => (cur === c.index ? cur : c.index))
+  }, [time, playing, clips])
+  return { clips, total, time, setTime, seek, selected, setSelected, playing, bindVideo }
 }
 
 /* ═══════════════════════════════ Đang chạy ═══════════════════════════════ */
@@ -157,7 +174,7 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
       timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
         emptyHint={job.kind === "srt" || job.kind === "burn" ? "Job này không dựng cảnh — chỉ xuất phụ đề" : "Các cảnh sẽ hiện ở đây khi có kịch bản / bản dịch"}
-        onSeek={tl.setTime} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
+        onSeek={tl.seek} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
         onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop} />}
     />
   )
@@ -302,7 +319,7 @@ export function ScriptStage({ job }: { job: JobDetail }) {
       </>}
       timeline={<Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
-        onSeek={tl.setTime} onSelect={pick} onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop}
+        onSeek={tl.seek} onSelect={pick} onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop}
         onReorder={(from, to) => setScenes((prev) => moveItem(prev, from, to))}
         onTrim={(i, patch) => setScenes((prev) => prev.map((x, j) => (j === i ? { ...x, ...patch } : x)))} />}
     />
@@ -524,7 +541,7 @@ export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () 
       timeline={<Timeline scenes={job.scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false} emptyHint="Job dừng trước khi có kịch bản"
         readOnlyHint={job.resumable ? `Bấm "Tiếp tục" để quay lại bước ${job.resume_from || "đang dở"} — ở đó kéo đổi thứ tự / cắt cảnh được.` : undefined}
-        onSeek={tl.setTime} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
+        onSeek={tl.seek} onSelect={(i) => { tl.setSelected(i); if (video.current) video.current.currentTime = job.scenes[i].clip_start }}
         onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }} onToggleMute={noop} />}
     />
   )

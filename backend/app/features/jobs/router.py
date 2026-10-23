@@ -92,7 +92,7 @@ def create_download(req: DownloadJobRequest):
         raise HTTPException(400, 'Chưa có link hợp lệ (cần bắt đầu bằng http…).')
     out_dir = req.out_dir or os.path.join(load_settings()['output_dir'], 'Downloads')
     _check_disk(out_dir)
-    cfg = {'urls': urls, 'quality': req.quality, 'out_dir': out_dir, 'titles': req.titles}
+    cfg = {'urls': urls, 'quality': req.quality, 'out_dir': out_dir, 'titles': req.titles, 'subs': req.subs}
     title = f'Tải video · {detect_platform(urls[0])[1]} · {urls[0].split("?")[0][-40:]}' if len(urls) == 1 else f'Tải video · {len(urls)} link'
     return manager.start('download', cfg, pipelines.run_download_pipeline, title).summary()
 

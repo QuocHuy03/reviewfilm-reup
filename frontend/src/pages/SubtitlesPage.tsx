@@ -166,7 +166,7 @@ function ExtractTab({ send }: { send: (h: Omit<Handoff, "n">) => void }) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Ngôn ngữ gốc"><SimpleSelect value={cfg.source_lang} onChange={(v) => set("source_lang", v)} items={options.languages} /></Field>
             <Field label="Bố cục dòng"><SimpleSelect value={cfg.sub_layout} onChange={(v) => set("sub_layout", v)} items={Object.keys(options.sub_layouts)} /></Field>
-            <Field label="Whisper model" hint="base nhanh · medium/large chính xác hơn"><SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} /></Field>
+            <Field label="Whisper model" hint="capcut: online, nhanh nhất · base nhanh · medium/large chính xác hơn"><SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} /></Field>
             <Field label="Thiết bị" hint={system && !system.gpu ? "Máy không có GPU NVIDIA — nên chọn CPU" : undefined}>
               <SimpleSelect value={cfg.device} onChange={(v) => set("device", v)} items={options.devices} />
             </Field>

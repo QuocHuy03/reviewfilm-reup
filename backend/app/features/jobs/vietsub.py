@@ -531,24 +531,52 @@ def _hardsub_segments(job, cfg, video):
     if len(segs) < max(5, dur / 60 * 3):          # quá ít câu so với độ dài phim → phụ đề không đủ tin
         job.log(f'   Chỉ đọc được {len(segs)} câu phụ đề cứng — dùng Whisper cho chắc', 'warn')
         return None
-    return segs
+    return _analyze_srt(job, segs)
+
+
+def _analyze_srt(job, segs):
+    """Phân tích & làm sạch SRT gốc (đọc từ phụ đề trên hình) TRƯỚC khi phân vai / dịch: dòng rác lúc chữ mờ dần hiện / tắt
+    (đọc sai vài nét, chỉ thoáng < 0.8s, ngay sát dòng thật và gần giống dòng đó) gộp vào dòng thật — để mỗi dòng SRT đúng
+    1 câu thoại thật trên hình, dịch & lồng tiếng không thừa câu. → segs đã làm sạch."""
+    from difflib import SequenceMatcher
+    out = []
+    merged = 0
+    for sg in sorted(segs, key=lambda x: float(x['start'])):
+        sg = {**sg, 'start': float(sg['start']), 'end': float(sg['end']), 'text': str(sg['text']).strip()}
+        if not sg['text']:
+            continue
+        prev = out[-1] if out else None
+        if prev and sg['start'] - prev['end'] <= 0.25:
+            (a, b) = (prev['text'], sg['text'])
+            near = a in b or b in a or SequenceMatcher(None, a, b).ratio() >= 0.55
+            if near and min(prev['end'] - prev['start'], sg['end'] - sg['start']) < 0.8:
+                # giữ chữ của dòng hiện lâu hơn (dòng thật); bằng nhau thì dòng dài chữ hơn
+                keep = max((prev, sg), key=lambda x: (round(x['end'] - x['start'], 1), len(x['text'])))
+                out[-1] = {**keep, 'start': prev['start'], 'end': max(prev['end'], sg['end'])}
+                merged += 1
+                continue
+        out.append(sg)
+    durs = [x['end'] - x['start'] for x in out] or [0]
+    job.log(f'   Phân tích SRT gốc: {len(out)} dòng thoại' + (f' (gộp {merged} dòng đọc lỗi lúc chữ mờ dần)' if merged else '')
+            + f' · trung bình {sum(durs) / len(durs):.1f}s/dòng · {sum(1 for d in durs if d < 1.0)} dòng ngắn < 1s', 'step')
+    return out
 
 
 def _translate_for_dub(job, cfg, video, transcript, lang, layout):
     """Quy trình lồng tiếng: SRT gốc → phân vai (ai nói, nam / nữ, dòng không phải thoại) → AI dịch theo đúng người nói,
     mỗi câu vừa thời gian câu gốc. Câu lồng tiếng = từng đoạn Whisper (thời gian nói thật), phụ đề chia dòng riêng.
     → (cues phụ đề, plan) hoặc ([], None) khi không dịch theo vai được (chưa đăng nhập AI…) → dùng cách dịch thường."""
-    from app.srt_utils import scenes_to_cues
     from core import dub_translate, web_llm
     if not web_llm.available():
         job.log('   Chưa đăng nhập ChatGPT / Gemini — dịch thường (không dịch theo vai)', 'warn')
         return ([], None)
     src = [sg for sg in transcript['segments'] if str(sg.get('text') or '').strip()]
-    try:                                         # đoạn dài gộp lời 2 người (đối đáp nhanh) → tách ở chỗ đổi giọng
-        from core import speakers
-        src = speakers.split_turns(video, src, job.log)
-    except Exception as e:
-        job.log(f'   [WARN] Tách lượt lời lỗi ({str(e)[:100]}) — bỏ qua', 'warn')
+    if not transcript.get('hardsub'):            # phụ đề trên hình: mỗi dòng đã là 1 lượt lời — giữ nguyên để khớp 1:1 dòng gốc
+        try:                                     # đoạn Whisper dài gộp lời 2 người (đối đáp nhanh) → tách ở chỗ đổi giọng
+            from core import speakers
+            src = speakers.split_turns(video, src, job.log)
+        except Exception as e:
+            job.log(f'   [WARN] Tách lượt lời lỗi ({str(e)[:100]}) — bỏ qua', 'warn')
     units = [{'start': float(sg['start']), 'end': float(sg['end']), 'text': str(sg['text']).strip()} for sg in src]
     if not units:
         return ([], None)
@@ -562,10 +590,16 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
         spans = _subtitle_spans(job, cfg, video)
         if spans:
             res = _mark_unsubtitled(job, units, res, spans)
-    (units, src, res) = _merge_utterances(units, src, res)
+    if transcript.get('hardsub'):
+        # phụ đề trên hình = SRT gốc chuẩn: 1 dòng phụ đề = 1 câu lồng tiếng (không gộp) → giọng bắt đầu đúng lúc dòng hiện,
+        # đọc gọn trong dòng đó; phụ đề Việt hiện / tắt đúng giờ dòng Trung — giọng & chữ luôn khớp nhau
+        units = [{**u, 'parts': [[u['start'], u['end'], u['text']]]} for u in units]
+        job.log(f'   SRT gốc: {len(units)} dòng — dịch & lồng tiếng đúng từng dòng (khớp timeline phụ đề gốc)', 'step')
+    else:
+        (units, src, res) = _merge_utterances(units, src, res)
+        job.log(f'   Gộp mẩu câu liền nhau của cùng người nói → {len(units)} câu thoại', 'step')
     for u in units:
         u['orig'] = u['text']                    # lời gốc (hiện ở bước duyệt kịch bản theo vai)
-    job.log(f'   Gộp mẩu câu liền nhau của cùng người nói → {len(units)} câu thoại', 'step')
     job.set_progress(42, 'AI dịch theo vai')
     job.log('[4] AI dịch theo vai: đúng xưng hô từng nhân vật, mỗi câu vừa thời gian câu gốc...', 'info')
     vi = dub_translate.translate(units, res, job.log, cfg.get('film_context') or '')
@@ -594,19 +628,18 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
         for (i, u) in enumerate(units):
             nxt = units[i + 1]['start'] if i + 1 < len(units) else u['end'] + TOLERANCE
             rooms.append(max(0.4, u['end'] - u['start'] + min(max(0.0, nxt - u['end']), TOLERANCE)))
-        # thời lượng đọc ước tính = số từ / tốc độ đọc + ~0.2s đệm đầu/cuối câu; so đúng điều kiện bước lồng tiếng
-        # (khung − 0.1s) × 1.2 — câu ngắn hay lọt nếu bỏ qua phần đệm
+        # thời lượng đọc ước tính = số từ / tốc độ đọc (đo trên giọng đã cắt lặng); chỉ câu CHẮC CHẮN không vừa kể cả khi tua
+        # tối đa 1.2× và lấn thêm 0.25s (bước xếp lịch bù được) mới nhờ AI viết gọn — còn lại để đo độ dài giọng thật quyết định
         over = {i: rooms[i] for (i, u) in enumerate(units)
-                if (res is None or res['labels'][i] != -1)
-                and word_count(u['text']) / dub_translate.WPS + 0.2 > (rooms[i] - SPEED_MARGIN) * MAX_SPEED}
+                if (res is None or res['labels'][i] != -1) and word_count(u['text']) > 3
+                and word_count(u['text']) / dub_translate.WPS > rooms[i] * MAX_SPEED + 0.25}
         if over:
             job.log(f'   {len(over)} câu dịch dài quá khung thời gian — AI viết gọn trước khi tạo giọng', 'info')
             for (i, t) in _shorten(units, over, dub_translate.WPS, job.log).items():
                 units[i]['text'] = t
     except Exception as e:
         job.log(f'   [WARN] Ước lượng độ dài lỗi ({str(e)[:100]}) — bỏ qua', 'warn')
-    scenes = [{'clip_start': u['start'], 'clip_end': u['end'], 'subtitle': u['text'], 'voiceover': u['text']} for u in units]
-    cues = _rechunk(scenes_to_cues(scenes, 'subtitle'), layout)
+    cues = _part_cues(units, layout)
     if res:
         job.result['dub_cast'] = res
     return (cues, {'units': units, 'res': res})
@@ -626,12 +659,45 @@ def _merge_utterances(units, src, res, gap=0.4, max_len=8.0):
                 and u['end'] - prev['start'] <= max_len):
             out_u[-1]['end'] = u['end']
             out_u[-1]['text'] += '，' + u['text']
+            out_u[-1]['parts'].append([u['start'], u['end'], u['text']])
             out_s[-1] = {**out_s[-1], 'end': sg.get('end'), 'text': out_s[-1]['text'] + '，' + str(sg['text']).strip()}
         else:
-            out_u.append(dict(u))
+            out_u.append({**u, 'parts': [[u['start'], u['end'], u['text']]]})   # dòng phụ đề gốc trong câu (giữ giờ để chia lại)
             out_s.append({**sg, 'text': str(sg['text']).strip()})
             out_l.append(lab)
     return (out_u, out_s, {'labels': out_l, 'speakers': res['speakers']} if res else None)
+
+
+def _split_by_parts(text, parts):
+    """Câu dịch (đã gộp từ nhiều dòng phụ đề gốc) → chia lại thành từng đoạn ứng với từng dòng gốc, theo tỉ lệ độ dài lời
+    gốc; cắt ở ranh giới từ, ưu tiên ngay sau dấu câu (±2 từ). → list chuỗi cùng số phần tử với parts (có thể rỗng)."""
+    n = len(parts or [])
+    words = str(text or '').split()
+    if n <= 1 or len(words) < 2:
+        return [str(text or '').strip()] + [''] * max(0, n - 1)
+    weights = [max(1, len(str(p[2] or ''))) for p in parts]
+    (total, acc, cuts) = (float(sum(weights)), 0.0, [])
+    for wgt in weights[:-1]:
+        acc += wgt
+        k = max(1, min(len(words) - 1, round(acc / total * len(words))))
+        near = [j for j in range(max(1, k - 2), min(len(words) - 1, k + 2) + 1) if words[j - 1].endswith((',', '.', '?', '!', ';', ':', '…'))]
+        k = min(near, key=lambda j: abs(j - k)) if near else k
+        cuts.append(max(cuts[-1] if cuts else 0, k))
+    bounds = [0] + cuts + [len(words)]
+    return [' '.join(words[bounds[j]:bounds[j + 1]]).strip() for j in range(n)]
+
+
+def _part_cues(units, layout):
+    """Phụ đề Việt ĐÚNG timeline phụ đề gốc: mỗi câu lồng tiếng (có thể gộp nhiều dòng gốc) chia về lại từng dòng gốc — dòng
+    Việt hiện / tắt đúng lúc dòng Trung tương ứng. Câu không có thông tin dòng gốc → 1 dòng theo giờ câu. Dòng dài thì chia nhỏ."""
+    from app.srt_utils import scenes_to_cues
+    scenes = []
+    for u in units:
+        parts = u.get('parts') or [[u['start'], u['end'], u.get('orig', '')]]
+        for (pt, txt) in zip(parts, _split_by_parts(u['text'], parts)):
+            if txt:
+                scenes.append({'clip_start': float(pt[0]), 'clip_end': float(pt[1]), 'subtitle': txt, 'voiceover': txt})
+    return _rechunk(scenes_to_cues(scenes, 'subtitle'), layout)
 
 
 def _remap_plan(plan, cues):
@@ -786,8 +852,10 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
     from .postedit import word_count
     for rnd in range(3):
         # chỉ câu tua tối đa (MAX_SPEED) vẫn không vừa khung mới nhờ AI viết gọn — giữ nghĩa bản dịch nhiều nhất
+        # câu ≤ 3 từ không rút nữa (gọn hơn là mất ý) — lấn chút, bước xếp lịch tự bù
         long_ = {i: slot(i) for (i, u) in enumerate(units)
-                 if uvoice[i] and u.get('dur', 0) > (slot(i) - SPEED_MARGIN) * MAX_SPEED * (1.0, 1.03, 1.06)[rnd]}
+                 if uvoice[i] and word_count(u['text']) > 3
+                 and u.get('dur', 0) > (slot(i) - SPEED_MARGIN) * MAX_SPEED * (1.0, 1.03, 1.06)[rnd] + 0.15}
         if not long_:
             break
         # tốc độ đọc THẬT của từng giọng (từ/giây) — số từ tối đa mỗi câu tính theo đó
@@ -864,6 +932,8 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
             # khung còn lại tính từ lúc thật sự bắt đầu đọc (câu trước lấn thì khung ngắn lại) — trừ hao 0.1s như VideoLingo
             avail = max(0.3, u['start'] + slot(i) - t - SPEED_MARGIN)
             tempo = tempo_of.get(i, 1.0)             # cùng 1 tốc độ trong cả đoạn hội thoại
+            if u['dur'] / tempo > avail:             # riêng câu này không vừa dòng của nó → nhanh thêm vừa đủ (≤ MAX_SPEED),
+                tempo = round(min(MAX_SPEED, max(tempo, u['dur'] / avail)), 2)   # không để lấn & đẩy trễ các câu sau
             spilled += u['dur'] / tempo > avail + 0.05
             max_lag = max(max_lag, t - u['start'])
             pcm = _pcm(u['path'], tempo)
@@ -956,8 +1026,9 @@ def run_vietsub_pipeline(job):
     from core.utils import FFMPEG_EXE, get_video_duration
     from core.video_editor import _crop_prefix, _src_text_blur_chain
     cfg = job.config
-    # Che phụ đề cũ y như Review phim (1 kiểu duy nhất, ổn định): làm mờ cố định cả dải phụ đề + logo suốt video
-    cfg['cover_style'] = 'blur'
+    # Che phụ đề cũ 1 kiểu duy nhất: XOÁ SẠCH nét chữ Trung (phụ đề cũ + chữ / logo 4 góc) — lấp bằng hình xung quanh, không dải
+    # mờ, không ô nền (như video mẫu). Xoá sạch lỗi thì tự lùi về xoá nhẹ.
+    cfg['cover_style'] = 'clean'
     cfg['cover_fit_text'] = False
     out_dir = _out_dir(cfg)
     layout = _layout(cfg)
@@ -1035,7 +1106,8 @@ def run_vietsub_pipeline(job):
             if len(labs) != len(dub_plan['units']):          # nhãn vai lệch số câu (dữ liệu cũ) → không tin, để phân tích lại
                 labs = [0] * len(dub_plan['units'])
             job.scenes = [{'clip_start': u['start'], 'clip_end': u['end'], 'voiceover': u['text'], 'subtitle': u['text'],
-                           'orig_text': u.get('orig', ''), 'speaker_id': int(k)} for (u, k) in zip(dub_plan['units'], labs)]
+                           'orig_text': u.get('orig', ''), 'speaker_id': int(k), 'parts': u.get('parts')}
+                          for (u, k) in zip(dub_plan['units'], labs)]
         else:
             job.scenes = [{'clip_start': c['start'], 'clip_end': c['end'], 'voiceover': c['text'], 'subtitle': c['text']} for c in cues]
 
@@ -1052,13 +1124,13 @@ def run_vietsub_pipeline(job):
                 # câu đã duyệt = câu lồng tiếng (đúng vai người dùng chọn); phụ đề chia dòng lại từ đó
                 from app.srt_utils import scenes_to_cues
                 units = [{'start': float(s['clip_start']), 'end': float(s['clip_end']), 'text': (s.get('voiceover') or s.get('subtitle') or '').strip(),
-                          'orig': s.get('orig_text', '')} for s in job.scenes]
+                          'orig': s.get('orig_text', ''), 'parts': s.get('parts')} for s in job.scenes]
                 res0 = _norm_res(dub_plan.get('res'))
                 labels = [int(s.get('speaker_id', 0)) for s in job.scenes]
                 dub_plan = {'units': units, 'res': {'labels': labels, 'speakers': res0['speakers']} if res0 else None}
                 if res0:
                     job.result['dub_cast'] = dub_plan['res']
-                cues = _rechunk(scenes_to_cues([{**s, 'subtitle': u['text']} for (s, u) in zip(job.scenes, units)], 'subtitle'), layout)
+                cues = _part_cues(units, layout)          # phụ đề Việt theo đúng từng dòng phụ đề gốc
                 before = [(round(c['start'], 2), c['text']) for c in cues]
             else:
                 cues = [{'start': float(s['clip_start']), 'end': float(s['clip_end']), 'text': (s.get('subtitle') or s.get('voiceover') or '').strip()}
@@ -1072,7 +1144,8 @@ def run_vietsub_pipeline(job):
             else:
                 job.result.pop('dub_cast', None)
         if dub_plan:
-            job.result['dub_units'] = [{'start': u['start'], 'end': u['end'], 'text': u['text'], 'orig': u.get('orig', '')} for u in dub_plan['units']]
+            job.result['dub_units'] = [{'start': u['start'], 'end': u['end'], 'text': u['text'], 'orig': u.get('orig', ''),
+                                        'parts': u.get('parts')} for u in dub_plan['units']]
         job.result['vi_srt'] = _write_srt(os.path.join(out_dir, base + '_vi.srt'), cues)
         job.log(f"   SRT tiếng Việt: {job.result['vi_srt']}", 'ok')
         job.check()
@@ -1222,8 +1295,9 @@ def run_vietsub_pipeline(job):
                 band_covered = True
             logos = [b for b in boxes if b is not band and not cleaned]
             corners = {}
-            if not cleaned and regions and sw and sh:
-                # chữ / logo đứng yên ở 4 góc (watermark kênh, "nội dung hư cấu"…) quét được → tự che suốt video như vùng vẽ tay
+            if regions and sw and sh:
+                # chữ / logo đứng yên ở 4 góc (watermark kênh, "nội dung hư cấu"…) → tự che suốt video như vùng vẽ tay; cả khi đã
+                # xoá sạch: logo chữ màu (xanh, đỏ…) bộ xoá nét chữ trắng / vàng hay sót vệt → lấp thêm bằng điểm ảnh xung quanh
                 for r in regions:
                     (x1, y1, x2, y2) = r['box']
                     if (float(r['t_end']) - float(r['t_start'])) < 0.3 * (dur or 1) or not _band_or_corner(r['box'], None):
@@ -1247,11 +1321,39 @@ def run_vietsub_pipeline(job):
                     for (X1, Y1, X2, Y2) in clusters:
                         if X2 - X1 <= w * 0.32 and Y2 - Y1 <= h * 0.2:
                             logos.append([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100])
+            if logos:
+                job.log('   Xoá logo / chữ đứng yên ở góc: ' + ', '.join(f'[{b[0]:.0f}%,{b[1]:.0f}% · {b[2]:.0f}×{b[3]:.0f}%]' for b in logos), 'step')
             for (k, b) in enumerate(logos):     # logo / chữ cố định: che suốt video (đã xoá sạch thì thôi)
                 # logo nhỏ & đứng yên → XOÁ (delogo lấp bằng điểm ảnh xung quanh + mịn viền), không làm mờ thành ô chữ nhật lộ
                 (chain, cur) = _box_chain(cur, b, w, h, 'erase', None, f'lg{k}')
                 if chain:
                     graph.append(chain)
+        if cleaned and transcript and transcript.get('hardsub'):
+            # xoá nét chữ hay sót khi chữ trắng nằm trên nền trắng / sáng → lấp thêm ĐÚNG khung từng câu phụ đề Trung, ĐÚNG
+            # lúc câu đó hiện (thời gian & khung bao lấy từ bước đọc phụ đề cứng); câu khung gần giống nhau gộp 1 vùng che
+            (sw2, sh2, _) = text_cover_probe(video)
+            if sw2 and sh2:
+                (gx, gy) = _src_to_out(cfg, sw2, sh2, w, h)
+                groups = {}
+                for sg in transcript['segments']:
+                    if not sg.get('box'):
+                        continue
+                    (x1, y1, x2, y2) = sg['box']
+                    (X1, Y1, X2, Y2) = (gx(x1), gy(y1), gx(x2), gy(y2))
+                    (px_, py_) = (max(6.0, (Y2 - Y1) * 0.35), max(4.0, (Y2 - Y1) * 0.25))
+                    (X1, Y1, X2, Y2) = (max(0.0, X1 - px_), max(0.0, Y1 - py_), min(float(w), X2 + px_), min(float(h), Y2 + py_))
+                    key = (round(X1 / w * 10), round(X2 / w * 10), round(Y1 / h * 20), round(Y2 / h * 20))
+                    g = groups.setdefault(key, {'b': [X1, Y1, X2, Y2], 'spans': []})
+                    g['b'] = [min(g['b'][0], X1), min(g['b'][1], Y1), max(g['b'][2], X2), max(g['b'][3], Y2)]
+                    g['spans'].append((max(0.0, float(sg['start']) - 0.1), float(sg['end']) + 0.1))
+                for (k, g) in enumerate(list(groups.values())[:40]):
+                    (X1, Y1, X2, Y2) = g['b']
+                    pct = [X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100]
+                    (chain, cur) = _box_chain(cur, pct, w, h, 'erase', g['spans'], f'hs{k}')
+                    if chain:
+                        graph.append(chain)
+                if groups:
+                    job.log(f'   Lấp thêm đúng chỗ phụ đề cũ lúc câu hiện ({len(groups)} vùng) — hết vệt chữ sót trên nền sáng', 'step')
         if cfg.get('burn_subtitles', True):
             graph.append(f'[{cur}]subtitles=subs.ass:fontsdir=fonts[vout]')
         else:

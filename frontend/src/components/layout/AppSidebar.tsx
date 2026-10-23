@@ -13,7 +13,7 @@ type NavItem = { page: Page | "support"; label: string; short?: string; icon: Lu
 const GROUPS: NavItem[][] = [
   [{ page: "home", label: "Tổng quan", icon: LayoutDashboard, hint: "Trạng thái & job gần đây" }],
   [
-    { page: "download", label: "Tải video", icon: Download, hint: "Douyin · TikTok · Bilibili · YouTube…" },
+    { page: "download", label: "Tải video", icon: Download, hint: "Douyin · TikTok · YouTube · DramaBox…" },
     { page: "create", label: "Tạo video", icon: Clapperboard, hint: "Review phim / Dịch & Reup" },
     { page: "studio", label: "Studio", icon: Film, hint: "Theo dõi, sửa kịch bản, hậu kỳ" },
     { page: "jobs", label: "Lịch sử", icon: History, hint: "Tất cả job đã chạy" },

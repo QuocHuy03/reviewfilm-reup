@@ -104,6 +104,24 @@ export class ChatGPTClient {
     return r;
   }
 
+  /**
+   * Tạo ảnh (kèm ảnh tham chiếu). Chỉ có đường HTTP — trình duyệt ở đây không tự tạo ảnh, nó chỉ làm
+   * việc nó giỏi: vượt Cloudflare / cấp cookie mới. Nên hỏng kiểu "đáng lùi" thì lấy cookie từ
+   * trình duyệt rồi chạy lại HTTP đúng một lần.
+   */
+  async image(prompt, opts = {}) {
+    this.lastRoute = 'http';
+    try {
+      return await this._http().image(prompt, opts);
+    } catch (e) {
+      if (!shouldFallback(e)) throw e;
+      console.warn(`[chatgpt] tạo ảnh qua HTTP hỏng (${e.kind || e.status}: ${e.message}) — làm mới cookie bằng trình duyệt rồi thử lại.`);
+    }
+    await this._refreshCreds();
+    this.lastRoute = 'browser+http';
+    return await this._http().image(prompt, opts);
+  }
+
   /** Gói cước. Chỉ trình duyệt trả lời được chắc chắn, mà đây là việc hiếm nên mở Chrome cũng đáng. */
   async plan() {
     try { return await this._browser().plan(); } catch { return ''; }

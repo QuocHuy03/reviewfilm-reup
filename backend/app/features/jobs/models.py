@@ -105,6 +105,7 @@ class DownloadJobRequest(BaseModel):
     quality: str = 'best'          # best | 1080 | 720 | audio
     out_dir: str = ''
     titles: dict[str, str] = {}    # tiêu đề cho link video trực tiếp (để đặt tên file)
+    subs: str = ''                 # tải xong tạo phụ đề bằng CapCut: '' = tắt, 'zh'/'en'/'ja'/'ko' = ngôn ngữ gốc (+ bản dịch Việt)
 
 
 class ReeditRequest(BaseModel):

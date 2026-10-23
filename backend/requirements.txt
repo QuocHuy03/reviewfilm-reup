@@ -14,3 +14,4 @@ fonttools>=4.40   # đọc tên font khi chọn / nhập font phụ đề (core/
 rapidocr_onnxruntime>=1.3   # tự quét & che chữ tiếng Trung trên video (core/text_cover.py)
 kaldi-native-fbank>=1.20   # đặc trưng giọng để nhận ra nhân vật nam / nữ khi lồng tiếng (core/speakers.py)
 psutil>=5.9                  # đo RAM trống — xoá chữ tự bớt luồng khi máy thiếu RAM
+cryptography>=41.0   # phim ngắn: ký RSA DramaBox, giải mã link Hồng Quả (core/drama_downloader)

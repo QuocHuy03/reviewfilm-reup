@@ -232,6 +232,30 @@ export function chatgptChat(prompt, { model } = {}) {
   return p;
 }
 
+/**
+ * Tạo ảnh qua tài khoản ChatGPT đang chọn. `refs` là đường dẫn ảnh tham chiếu trên máy.
+ * Đi chung hàng đợi với chat: lượt lùi sang trình duyệt dùng chung một profile bị khoá.
+ */
+export function chatgptImage(prompt, { refs = [], outDir, timeoutMs } = {}) {
+  const run = async () => {
+    const acc = store.chatgpt.find((a) => a.isActive);
+    if (!acc) throw Object.assign(new Error('Chưa đăng nhập tài khoản ChatGPT (Cài đặt → Tài khoản AI).'), { kind: 'auth' });
+    if (!_gpt || _gptAccId !== acc.id) { resetChatgptClient(); _gpt = clientFor(acc); _gptAccId = acc.id; }
+    try {
+      const r = await _gpt.image(prompt, { refs, outDir: outDir || join(ROOT, 'images'), ...(timeoutMs ? { timeoutMs } : {}) });
+      if (acc.status !== 'ok') { acc.status = 'ok'; acc.errorMsg = ''; save(); }
+      return r;
+    } catch (e) {
+      // Bị từ chối nội dung không có nghĩa tài khoản hỏng — không đánh dấu lỗi tài khoản.
+      if (e?.kind !== 'noimage' && e?.kind !== 'input') { acc.status = 'error'; acc.errorMsg = e?.message || String(e); save(); }
+      throw e;
+    }
+  };
+  const p = _gptQueue.then(run, run);
+  _gptQueue = p.catch(() => {});
+  return p;
+}
+
 // ───────────────────────────────── Gemini ────────────────────────────────────
 
 const geminiWorkDir = () => join(ROOT, 'gemini');

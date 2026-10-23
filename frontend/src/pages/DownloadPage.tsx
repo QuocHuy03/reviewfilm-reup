@@ -1,9 +1,10 @@
-import { AlertTriangle, CheckCircle2, Download, ExternalLink, FolderOpen, Languages, Link2, Loader2, Search, Wand2, XCircle } from "lucide-react"
+import { AlertTriangle, Captions, CheckCircle2, Download, ExternalLink, FolderOpen, Languages, Link2, Loader2, Search, Wand2, XCircle } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Section, Segmented } from "@/components/common"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Textarea } from "@/components/ui/textarea"
 import { api, bridge } from "@/lib/api"
@@ -20,7 +21,12 @@ const QUALITIES: { value: Quality; label: string }[] = [
 const PLATFORMS: { group: string; items: string[] }[] = [
   { group: "Trung Quốc", items: ["Douyin", "Bilibili", "Weibo", "AcFun", "Youku", "Tencent Video", "Mango TV", "Huya"] },
   { group: "Quốc tế", items: ["TikTok", "YouTube", "Instagram", "Pinterest", "Dailymotion", "Twitch"] },
+  { group: "Phim ngắn · tải cả bộ", items: ["DramaBox", "GoodShort", "ShortMax", "NetShort", "FreeReels", "KissKH", "Hồng Quả", "DramaWave", "RaptDrama", "FlexTV", "StardustTV"] },
   { group: "Khác", items: ["Link video .mp4 trực tiếp"] },
+]
+type Subs = "" | "zh" | "en" | "ko" | "ja"
+const SUBS: { value: Subs; label: string }[] = [
+  { value: "", label: "Tắt" }, { value: "zh", label: "Trung" }, { value: "en", label: "Anh" }, { value: "ko", label: "Hàn" }, { value: "ja", label: "Nhật" },
 ]
 const linesOf = (v: string) => Array.from(new Set(v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)))
 type PastedQuality = { url: string; height?: number; bitrate?: number; codec?: string }
@@ -48,12 +54,26 @@ export function DownloadPage() {
   const { go } = useStore()
   const [text, setText] = useState("")
   const [quality, setQuality] = useState<Quality>("best")
+  /** Tải xong tạo phụ đề bằng CapCut: ngôn ngữ gốc của video (+ bản dịch Việt) */
+  const [subs, setSubs] = useState<Subs>("")
   const [infos, setInfos] = useState<ProbeInfo[]>([])
   const [probing, setProbing] = useState(false)
   const [starting, setStarting] = useState(false)
   const [jobs, setJobs] = useState<JobSummary[]>([])
+  /** Phim ngắn: link phim → các tập muốn tải ("1-10,15", trống = tất cả) */
+  const [epSel, setEpSel] = useState<Record<string, string>>({})
   const parsed = useMemo(() => parsePasted(text), [text])
   const links = parsed.links
+  const dramaOf = (link: string) => infos.find((i) => i.episodes && (i.url === link || link.includes(i.url)))
+  const countEps = (i: ProbeInfo, spec: string) => {
+    const want = new Set<number>()
+    for (const part of spec.split(",")) {
+      const [a, b] = part.split("-").map((x) => parseInt(x, 10))
+      if (Number.isNaN(a)) continue
+      for (let k = a; k <= (Number.isNaN(b) ? a : b); k++) want.add(k)
+    }
+    return (i.episodes ?? []).filter((e) => !e.locked && (!want.size || want.has(e.num))).length
+  }
 
   const loadJobs = () => api.jobs().then((j) => setJobs(j.filter((x) => x.kind === "download"))).catch(() => {})
   useEffect(() => {
@@ -79,9 +99,14 @@ export function DownloadPage() {
   const start = async () => {
     setStarting(true)
     try {
-      await api.createDownload(links, quality, "", parsed.titles)
-      toast.success(links.length > 1 ? `Đang tải ${links.length} video` : "Đang tải video")
-      setText(""); setInfos([]); loadJobs()
+      const urls = links.map((l) => {
+        const d = dramaOf(l)
+        const sel = d && (epSel[d.url] ?? d.ep ?? "").replace(/\s+/g, "")
+        return d ? (sel ? `${d.url}#ep=${sel}` : d.url) : l
+      })
+      await api.createDownload(urls, quality, "", parsed.titles, quality === "audio" ? "" : subs)
+      toast.success(links.length > 1 ? `Đang tải ${links.length} link` : "Đang tải video")
+      setText(""); setInfos([]); setEpSel({}); loadJobs()
     } catch (e) { toast.error("Không tải được", { description: (e as Error).message }) }
     finally { setStarting(false) }
   }
@@ -95,7 +120,11 @@ export function DownloadPage() {
         <Section title="Dán link video" icon={<Link2 />} desc="Mỗi dòng 1 link — dán nguyên đoạn chia sẻ Douyin / TikTok cũng được, app tự lấy link"
           action={<Segmented size="sm" value={quality} onChange={setQuality} items={QUALITIES} />}>
           <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} className="font-mono text-xs placeholder:font-sans"
-            placeholder={"https://www.douyin.com/video/…\nhttps://www.bilibili.com/video/BV…\nhttps://www.tiktok.com/@…/video/…\n7.43 复制打开抖音，看看… https://v.douyin.com/…"} />
+            placeholder={"https://www.douyin.com/video/…\nhttps://www.bilibili.com/video/BV…\nhttps://www.dramabox.com/vi/video/41000107260_… (phim ngắn: tải cả bộ)\n7.43 复制打开抖音，看看… https://v.douyin.com/…"} />
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            <Captions className="size-3.5" /> Tạo phụ đề (CapCut, kèm bản dịch Việt) — tiếng gốc của video:
+            <Segmented size="sm" value={subs} onChange={setSubs} items={SUBS} />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] text-muted-foreground">Hỗ trợ: {PLATFORMS.flatMap((g) => g.items).slice(0, -1).join(" · ")}</span>
             <Button className="ml-auto" onClick={start} disabled={!links.length || starting || probing || (infos.length > 0 && okCount === 0)}>
@@ -122,6 +151,17 @@ export function DownloadPage() {
                         {i.source === "dtk" && <span className="text-success">· 1080p không logo</span>}
                       </p>
                       {i.error && <p className="mt-0.5 text-[11px] text-destructive">{i.error}</p>}
+                      {i.episodes && !i.error && (() => {
+                        const sel = epSel[i.url] ?? i.ep ?? ""
+                        return (
+                          <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+                            <span className="text-muted-foreground">Tập:</span>
+                            <Input value={sel} onChange={(e) => setEpSel((s) => ({ ...s, [i.url]: e.target.value }))}
+                              placeholder={`tất cả (1-${i.episodes.length})`} className="h-6 w-40 px-2 font-mono text-[11px] placeholder:font-sans" />
+                            <span className="text-muted-foreground">→ tải <b className="text-foreground">{countEps(i, sel)}</b> tập · vd 1-10,15</span>
+                          </div>
+                        )
+                      })()}
                     </div>
                   </div>
                 )
@@ -153,6 +193,7 @@ export function DownloadPage() {
                     <span className="w-24 shrink-0 truncate text-muted-foreground">{it.platform}</span>
                     {it.path ? <>
                       <span className="min-w-0 flex-1 truncate" title={it.path}>{basename(it.path)}</span>
+                      {!!it.subs?.length && <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-semibold text-muted-foreground" title={it.subs.map(basename).join(", ")}>CC {it.subs.length}</span>}
                       <span className="tabular shrink-0 text-[11px] text-muted-foreground">{fmtSize(it.size)}</span>
                       <Button size="xs" variant="ghost" title="Mở video" onClick={() => bridge.open(it.path!)}><ExternalLink /></Button>
                       <Button size="xs" variant="outline" onClick={() => { openInCreate(it.path!, "review"); go("create") }}><Wand2 /> Tạo Review</Button>

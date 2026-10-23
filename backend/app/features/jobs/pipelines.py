@@ -201,8 +201,9 @@ def _is_hallucination(text):
 def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False, words=False):
     """Whisper. allow_empty=True (Review): video không có lời thoại vẫn chạy tiếp — AI viết kịch bản từ hình ảnh."""
     from core.transcriber import transcribe_audio
-    job.set_progress(10, 'Nhận dạng giọng nói (Whisper)')
-    job.log('[2] Whisper nhận dạng giọng nói...', 'info')
+    engine = 'CapCut' if cfg.get('whisper_model') == 'capcut' else 'Whisper'
+    job.set_progress(10, f'Nhận dạng giọng nói ({engine})')
+    job.log(f'[2] {engine} nhận dạng giọng nói...', 'info')
     lang = C.LANGUAGE_MAP.get(cfg.get('source_lang', 'Tự động'), 'auto')
     transcript = transcribe_audio(video_path, cfg.get('whisper_model', 'base'), temp_dir, lang, job.log,
                                   device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam, should_stop=lambda: job.cancelled,
@@ -915,36 +916,93 @@ def _force_style(style):
     ])
 
 
+def _download_subs(job, it, lang, log):
+    """Video vừa tải → phụ đề tiếng gốc + bản dịch Việt bằng CapCut (lỗi chỉ cảnh báo, video vẫn giữ)."""
+    from core.capcut_stt import CapcutSttError, make_srt
+    try:
+        files = make_srt(it['path'], lang, True, log, should_stop=lambda: job.cancelled)
+    except CapcutSttError as e:
+        log(f'   [WARN] Không tạo được phụ đề: {e}', 'warn')
+        return
+    it['subs'] = files
+    if files:
+        log(f"   [OK] Phụ đề: {', '.join(os.path.basename(f) for f in files)}", 'ok')
+    else:
+        log('   Không nghe thấy lời thoại — không có phụ đề', 'warn')
+
+
 def run_download_pipeline(job):
     """Tải nhiều video từ link (YouTube, TikTok, Douyin, Bilibili, Kuaishou, Tiểu Hồng Thư…) — lần lượt, có tiến độ."""
-    from core.downloader import detect_platform, download, normalize
+    from core.downloader import detect_platform, download, download_drama_episode, drama_episodes, normalize, split_eps
     cfg = job.config
     urls = [normalize(u) for u in cfg.get('urls') or [] if u.strip()]
     out_dir = cfg.get('out_dir') or os.path.join(load_settings()['output_dir'], 'Downloads')
     os.makedirs(out_dir, exist_ok=True)
-    items = [{'url': u, 'platform': detect_platform(u)[1]} for u in urls]
+    items, dramas, eps_of = [], {}, {}       # eps_of: url từng tập → Episode (không lưu vào job.result vì không ra JSON được)
+    for u in urls:
+        (key, label) = detect_platform(u)
+        if key != 'drama':
+            items.append({'url': u, 'platform': label})
+            continue
+        # phim ngắn: 1 link → mỗi tập 1 dòng
+        try:
+            (series, eps) = drama_episodes(u)
+        except Exception as e:
+            items.append({'url': u, 'platform': label, 'error': f'Không đọc được phim: {str(e)[:160]}'})
+            continue
+        base = split_eps(u)[0]
+        dramas[base] = series
+        job.log(f'{label}: {series.name} — {len(eps)} tập', 'info')
+        for e in eps:
+            eps_of[f'{base}#ep={e.num}'] = e
+            items.append({'url': f'{base}#ep={e.num}', 'platform': f'{label} · tập {e.num}', 'drama': base})
     job.result['items'] = items
     job.result['out_dir'] = out_dir
-    n = len(urls)
-    for (i, it) in enumerate(items):
+    n = len(items)
+    pct_of = {}                                # % từng mục — tập phim tải song song nên tiến độ chung = trung bình
+
+    def one(i, it):
         job.check()
+        if it.get('error'):
+            pct_of[i] = 100
+            return
+        ep = eps_of.get(it['url'])
+        log = (lambda m, t=None: job.log(f"   [tập {ep.num}] {m.strip()}", t)) if ep else job.log
         job.log(f"[{i + 1}/{n}] Tải {it['platform']}...", 'info')
 
-        def prog(pct, size, speed, eta, i=i):
-            job.progress = int((i + pct / 100) / n * 100)
-            job.stage = f'Đang tải {i + 1}/{n} · {pct:.0f}%' + (f' · {size}' if size else '') + (f' · {speed}' if speed else '')
+        def prog(pct, size, speed, eta):
+            pct_of[i] = pct
+            job.progress = int(sum(pct_of.values()) / n)
+            job.stage = (f'Đang tải {sum(1 for p in pct_of.values() if p >= 100)}/{n} tập' if ep else
+                         f'Đang tải {i + 1}/{n} · {pct:.0f}%' + (f' · {size}' if size else '') + (f' · {speed}' if speed else ''))
             job.save(throttle=True)
 
         try:
-            path = download(it['url'], out_dir, job.log, cfg.get('quality', 'best'), prog, should_stop=lambda: job.cancelled,
-                            title=(cfg.get('titles') or {}).get(it['url'], ''))
+            if ep:
+                path = download_drama_episode(dramas[it['drama']], ep, out_dir, log, prog, should_stop=lambda: job.cancelled)
+            else:
+                path = download(it['url'], out_dir, log, cfg.get('quality', 'best'), prog, should_stop=lambda: job.cancelled,
+                                title=(cfg.get('titles') or {}).get(it['url'], ''))
             it.update(path=path, size=os.path.getsize(path))
-            job.log(f'   [OK] {os.path.basename(path)} ({os.path.getsize(path) / 1_048_576:.1f} MB)', 'ok')
+            log(f'   [OK] {os.path.basename(path)} ({os.path.getsize(path) / 1_048_576:.1f} MB)', 'ok')
+            if cfg.get('subs') and cfg.get('quality') != 'audio':
+                _download_subs(job, it, cfg['subs'], log)
         except RuntimeError as e:
             job.check()
             it['error'] = str(e)
-            job.log(f'   [LỖI] {e}', 'err')
+            log(f'   [LỖI] {e}', 'err')
+        prog(100, '', '', '')
         job.save()
+
+    # link thường (yt-dlp…) tải lần lượt; tập phim ngắn là link CDN thẳng → 3 tập song song
+    for (i, it) in enumerate(items):
+        if not it.get('drama'):
+            one(i, it)
+    drama_idx = [i for (i, it) in enumerate(items) if it.get('drama')]
+    if drama_idx:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(3) as ex:
+            list(ex.map(lambda i: one(i, items[i]), drama_idx))
     ok = sum(1 for it in items if it.get('path'))
     if not ok:
         raise RuntimeError(items[0].get('error') if n == 1 else f'Không tải được video nào ({n} link) — xem chi tiết từng link.')

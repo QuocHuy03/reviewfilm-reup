@@ -29,6 +29,8 @@ def get_whisper_cache_dir(audio_path):
 
 def prefetch_model(model_name, out_dir):
     """Tải sẵn model Whisper (ngầm, lúc mở app) vào đúng chỗ job sẽ tìm — job đầu tiên không phải chờ tải."""
+    if model_name == 'capcut':
+        return                    # nhận dạng online, không có model để tải
     try:
         from huggingface_hub import snapshot_download
         drive = os.path.splitdrive(os.path.abspath(out_dir or os.path.expanduser('~')))[0]
@@ -124,6 +126,14 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
 
     if not _extract():
         return None
+
+    if model == 'capcut':
+        from core.capcut_stt import CapcutSttError, transcribe as capcut_transcribe
+        try:
+            return capcut_transcribe(audio_path, temp_dir, language, log_fn, should_stop, word_timestamps)
+        except CapcutSttError as e:
+            log_fn(f'   [WARN] CapCut nhận dạng lỗi ({e}) — chuyển sang Whisper base...')
+            model = 'base'
 
     log_fn(f"   Chạy Whisper model '{model}'...")
     def _run_whisper():

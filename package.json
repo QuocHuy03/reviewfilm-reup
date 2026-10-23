@@ -1,6 +1,6 @@
 {
   "name": "reviewfilm",
-  "version": "2.4.7",
+  "version": "2.5.0",
   "private": true,
   "description": "ReviewFilm Studio — AI review phim, dịch & reup, phụ đề",
   "main": "electron/dist/main.js",
@@ -10,7 +10,7 @@
     "dev:electron": "tsc -p electron && wait-on tcp:127.0.0.1:5173 && cross-env RF_DEV=1 node scripts/electron.cjs",
     "start": "tsc -p electron && node scripts/electron.cjs",
     "build": "npm --prefix frontend run build && tsc -p electron",
-    "check": "tsc -p electron --noEmit && npm --prefix frontend run typecheck && python -m compileall -q backend/main.py backend/app backend/core backend/workers",
+    "check": "tsc -p electron --noEmit && npm --prefix frontend run typecheck && python -m compileall -q backend/main.py backend/app backend/core backend/workers backend/capcut_tts_api",
     "version:patch": "node scripts/version.cjs patch",
     "version:minor": "node scripts/version.cjs minor",
     "version:major": "node scripts/version.cjs major",

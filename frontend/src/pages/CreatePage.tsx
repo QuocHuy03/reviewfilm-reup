@@ -65,6 +65,7 @@ const DEFAULT_CFG = {
 /** Whisper trên CPU tốn bao lâu so với độ dài phim (đo thật trên Xeon 2.4GHz, chế độ nhanh beam 1). */
 const CPU_RATIO: Record<string, number> = { tiny: 0.04, base: 0.11, small: 0.3, medium: 0.8, large: 1.6, "large-v2": 1.6, "large-v3": 1.6 }
 function whisperHint(model: string, device: string) {
+  if (model === "capcut") return "CapCut online: ~10s / tập, không cần GPU · cần mạng"
   if (device.startsWith("GPU")) return "GPU: vài phút cho phim dài"
   const r = CPU_RATIO[model]
   if (!r) return "base nhanh · medium chính xác hơn"
@@ -431,7 +432,7 @@ export function CreatePage() {
               </div>
               {cfg.burn_subtitles && <SubtitleStyleEditor base={preset} custom={cfg.sub_custom} onChange={(c) => set("sub_custom", c)} />}
               {mode === "vietsub" ? (
-                <p className="text-[11px] text-muted-foreground">Che phụ đề cũ y như Review phim: làm mờ cố định cả dải phụ đề (và logo 4 góc) suốt video, phụ đề Việt nằm trên dải mờ.</p>
+                <p className="text-[11px] text-muted-foreground">Xoá sạch phụ đề cũ & chữ / logo 4 góc: AI tìm đúng nét chữ Trung từng khung rồi lấp bằng hình xung quanh — không dải mờ, không ô nền; phụ đề Việt chữ trắng viền đen. Chữ trong cảnh giữ nguyên. (~1–1.5 phút xử lý / 1 phút video)</p>
               ) : (
               <Field label="Kiểu che chữ cũ / logo">
                 <Segmented size="sm" value={cfg.cover_style} onChange={(v) => set("cover_style", v)}
