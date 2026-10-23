@@ -250,9 +250,12 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
     async def _one(i, text):
         out_path = os.path.join(temp_dir, f'''vo_{i:04d}.mp3''')
         last_err = None
+        # Edge hay không trả âm thanh với câu cảm thán rất ngắn ("Hả?", "Ơ!") → lần thử sau đổi cách viết (bỏ dấu hỏi / thêm dấu chấm)
+        base = text.rstrip('?!.…, ').strip() or text
+        variants = [text, text, base + '.', base, base + '...']
         for attempt in range(_EDGE_RETRY + 1):
             try:
-                comm = edge_tts.Communicate(text, voice, rate=rate)
+                comm = edge_tts.Communicate(variants[min(attempt, len(variants) - 1)], voice, rate=rate)
                 await comm.save(out_path)
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                     return (i, out_path, True)
