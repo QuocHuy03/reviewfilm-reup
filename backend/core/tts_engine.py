@@ -235,8 +235,8 @@ def _build_out_scenes(indexed, result_map, engine, log_fn, fail_msg, short_msg):
         scene2['_tts_engine_used'] = engine
         out_scenes.append(scene2)
     return out_scenes
-_EDGE_CHUNK = 30
-_EDGE_RETRY = 2
+_EDGE_CHUNK = 8          # gửi dồn 30 câu cùng lúc → Edge chặn tạm ("No audio was received") hàng loạt câu
+_EDGE_RETRY = 4
 def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
     try:
         import edge_tts
@@ -259,7 +259,8 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
             except Exception as _e:
                 last_err = _e
             if attempt < _EDGE_RETRY:
-                await asyncio.sleep(1.0 * (attempt + 1))
+                import random
+                await asyncio.sleep(2.0 ** (attempt + 1) + random.uniform(0, 1.5))   # chờ tăng dần 2 → 4 → 8 → 16s cho Edge hồi
         if last_err and i == 0:
             log_fn(f'''   [WARN] Edge TTS lỗi (cảnh đầu): {last_err}''')
         return (i, out_path, False)

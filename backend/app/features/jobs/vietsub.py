@@ -318,6 +318,7 @@ def _pcm(path, tempo):
 # đọc nhanh nhẹ tối đa MAX_SPEED (atempo, giữ cao độ giọng); tua tối đa vẫn không vừa mới nhờ AI viết gọn.
 TOLERANCE = 1.5
 MAX_SPEED = 1.2
+BLOCK_GAP = 1.5                                  # khoảng lặng ≥ bấy nhiêu giây → sang đoạn hội thoại mới (tốc độ đọc riêng)
 MIN_DUR = 2.5                                    # câu ngắn hơn (cùng người, sát nhau) gộp với câu sau
 SPEED_MARGIN = 0.1
 
@@ -416,6 +417,14 @@ def _analyze_cast(job, video, units, orig_texts, vi_texts=None):
     except Exception as e:
         job.log(f'   [WARN] AI phân vai lỗi ({str(e)[:120]}) — dùng kết quả nghe giọng', 'warn')
     return res
+
+
+def old_subs_found(regions, scanned):
+    """Có phụ đề cứng cũ (dải phụ đề) để làm mờ không — chưa quét được thì coi như có (vẫn che như trước)."""
+    if not scanned:
+        return True
+    from core import text_cover
+    return bool(regions) and text_cover.subtitle_band(regions) is not None
 
 
 def _band_or_corner(box, band, corner_x=0.3, corner_y=0.22):
@@ -743,8 +752,16 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
         bad = {}
         for i in still:
             bad.setdefault(uvoice[i], genders[i])
-        idx = [i for (i, v) in enumerate(uvoice) if v in bad]
-        job.log(f'   {len(still)} câu {why} — đổi hẳn giọng cho {len(idx)} câu cùng giọng (giữ 1 nhân vật 1 giọng)', 'warn')
+        n_fail = {v: sum(1 for i in still if uvoice[i] == v) for v in bad}
+        n_all = {v: sum(1 for x in uvoice if x == v) for v in bad}
+        # chỉ đổi hẳn giọng khi giọng đó lỗi NHIỀU (> 3 câu và > 5% số câu); lỗi lẻ 1–2 câu → chỉ đọc riêng câu đó bằng giọng
+        # dự phòng (đổi cả 241 câu vì 1 câu lỗi thì khác hẳn giọng người dùng chọn + chậm thêm nhiều phút)
+        whole = {v for v in bad if n_fail[v] > 3 and n_fail[v] > 0.05 * n_all[v]}
+        idx = [i for (i, v) in enumerate(uvoice) if v in whole] + [i for i in still if uvoice[i] not in whole]
+        if whole:
+            job.log(f'   {len(still)} câu {why} — đổi hẳn giọng cho {len(idx)} câu (giữ 1 nhân vật 1 giọng)', 'warn')
+        else:
+            job.log(f'   {len(still)} câu {why} — chỉ đọc riêng {len(still)} câu đó bằng giọng dự phòng', 'warn')
         repl = {v: pick(g) for (v, g) in bad.items()}
         for i in idx:
             uvoice[i] = repl[uvoice[i]]
@@ -798,11 +815,38 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
     if missing:
         job.log(f'   [WARN] {missing} câu không tạo được giọng — để trống', 'warn')
 
-    # Tốc độ đọc CỐ ĐỊNH cho cả video: mỗi câu cần nhanh bao nhiêu để vừa khung → lấy mức đa số câu cần (75%), trong 1.0–1.2×.
-    # Mọi câu đọc cùng 1 nhịp (tua từng câu một khác nhau nghe giọng "nhảy"); câu còn dài thì lấn khoảng lặng sau.
-    needs = sorted(u['dur'] / max(0.3, slot(i) - SPEED_MARGIN) for (i, u) in enumerate(units) if uvoice[i] and u.get('dur', 0) > 0)
-    steady = min(MAX_SPEED, max(1.0, needs[int(len(needs) * 0.75)] if needs else 1.0))
-    steady = round(steady, 2)
+    # Tốc độ đọc theo TỪNG ĐOẠN HỘI THOẠI (các câu nối liền, ngắt ở khoảng lặng ≥ BLOCK_GAP giây): trong 1 đoạn mọi câu cùng
+    # 1 nhịp (không câu nhanh câu chậm — nghe "nhảy"); đoạn thoại dày đọc nhanh hơn (≤ MAX_SPEED), đoạn thưa tốc độ gốc
+    # → phim dài không bị trễ dồn như khi cả phim chung 1 tốc độ. Đoạn liền kề (cách < 4s) đổi tốc độ từ từ.
+    voiced = [i for (i, u) in enumerate(units) if uvoice[i] and u.get('dur', 0) > 0]
+    blocks = []
+    for i in voiced:
+        if blocks and units[i]['start'] - units[blocks[-1][-1]]['end'] < BLOCK_GAP:
+            blocks[-1].append(i)
+        else:
+            blocks.append([i])
+    tempo_of = {}
+    prev = None
+    def block_lag(b, t):
+        # mô phỏng đọc cả đoạn ở tốc độ t: trễ lớn nhất của 1 câu so với lúc nhân vật nói + phần lố khỏi khung câu cuối
+        (end, lag) = (-1.0, 0.0)
+        for i in b:
+            st = max(units[i]['start'], end + 0.05)
+            lag = max(lag, st - units[i]['start'])
+            end = st + units[i]['dur'] / t
+        return max(lag, end - (units[b[-1]]['start'] + slot(b[-1])))
+
+    for b in blocks:
+        # tốc độ THẤP NHẤT (1.00 → MAX_SPEED, bước 0.02) mà giọng không trễ quá 0.25s — đoạn tua tối đa vẫn trễ thì dùng tối đa
+        steps = [round(1.0 + 0.02 * k, 2) for k in range(int(round((MAX_SPEED - 1.0) / 0.02)) + 1)]
+        t = next((x for x in steps if block_lag(b, x) <= 0.25), MAX_SPEED)
+        if prev is not None and units[b[0]]['start'] - units[prev[1]]['end'] < 4.0:
+            t = min(max(t, prev[0] - 0.05), prev[0] + 0.05) if t < prev[0] else t   # chậm lại từ từ, nhanh lên khi cần
+        t = round(t, 2)
+        for i in b:
+            tempo_of[i] = t
+        prev = (t, b[-1])
+    speeds = sorted(set(tempo_of.values())) or [1.0]
 
     # Xếp lịch: không chồng tiếng — câu trễ thì đọc ngay sau câu trước; ghi track giọng tuần tự (ít RAM cả phim dài)
     voice_wav = os.path.join(temp_dir, 'voice.wav')
@@ -819,7 +863,7 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
             t = max(u['start'], prev_end + 0.05)
             # khung còn lại tính từ lúc thật sự bắt đầu đọc (câu trước lấn thì khung ngắn lại) — trừ hao 0.1s như VideoLingo
             avail = max(0.3, u['start'] + slot(i) - t - SPEED_MARGIN)
-            tempo = steady                           # cùng 1 tốc độ cho mọi câu
+            tempo = tempo_of.get(i, 1.0)             # cùng 1 tốc độ trong cả đoạn hội thoại
             spilled += u['dur'] / tempo > avail + 0.05
             max_lag = max(max_lag, t - u['start'])
             pcm = _pcm(u['path'], tempo)
@@ -833,7 +877,8 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
             written += len(pcm) // 2
             prev_end = written / DUB_RATE
             spans.append((t, prev_end))
-    job.log((f'   Tốc độ đọc cố định cả video: {steady:.2f}× (mọi câu cùng nhịp, tối đa {MAX_SPEED}×)' if steady > 1.001 else '   Mọi câu đọc ở tốc độ gốc')
+    job.log((f'   Tốc độ đọc theo đoạn hội thoại: {speeds[0]:.2f}–{speeds[-1]:.2f}× ({len(blocks)} đoạn, cùng nhịp trong mỗi đoạn, tối đa {MAX_SPEED}×)'
+             if speeds[-1] > 1.001 else '   Mọi câu đọc ở tốc độ gốc')
             + (f' · {spilled} câu lấn sang khoảng lặng sau, trễ nhất {max_lag:.1f}s' if spilled else ' · mọi câu vừa khung thời gian'), 'info')
 
     # Đường cong âm lượng tiếng gốc (1000 điểm/giây): hạ xuống mức đã chọn khi có lời Việt, lên xuống mượt
@@ -1122,6 +1167,9 @@ def run_vietsub_pipeline(job):
 
         # 4. Phụ đề: kiểu chữ của app, file ASS đúng khung video; nằm giữa vùng che → tâm phụ đề = tâm vùng che
         style = _sub_style(cfg)
+        if cfg.get('remove_old_sub') and cfg.get('cover_boxes') and old_subs_found(regions, scanned):
+            # đã làm mờ dải phụ đề cũ → phụ đề Việt chỉ chữ trắng viền đen, KHÔNG ô nền (ô đen chồng lên dải mờ nhìn xám xịt)
+            style = {**style, 'sub_box_enabled': False, 'sub_border_width': max(3, int(style.get('sub_border_width', 3) or 3))}
         upper = style.get('sub_text_transform') == 'uppercase'
         sub_cues = [{**c, 'text': c['text'].upper() if upper else c['text']} for c in cues]
         _write_ass(os.path.join(temp_dir, 'subs.ass'), sub_cues, style, w, h, sub_cover_center(cfg))
@@ -1186,11 +1234,19 @@ def run_vietsub_pipeline(job):
                     if 8 < X2 - X1 <= w * 0.30 and 8 < Y2 - Y1 <= h * 0.18:     # chỉ logo / chữ nhỏ ở góc — vùng to bỏ qua
                         corner = (X1 + X2 < w, Y1 + Y2 < h)                       # góc nào (trái/phải, trên/dưới)
                         corners.setdefault(corner, []).append((X1, Y1, X2, Y2))
-                for bxs in corners.values():                                       # 1 vùng che / góc (gộp các mảnh)
-                    (X1, Y1) = (min(b[0] for b in bxs), min(b[1] for b in bxs))
-                    (X2, Y2) = (max(b[2] for b in bxs), max(b[3] for b in bxs))
-                    if X2 - X1 <= w * 0.32 and Y2 - Y1 <= h * 0.2:
-                        logos.append([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100])
+                for bxs in corners.values():
+                    # gộp mảnh chạm / sát nhau (≤ 12px) thành 1 vùng; cụm gộp quá to thì giữ từng mảnh nhỏ — không bỏ cả góc
+                    clusters = []
+                    for bx in sorted(bxs):
+                        for c in clusters:
+                            if bx[0] <= c[2] + 12 and bx[2] >= c[0] - 12 and bx[1] <= c[3] + 12 and bx[3] >= c[1] - 12:
+                                c[:] = [min(c[0], bx[0]), min(c[1], bx[1]), max(c[2], bx[2]), max(c[3], bx[3])]
+                                break
+                        else:
+                            clusters.append(list(bx))
+                    for (X1, Y1, X2, Y2) in clusters:
+                        if X2 - X1 <= w * 0.32 and Y2 - Y1 <= h * 0.2:
+                            logos.append([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100])
             for (k, b) in enumerate(logos):     # logo / chữ cố định: che suốt video (đã xoá sạch thì thôi)
                 # logo nhỏ & đứng yên → XOÁ (delogo lấp bằng điểm ảnh xung quanh + mịn viền), không làm mờ thành ô chữ nhật lộ
                 (chain, cur) = _box_chain(cur, b, w, h, 'erase', None, f'lg{k}')

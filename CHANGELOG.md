@@ -12,6 +12,14 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+### Changed
+- Tốc độ đọc lồng tiếng theo từng đoạn hội thoại (ngắt ở khoảng lặng ≥ 1.5s): mỗi đoạn chọn tốc độ thấp nhất (1.00–1.20×) mà giọng không trễ quá 0.25s, cùng 1 nhịp trong đoạn — phim dài không còn trễ dồn (bản cả phim chung 1 tốc độ trễ tới ~4.5s).
+- Đã làm mờ dải phụ đề cũ thì phụ đề Việt chỉ chữ trắng viền đen, không ô nền đen (hết mảng xám xịt).
+
+### Fixed
+- Logo góc bị bỏ sót khi có nhiều vùng chữ cùng góc: chỉ gộp các mảnh chạm / sát nhau, cụm quá to thì giữ từng mảnh nhỏ.
+- Edge TTS bị chặn tạm hàng loạt câu: gửi 8 câu / lượt (thay vì 30), thử lại 4 lần, chờ tăng dần; lỗi lẻ 1–2 câu chỉ đọc riêng câu đó bằng giọng dự phòng (không đổi giọng cả nhân vật).
+
 ## [2.4.7] - 2026-10-22
 
 ### Added
