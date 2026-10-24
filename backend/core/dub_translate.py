@@ -97,7 +97,11 @@ def translate(segments, cast, log=print, film_context='', batch=30):
                                                      for (k, v) in sorted(spk.items(), key=lambda kv: -int(kv[1].get('count') or 0))) + '\n'
     context = f'\nBối cảnh phim: {film_context.strip()[:600]}\n' if film_context.strip() else ''
     limit = budgets(segments)
-    gloss = glossary(segments, who, log)
+    from core import user_glossary
+    mine = user_glossary.prompt_block()
+    if mine:
+        log(f"   Từ điển của bạn: {mine.count(' = ')} tên / thuật ngữ đã chốt cách dịch", 'step')
+    gloss = mine + glossary(segments, who, log)
     out = [None] * n
     for k in range(0, n, batch):
         idx = list(range(k, min(n, k + batch)))

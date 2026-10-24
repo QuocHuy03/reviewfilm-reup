@@ -2,7 +2,7 @@ import {
   AlertTriangle, ArrowLeftToLine, ArrowRightToLine, Captions, ChevronLeft, ChevronRight, CircleHelp, Crosshair, Eye, EyeOff, Film,
   Maximize2, Mic, Music2, Pause, Play, Redo2, SkipBack, SkipForward, Undo2, Volume2, VolumeX, ZoomIn, ZoomOut,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 import { Slider } from "@/components/ui/slider"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -70,7 +70,20 @@ type Props = {
 }
 
 /** Timeline nhiều track kiểu CapCut: Video · Lời đọc · Phụ đề · Nhạc nền, thước thời gian, đầu phát, zoom. */
-export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim, onReorder, onEditStart, onPeek, mode = "review", videoDuration, onUndo, onRedo, canUndo, canRedo, onToggleExcluded, readOnlyHint = "Đổi thứ tự / cắt cảnh được ở bước Sửa kịch bản và Hậu kỳ & xác nhận (khi job dừng chờ bạn).", onSeek, onSelect, onToggle, onToggleMute }: Props) {
+export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim: onTrimProp, onReorder: onReorderProp, onEditStart: onEditStartProp, onPeek: onPeekProp, mode = "review", videoDuration, onUndo, onRedo, canUndo, canRedo, onToggleExcluded, readOnlyHint = "Đổi thứ tự / cắt cảnh được ở bước Sửa kịch bản và Hậu kỳ & xác nhận (khi job dừng chờ bạn).", onSeek: onSeekProp, onSelect: onSelectProp, onToggle, onToggleMute }: Props) {
+  // Trang cha truyền callback mới mỗi lần render (mỗi khung hình khi phát) → bọc thành hàm cố định đọc bản mới nhất,
+  // để các làn clip (useMemo bên dưới) không phải dựng lại 60 lần/giây.
+  const latest = useRef({ onSeekProp, onSelectProp, onTrimProp, onReorderProp, onEditStartProp, onPeekProp })
+  latest.current = { onSeekProp, onSelectProp, onTrimProp, onReorderProp, onEditStartProp, onPeekProp }
+  const onSeek = useCallback((t: number) => latest.current.onSeekProp(t), [])
+  const onSelect = useCallback((i: number) => latest.current.onSelectProp(i), [])
+  const trimS = useCallback((i: number, p: Partial<Pick<Scene, "clip_start" | "clip_end">>) => latest.current.onTrimProp?.(i, p), [])
+  const reorderS = useCallback((from: number, to: number) => latest.current.onReorderProp?.(from, to), [])
+  const onEditStart = useCallback(() => latest.current.onEditStartProp?.(), [])
+  const onPeek = useCallback((t: number) => latest.current.onPeekProp?.(t), [])
+  const onTrim = onTrimProp ? trimS : undefined
+  const onReorder = onReorderProp ? reorderS : undefined
+
   const scroller = useRef<HTMLDivElement>(null)
   const [pps, setPps] = useState(24)
   const [fitted, setFitted] = useState(false)
@@ -293,6 +306,76 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
     if (el) requestAnimationFrame(() => { el.scrollLeft = Math.max(0, at * pps - el.clientWidth * 0.3) })
   }
 
+  // Các làn clip không phụ thuộc đầu phát → chỉ dựng lại khi cảnh / zoom / chọn / kéo đổi, không phải mỗi khung hình
+  const lanes = useMemo(() => (<>
+            <Lane h={TRACKS.video.h} onScrub={startScrub}>
+              {clips.map((c, k) => {
+                const span = c.scene.clip_end - c.scene.clip_start
+                const over = mode === "review" ? c.dur - span : 0           // Review: lời dài hơn đoạn hình → chiếu lấn sang hình phía sau
+                const rate = mode === "reup" && c.dur > 0 ? span / c.dur : 1  // Reup: tốc độ hình sau khi kéo giãn
+                return (
+                  <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
+                    onBodyDown={(e) => startMove(e, c)} dragging={dragRole(c)}
+                    className={cn(TRACKS.video.clip, (onReorder || onTrim) && "cursor-grab active:cursor-grabbing")}>
+                    {over > 0.3 && (
+                      <span title={`Lời dài hơn đoạn hình ${over.toFixed(1)}s — video sẽ chiếu sang phần hình phía sau (có thể lặp hình cảnh kế)`}
+                        className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(135deg,rgba(251,191,36,.35)_0_4px,transparent_4px_8px)]"
+                        style={{ width: Math.min(c.dur, over) * pps }} />
+                    )}
+                    {onTrim && <>
+                      <span onPointerDown={(e) => startTrim(e, c, "clip_start")} title="Kéo để đổi điểm đầu đoạn hình gốc"
+                        className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-2 after:left-0.5 after:w-[3px] after:rounded-full after:bg-white/0 hover:after:bg-white/80" />
+                      <span onPointerDown={(e) => startTrim(e, c, "clip_end")} title="Kéo để đổi điểm cuối đoạn hình gốc"
+                        className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-2 after:right-0.5 after:w-[3px] after:rounded-full after:bg-white/0 hover:after:bg-white/80" />
+                    </>}
+                    {drag?.index === c.index && (
+                      <span className="tabular absolute top-0.5 right-1.5 z-20 rounded bg-black/75 px-1 font-mono text-[9.5px] whitespace-nowrap text-white">{drag.label}</span>
+                    )}
+                    <div className="relative flex h-full flex-col justify-between px-2 py-1">
+                      <span className="flex items-center gap-1 truncate text-[11px] font-semibold">
+                        Cảnh {k + 1}
+                        {issues[c.index] && <AlertTriangle className={cn("size-3 shrink-0", issues[c.index] === "error" ? "text-red-300" : "text-amber-300")} />}
+                        {(rate > 1.35 || rate < 0.7) && <span className="rounded bg-amber-400/25 px-1 font-mono text-[9px] text-amber-200" title="Tốc độ hình sau khi kéo giãn cho vừa lời">×{rate.toFixed(1)}</span>}
+                      </span>
+                      <span className="tabular truncate font-mono text-[9.5px] text-white/55" title="Mốc trong video gốc · độ dài">▶ {fmtClock(c.scene.clip_start)} · {c.dur.toFixed(1)}s</span>
+                    </div>
+                  </ClipBox>
+                )
+              })}
+            </Lane>
+
+            <Lane h={TRACKS.voice.h} onScrub={startScrub}>
+              {clips.map((c) => (
+                <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
+                  onBodyDown={onReorder ? (e) => startMove(e, c) : undefined} dragging={dragRole(c)}
+                  className={cn(TRACKS.voice.clip, muted.voice && "opacity-40", !c.scene.tts_path && "border-dashed bg-orange-950/70")}>
+                  <div className="h-full w-full opacity-55 [background:repeating-linear-gradient(90deg,transparent_0_2px,rgba(255,237,213,.6)_2px_3px)] [mask:linear-gradient(transparent_22%,#000_38%,#000_62%,transparent_78%)]" />
+                </ClipBox>
+              ))}
+            </Lane>
+
+            <Lane h={TRACKS.subtitle.h} onScrub={startScrub}>
+              {clips.map((c) => {
+                const s = scenes[c.index]
+                return (
+                  <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
+                    onBodyDown={onReorder ? (e) => startMove(e, c) : undefined} dragging={dragRole(c)}
+                    className={TRACKS.subtitle.clip}>
+                    <span className="block truncate px-2 pt-[9px] text-[10.5px] leading-none">{s?.subtitle || s?.voiceover}</span>
+                  </ClipBox>
+                )
+              })}
+            </Lane>
+
+            <Lane h={TRACKS.music.h} onScrub={startScrub}>
+              {bgmName && total > 0 && (
+                <div className={cn("absolute inset-y-1 left-0 overflow-hidden rounded-md border", TRACKS.music.clip, muted.music && "opacity-40")} style={{ width: total * pps }}>
+                  <span className="block truncate px-2 pt-[6px] text-[10px] text-white/85">{bgmName}</span>
+                </div>
+              )}
+            </Lane>
+  </>), [clips, scenes, pps, selected, drag, issues, muted.voice, muted.music, bgmName, total, mode, videoDuration, readOnlyHint, !!onTrim, !!onReorder]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Thanh tổng quan: cả video thu nhỏ, khung trắng = phần đang nhìn; bấm / kéo để nhảy tới
   const overview = useRef<HTMLDivElement>(null)
   const startOverview = (e: ReactPointerEvent) => {
@@ -426,72 +509,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
               ))}
             </div>
 
-            <Lane h={TRACKS.video.h} onScrub={startScrub}>
-              {clips.map((c, k) => {
-                const span = c.scene.clip_end - c.scene.clip_start
-                const over = mode === "review" ? c.dur - span : 0           // Review: lời dài hơn đoạn hình → chiếu lấn sang hình phía sau
-                const rate = mode === "reup" && c.dur > 0 ? span / c.dur : 1  // Reup: tốc độ hình sau khi kéo giãn
-                return (
-                  <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
-                    onBodyDown={(e) => startMove(e, c)} dragging={dragRole(c)}
-                    className={cn(TRACKS.video.clip, (onReorder || onTrim) && "cursor-grab active:cursor-grabbing")}>
-                    {over > 0.3 && (
-                      <span title={`Lời dài hơn đoạn hình ${over.toFixed(1)}s — video sẽ chiếu sang phần hình phía sau (có thể lặp hình cảnh kế)`}
-                        className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(135deg,rgba(251,191,36,.35)_0_4px,transparent_4px_8px)]"
-                        style={{ width: Math.min(c.dur, over) * pps }} />
-                    )}
-                    {onTrim && <>
-                      <span onPointerDown={(e) => startTrim(e, c, "clip_start")} title="Kéo để đổi điểm đầu đoạn hình gốc"
-                        className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-2 after:left-0.5 after:w-[3px] after:rounded-full after:bg-white/0 hover:after:bg-white/80" />
-                      <span onPointerDown={(e) => startTrim(e, c, "clip_end")} title="Kéo để đổi điểm cuối đoạn hình gốc"
-                        className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-2 after:right-0.5 after:w-[3px] after:rounded-full after:bg-white/0 hover:after:bg-white/80" />
-                    </>}
-                    {drag?.index === c.index && (
-                      <span className="tabular absolute top-0.5 right-1.5 z-20 rounded bg-black/75 px-1 font-mono text-[9.5px] whitespace-nowrap text-white">{drag.label}</span>
-                    )}
-                    <div className="relative flex h-full flex-col justify-between px-2 py-1">
-                      <span className="flex items-center gap-1 truncate text-[11px] font-semibold">
-                        Cảnh {k + 1}
-                        {issues[c.index] && <AlertTriangle className={cn("size-3 shrink-0", issues[c.index] === "error" ? "text-red-300" : "text-amber-300")} />}
-                        {(rate > 1.35 || rate < 0.7) && <span className="rounded bg-amber-400/25 px-1 font-mono text-[9px] text-amber-200" title="Tốc độ hình sau khi kéo giãn cho vừa lời">×{rate.toFixed(1)}</span>}
-                      </span>
-                      <span className="tabular truncate font-mono text-[9.5px] text-white/55" title="Mốc trong video gốc · độ dài">▶ {fmtClock(c.scene.clip_start)} · {c.dur.toFixed(1)}s</span>
-                    </div>
-                  </ClipBox>
-                )
-              })}
-            </Lane>
-
-            <Lane h={TRACKS.voice.h} onScrub={startScrub}>
-              {clips.map((c) => (
-                <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
-                  onBodyDown={onReorder ? (e) => startMove(e, c) : undefined} dragging={dragRole(c)}
-                  className={cn(TRACKS.voice.clip, muted.voice && "opacity-40", !c.scene.tts_path && "border-dashed bg-orange-950/70")}>
-                  <div className="h-full w-full opacity-55 [background:repeating-linear-gradient(90deg,transparent_0_2px,rgba(255,237,213,.6)_2px_3px)] [mask:linear-gradient(transparent_22%,#000_38%,#000_62%,transparent_78%)]" />
-                </ClipBox>
-              ))}
-            </Lane>
-
-            <Lane h={TRACKS.subtitle.h} onScrub={startScrub}>
-              {clips.map((c) => {
-                const s = scenes[c.index]
-                return (
-                  <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
-                    onBodyDown={onReorder ? (e) => startMove(e, c) : undefined} dragging={dragRole(c)}
-                    className={TRACKS.subtitle.clip}>
-                    <span className="block truncate px-2 pt-[9px] text-[10.5px] leading-none">{s?.subtitle || s?.voiceover}</span>
-                  </ClipBox>
-                )
-              })}
-            </Lane>
-
-            <Lane h={TRACKS.music.h} onScrub={startScrub}>
-              {bgmName && total > 0 && (
-                <div className={cn("absolute inset-y-1 left-0 overflow-hidden rounded-md border", TRACKS.music.clip, muted.music && "opacity-40")} style={{ width: total * pps }}>
-                  <span className="block truncate px-2 pt-[6px] text-[10px] text-white/85">{bgmName}</span>
-                </div>
-              )}
-            </Lane>
+            {lanes}
 
             {empty && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ top: RULER_H }}>

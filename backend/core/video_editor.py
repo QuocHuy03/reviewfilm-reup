@@ -209,7 +209,7 @@ def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, 
         else:
             groups.append([[x1, y1, x2, y2], [(a, b)]])
     erase = style == 'erase' and src_size and src_size[0] > 8 and src_size[1] > 8
-    (parts, cur) = ([], '0:v')
+    (parts, cur, blurs) = ([], '0:v', [])
     for (i, ((x1, y1, x2, y2), spans)) in enumerate(groups[:max_groups]):
         merged = []                              # gộp khoảng sát nhau (cả phim một lượt có hàng trăm câu phụ đề)
         for (a, b) in sorted(spans):
@@ -230,12 +230,21 @@ def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, 
             sigma_i = max(4, round(ph * 0.09))       # vùng lớn mờ thêm chút cho hết vệt sọc của delogo
         else:
             sigma_i = sigma
-        parts.append(f'[{cur}]split[tsa{i}][tsb{i}]')
-        parts.append(f'[tsb{i}]crop=trunc(iw*{dw:.4f}/2)*2:trunc(ih*{dh:.4f}/2)*2:trunc(iw*{x1:.4f}/2)*2:trunc(ih*{y1:.4f}/2)*2,'
-                     f'gblur=sigma={sigma_i:g}:steps=3[tsc{i}]')
-        parts.append(f"[tsa{i}][tsc{i}]overlay=trunc(W*{x1:.4f}/2)*2:trunc(H*{y1:.4f}/2)*2:enable='{en}'[ts{i}]")
+        blurs.append((x1, y1, dw, dh, sigma_i, en))
+    if not blurs:
+        return ('', '0:v')
+    # Split 1 lần → N nhánh cắt + làm mờ → dán lần lượt. Mỗi vùng 1 cặp split → overlay nối tiếp làm ffmpeg kéo khung hình
+    # nhân đôi qua từng cặp (thời gian dựng tăng theo 2^số vùng). gblur cũng chỉ chạy lúc vùng đó cần che.
+    n = len(blurs)
+    parts.append(f'[{cur}]split[tsm][tss]')
+    parts.append(f'[tss]split={n}' + ''.join(f'[tss{i}]' for i in range(n)) if n > 1 else '[tss]null[tss0]')
+    cur = 'tsm'
+    for (i, (x1, y1, dw, dh, sigma_i, en)) in enumerate(blurs):
+        parts.append(f'[tss{i}]crop=trunc(iw*{dw:.4f}/2)*2:trunc(ih*{dh:.4f}/2)*2:trunc(iw*{x1:.4f}/2)*2:trunc(ih*{y1:.4f}/2)*2,'
+                     f"gblur=sigma={sigma_i:g}:steps=3:enable='{en}'[tsc{i}]")
+        parts.append(f"[{cur}][tsc{i}]overlay=trunc(W*{x1:.4f}/2)*2:trunc(H*{y1:.4f}/2)*2:enable='{en}'[ts{i}]")
         cur = f'ts{i}'
-    return (';'.join(parts), cur) if parts else ('', '0:v')
+    return (';'.join(parts), cur)
 
 
 _DIMS = {}

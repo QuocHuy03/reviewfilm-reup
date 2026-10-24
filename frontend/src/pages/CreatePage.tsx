@@ -50,7 +50,7 @@ export function SimpleSelect({ value, onChange, items, placeholder }: { value: s
 const DEFAULT_CFG = {
   source_lang: "Tự động", whisper_model: "base", device: "GPU (NVIDIA)", minutes: 0, film_context: "",
   scene_accurate: false, ai_translate: true, video_speed: "1.0x (mặc định)", mirror_video: false,
-  voice: "Edge TTS — Nữ Bắc (miễn phí)", strict_voice: false, multi_voice: false,
+  voice: "Edge TTS — Nữ Bắc (miễn phí)", multi_voice: false,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
   remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: true, voice_female: "Edge TTS — Nữ Bắc (miễn phí)", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
@@ -140,7 +140,7 @@ export function CreatePage() {
   // chấm cam trên tab = đang bật tuỳ chọn khác mặc định trong tab đó (để biết mà mở xem)
   const tabDot: Record<Tab, boolean> = {
     script: !!cfg.film_context.trim() || cfg.scene_accurate,
-    voice: cfg.strict_voice || cfg.multi_voice || !cfg.video_speed.startsWith("1.0x"),
+    voice: cfg.multi_voice || !cfg.video_speed.startsWith("1.0x"),
     fx: cfg.color_preset !== "none" || cfg.ken_burns || cfg.vignette || cfg.transition !== "none",
     subs: !cfg.burn_subtitles || cfg.remove_old_sub || Object.keys(cfg.sub_custom).length > 0,
     post: !!cfg.watermark_path || !!cfg.intro_path || !!cfg.outro_path || cfg.mirror_video || cfg.target_resolution !== "1920x1080",
@@ -390,8 +390,6 @@ export function CreatePage() {
                       <Slider value={[cfg.dub_orig_volume]} min={0} max={60} step={5} onValueChange={([v]) => set("dub_orig_volume", v)} className="mt-2.5" />
                     </Field>
                   )}
-                  <ToggleRow label="Giữ đúng giọng đã chọn" checked={cfg.strict_voice} onChange={(v) => set("strict_voice", v)}
-                    desc="Bật: câu lỗi bị bỏ qua thay vì tự đổi sang giọng Edge dự phòng." />
                 </div>
               </Section>
             )}
@@ -403,8 +401,6 @@ export function CreatePage() {
                   <SimpleSelect value={cfg.video_speed} onChange={(v) => set("video_speed", v)} items={options.speeds} />
                 </Field>
                 </div>
-              <ToggleRow label="Giữ đúng giọng đã chọn" checked={cfg.strict_voice} onChange={(v) => set("strict_voice", v)}
-                desc="Bật: câu lỗi bị bỏ qua thay vì tự đổi sang giọng Edge dự phòng." />
               {mode === "review" && (
                 <ToggleRow label="Phân vai nhiều giọng" checked={cfg.multi_voice} onChange={(v) => set("multi_voice", v)}
                   desc="AI nhận diện nhân vật, mỗi vai một giọng VieNeu (cần đăng nhập ChatGPT hoặc Gemini)." />

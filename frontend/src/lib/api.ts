@@ -1,5 +1,5 @@
 import type {
-  AiEdit, ApiKey, FontInfo, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, TextScanState, VieneuStatus, Voice,
+  AiEdit, ApiKey, FontInfo, GlossaryEntry, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, TextScanState, VieneuStatus, Voice,
 } from "./types"
 
 export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
@@ -37,10 +37,14 @@ export const api = {
   importFont: (path: string) => request<{ family: string; vi: boolean; path: string }>("POST", "/api/fonts/import", { path }),
   saveKeys: (values: Record<string, string>) => request<ApiKey[]>("PUT", "/api/keys", { values }),
   voices: () => request<Voice[]>("GET", "/api/voices"),
+  glossary: () => request<{ entries: GlossaryEntry[] }>("GET", "/api/glossary"),
+  saveGlossary: (entries: GlossaryEntry[]) => request<{ entries: GlossaryEntry[] }>("PUT", "/api/glossary", { entries }),
+  addGlossary: (entries: GlossaryEntry[]) => request<{ entries: GlossaryEntry[] }>("POST", "/api/glossary", { entries }),
   detectSubBox: (body: { inp: string; target_resolution: string; crop_box: number[]; crop_fill: boolean }) =>
     request<{ box: number[] | null; found: boolean; seconds: number }>("POST", "/api/jobs/detect-sub-box", body),
   redub: (id: string, body: { voice: string; voice_female: string; dub_by_gender: boolean; dub_orig_volume: number; char_voices?: Record<string, string> }) =>
     request<JobSummary>("POST", `/api/jobs/${id}/redub`, body),
+  resub: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/resub`),
   textScan: (id: string, interval: number, scenes: Scene[]) =>
     request<TextScanState>("POST", `/api/jobs/${id}/text-scan`, { interval, scenes: scenes.map((s) => ({ clip_start: s.clip_start, clip_end: s.clip_end, excluded: s.excluded, tts_duration: s.tts_duration })) }),
   textScanState: (id: string) => request<TextScanState>("GET", `/api/jobs/${id}/text-scan`),

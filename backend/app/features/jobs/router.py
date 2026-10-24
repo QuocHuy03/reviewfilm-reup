@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -348,6 +349,34 @@ def redub_job(job_id: str, req: RedubRequest):
     return job.summary()
 
 
+@router.post('/{job_id}/resub')
+def resub_job(job_id: str):
+    """Dịch phụ đề đã xong → job mới mở lại bước SỬA BẢN DỊCH (dùng lại bản dịch, giữ nguyên cấu hình: lồng tiếng hay không,
+    giọng, vai từng câu) rồi dựng lại video theo bản đã sửa. Không chạy lại nhận dạng / dịch. Video cũ giữ nguyên."""
+    try:
+        old = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if old.kind != 'vietsub' or old.status != 'done':
+        raise HTTPException(409, 'Chỉ sửa lại được job Dịch phụ đề đã xong.')
+    video = old.result.get('video_path') or (old.config.get('inp') if os.path.isfile(old.config.get('inp', '')) else '')
+    if not video or not os.path.isfile(video):
+        raise HTTPException(409, 'Không còn file video gốc (video tải từ link đã bị dọn) — hãy chạy lại từ đầu.')
+    vi = old.result.get('vi_srt') or ''
+    if not os.path.isfile(vi):
+        raise HTTPException(409, 'Không còn file phụ đề tiếng Việt của job này.')
+    cfg = dict(old.config)
+    cfg.update(inp=video, vi_srt_path=vi, orig_srt_path=old.result.get('original_srt') or '', script_edit=True, cast_reuse=None)
+    if cfg.get('dub_voice') and old.result.get('dub_units'):
+        # giữ câu lồng tiếng + vai từng câu đã duyệt lần trước (không phân tích nhân vật lại)
+        cfg['dub_plan_reuse'] = {'units': old.result['dub_units'], 'res': old.result.get('dub_cast')}
+    (runner, prefix) = RUNNERS['vietsub']
+    name = old.title.split(' · ', 1)[-1]
+    job = manager.start('vietsub', cfg, runner, f'{prefix} · {name} (sửa phụ đề)')
+    job.log(f'[SỬA PHỤ ĐỀ] Mở lại bản dịch của job {old.id} để sửa — bỏ qua nhận dạng & dịch', 'info')
+    return job.summary()
+
+
 @router.post('/{job_id}/qa')
 def recheck_quality(job_id: str):
     """Chạy lại kiểm tra chất lượng cho video đã xuất của job."""
@@ -447,19 +476,28 @@ async def stream(job_id: str, request: Request, since: int = 0):
     async def gen():
         cursor = since
         last_state = None
+        last_scenes = None
+        last_sent = 0.0
         while True:
             if await request.is_disconnected():
                 break
             start = max(0, cursor - job.log_offset)
             new_logs = job.logs[start:]
             state = job.summary()
-            state_key = json.dumps(state, sort_keys=True, default=str)
-            if new_logs or state_key != last_state:
+            # elapsed / updated_at đổi mỗi lần đọc → không tính vào "trạng thái đổi" (nếu tính, cứ 0.4s lại gửi lại cả trăm câu → UI giật)
+            state_key = json.dumps({k: v for (k, v) in state.items() if k not in ('elapsed', 'updated_at')}, sort_keys=True, default=str)
+            # danh sách câu chỉ gửi khi nó thật sự đổi (có bản dịch mới / vào bước chờ sửa / xong) — kể cả lúc đang chạy, để UI hiện phụ đề sớm
+            scenes_key = (id(job.scenes), len(job.scenes), job.waiting, state['status'])
+            now = time.monotonic()
+            tick = state['status'] == 'running' and now - last_sent >= 1.0      # đồng hồ chạy job: 1 lần/giây là đủ
+            if new_logs or state_key != last_state or scenes_key != last_scenes or tick:
                 payload = {'state': state, 'logs': new_logs, 'cursor': job.log_offset + len(job.logs)}
-                if state_key != last_state and (job.waiting or state['status'] in TERMINAL):
+                if scenes_key != last_scenes and job.scenes:
                     payload['scenes'] = job.scenes
+                last_scenes = scenes_key
                 cursor = payload['cursor']
                 last_state = state_key
+                last_sent = now
                 yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
             if state['status'] in TERMINAL and not new_logs:
                 break

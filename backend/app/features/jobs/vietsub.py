@@ -21,19 +21,17 @@ def _ass_time(t):
     return f'{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}'
 
 
-def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
-    """Che 1 vùng (% khung xuất [x, y, rộng, cao]).
-    style 'erase': delogo lấp bằng điểm ảnh xung quanh + mờ nhẹ cho mượt viền (tự nhiên, gần như không thấy);
-    'blur': làm mờ mạnh. spans = [(a, b)] giây → chỉ che lúc đó (None = suốt video)."""
+def _box_geom(box, w, h, style, spans):
+    """1 vùng (% khung xuất [x, y, rộng, cao]) → (px, py, pw, ph, enable, sigma), None nếu vùng quá nhỏ / không có lúc nào che."""
     try:
         (x, y, bw, bh) = [max(0.0, min(100.0, float(v))) / 100.0 for v in box[:4]]
     except (TypeError, ValueError):
-        return ('', cur)
+        return None
     (px, py) = (max(1, int(x * w)), max(1, int(y * h)))
     (pw, ph) = (min(int((x + bw) * w), w - 2) - px, min(int((y + bh) * h), h - 2) - py)
     (pw, ph) = (pw // 2 * 2, ph // 2 * 2)
     if pw < 8 or ph < 8:
-        return ('', cur)
+        return None
     en = ''
     if spans is not None:
         merged = []
@@ -43,17 +41,73 @@ def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
             else:
                 merged.append([a, b])
         if not merged:
-            return ('', cur)
+            return None
         en = ":enable='" + enable_expr(merged) + "'"   # gộp cho đủ ngắn (phim dài hàng trăm câu → ffmpeg hết bộ nhớ)
-    parts = []
-    if style == 'erase':
-        parts.append(f'[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}{en}[{tag}d]')
-        cur = f'{tag}d'
     sigma = max(4, round(ph * 0.09)) if style == 'erase' else 20     # 'blur' = y như Review phim (gblur 20); 'erase' vùng lớn mờ thêm cho hết vệt sọc
-    parts.append(f'[{cur}]split[{tag}a][{tag}b]')
-    parts.append(f'[{tag}b]crop={pw}:{ph}:{px}:{py},gblur=sigma={sigma}:steps=3[{tag}c]')
-    parts.append(f'[{tag}a][{tag}c]overlay={px}:{py}{en}[{tag}o]')
-    return (';'.join(parts), f'{tag}o')
+    return (px, py, pw, ph, en, sigma)
+
+
+def _feather_rect(px, py, pw, ph, w, h):
+    """Vùng làm mờ mép mềm = vùng che nới ra mỗi bên 1 khoảng viền (viền chuyển nằm NGOÀI vùng đã xoá chữ, không lộ vệt delogo).
+    → (ex, ey, ew, eh, khoảng nới trái, trên, phải, dưới)."""
+    f = max(6, round(min(pw, ph) * 0.3))
+    (ex, ey) = (max(0, px - f), max(0, py - f))
+    (ex2, ey2) = (min(w, px + pw + f), min(h, py + ph + f))
+    (ew, eh) = ((ex2 - ex) // 2 * 2, (ey2 - ey) // 2 * 2)
+    return (ex, ey, ew, eh, px - ex, py - ey, ex + ew - (px + pw), ey + eh - (py + ph))
+
+
+def _feather_mask(path, ew, eh, gl, gt, gr, gb):
+    """Mặt nạ xám ew x eh: vùng che (cách mép gl, gt, gr, gb) trắng đặc, viền ngoài mờ dần về đen → ô mờ tan vào hình
+    xung quanh, không lộ cạnh chữ nhật. Mép chạm khung hình (nới = 0) thì giữ trắng tới sát mép."""
+    from PIL import Image, ImageDraw, ImageFilter
+    f = max(gl, gt, gr, gb, 1)
+    big = Image.new('L', (ew + 2 * f, eh + 2 * f), 0)      # vẽ rộng hơn để mép chạm khung không bị tối khi làm mờ
+    (x1, y1) = (f + (gl // 2 if gl else -f), f + (gt // 2 if gt else -f))
+    (x2, y2) = (f + ew - (gr // 2 if gr else -f) - 1, f + eh - (gb // 2 if gb else -f) - 1)
+    ImageDraw.Draw(big).rectangle([x1, y1, x2, y2], fill=255)
+    big.filter(ImageFilter.GaussianBlur(f / 3)).crop((f, f, f + ew, f + eh)).save(path)
+
+
+def _boxes_chain(cur, items, w, h, tag='bx', mask_dir=None):
+    """Che NHIỀU vùng trong 1 lượt. items = [(box, style, spans)] — box % khung xuất [x, y, rộng, cao];
+    style 'erase': delogo lấp bằng điểm ảnh xung quanh + mờ nhẹ cho mượt viền; 'blur': làm mờ mạnh;
+    spans = [(a, b)] giây → chỉ che lúc đó (None = suốt video).
+    Chỉ split 1 lần rồi tách N nhánh cắt + làm mờ, dán lần lượt lên hình chính: mỗi vùng 1 cặp split → overlay nối tiếp
+    làm ffmpeg kéo khung hình nhân đôi qua từng cặp (thời gian dựng tăng theo 2^số vùng — 22 vùng đã không xong)."""
+    geoms = [(g, style) for (box, style, spans) in items for g in [_box_geom(box, w, h, style, spans)] if g]
+    if not geoms:
+        return ('', cur)
+    parts = []
+    for (k, ((px, py, pw, ph, en, _), style)) in enumerate(geoms):
+        if style == 'erase':                     # delogo không tách luồng → nối tiếp bao nhiêu vùng cũng nhanh
+            parts.append(f'[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}{en}[{tag}d{k}]')
+            cur = f'{tag}d{k}'
+    n = len(geoms)
+    parts.append(f'[{cur}]split[{tag}m][{tag}s]')
+    parts.append(f'[{tag}s]split={n}' + ''.join(f'[{tag}s{k}]' for k in range(n)) if n > 1 else f'[{tag}s]null[{tag}s0]')
+    prev = f'{tag}m'
+    for (k, ((px, py, pw, ph, en, sigma), _)) in enumerate(geoms):
+        # gblur cũng chỉ chạy lúc vùng cần che (không thì làm mờ đủ N vùng trên MỌI khung hình)
+        if mask_dir:
+            # mép mềm: làm mờ vùng nới rộng, ghép kênh alpha từ mặt nạ (1 khung, ffmpeg tự lặp lại) → ô mờ tan dần vào hình
+            (ex, ey, ew, eh, gl, gt, gr, gb) = _feather_rect(px, py, pw, ph, w, h)
+            name = f'{tag}mask{k}.png'
+            _feather_mask(os.path.join(mask_dir, name), ew, eh, gl, gt, gr, gb)
+            parts.append(f'movie={name},format=gray[{tag}k{k}]')
+            parts.append(f'[{tag}s{k}]crop={ew}:{eh}:{ex}:{ey},gblur=sigma={sigma}:steps=3{en},format=yuva420p[{tag}g{k}]')
+            parts.append(f'[{tag}g{k}][{tag}k{k}]alphamerge[{tag}c{k}]')
+            (px, py) = (ex, ey)
+        else:
+            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{py},gblur=sigma={sigma}:steps=3{en}[{tag}c{k}]')
+        parts.append(f'[{prev}][{tag}c{k}]overlay={px}:{py}{en}[{tag}o{k}]')
+        prev = f'{tag}o{k}'
+    return (';'.join(parts), prev)
+
+
+def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
+    """Che 1 vùng — xem _boxes_chain."""
+    return _boxes_chain(cur, [(box, style, spans)], w, h, tag)
 
 
 def _write_ass(path, cues, style, w, h, center_y=None):
@@ -802,52 +856,14 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
         return max(0.3, units[i]['end'] - units[i]['start'] + min(gap, TOLERANCE))
 
     voice_all(list(range(len(units))))
-    for _ in range(2):                           # Edge hay lỗi lẻ tẻ khi gửi dồn → đọc lại riêng các câu còn thiếu
+    for _ in range(3):                           # dịch vụ giọng hay lỗi lẻ tẻ khi gửi dồn → đọc lại riêng các câu còn thiếu (cùng giọng)
         miss = [i for (i, u) in enumerate(units) if not u.get('path') and uvoice[i]]
         if not miss:
             break
         job.log(f'   {len(miss)} câu chưa tạo được giọng — thử đọc lại...')
         time.sleep(8)                            # Edge hay chặn tạm khi gửi dồn — đợi chút cho hồi
         voice_all(miss)
-    # VieNeu vẫn lỗi vài câu → đọc bằng Edge đúng giới tính nhân vật (thà khác giọng chút còn hơn mất tiếng)
-    from core.tts_engine import vieneu_voice_key
-    from .pipelines import _voice_id
-    def swap_voice(still, pick, why):
-        # giọng nào còn câu lỗi → đổi giọng đó cho MỌI câu đang dùng nó (cả câu đã đọc được) rồi đọc lại:
-        # mỗi nhân vật luôn 1 giọng cả phim, không để câu Edge câu VieNeu lẫn lộn
-        bad = {}
-        for i in still:
-            bad.setdefault(uvoice[i], genders[i])
-        n_fail = {v: sum(1 for i in still if uvoice[i] == v) for v in bad}
-        n_all = {v: sum(1 for x in uvoice if x == v) for v in bad}
-        # chỉ đổi hẳn giọng khi giọng đó lỗi NHIỀU (> 3 câu và > 5% số câu); lỗi lẻ 1–2 câu → chỉ đọc riêng câu đó bằng giọng
-        # dự phòng (đổi cả 241 câu vì 1 câu lỗi thì khác hẳn giọng người dùng chọn + chậm thêm nhiều phút)
-        whole = {v for v in bad if n_fail[v] > 3 and n_fail[v] > 0.05 * n_all[v]}
-        idx = [i for (i, v) in enumerate(uvoice) if v in whole] + [i for i in still if uvoice[i] not in whole]
-        if whole:
-            job.log(f'   {len(still)} câu {why} — đổi hẳn giọng cho {len(idx)} câu (giữ 1 nhân vật 1 giọng)', 'warn')
-        else:
-            job.log(f'   {len(still)} câu {why} — chỉ đọc riêng {len(still)} câu đó bằng giọng dự phòng', 'warn')
-        repl = {v: pick(g) for (v, g) in bad.items()}
-        for i in idx:
-            uvoice[i] = repl[uvoice[i]]
-            units[i].pop('path', None)
-            units[i].pop('dur', None)
-        voice_all(idx)
-    still = [i for (i, u) in enumerate(units) if not u.get('path') and uvoice[i] and vieneu_voice_key(_voice_id(uvoice[i]))]
-    if still:
-        swap_voice(still, lambda g: 'Edge TTS — Nữ Bắc (miễn phí)' if g == 'female' else 'Edge TTS — Nam Bắc (miễn phí)', 'VieNeu lỗi')
-    # ngược lại: Edge / dịch vụ online lỗi (bị chặn tạm "No audio was received") → đọc bằng VieNeu (offline) cùng giới tính
-    still = [i for (i, u) in enumerate(units) if not u.get('path') and uvoice[i] and not vieneu_voice_key(_voice_id(uvoice[i]))]
-    if still:
-        try:
-            from core import vieneu_setup
-            has_vn = vieneu_setup.installed()
-        except Exception:
-            has_vn = False
-        if has_vn:
-            from app import constants as C
-            swap_voice(still, lambda g: C.VIENEU_CAST_FEMALE[0] if g == 'female' else C.VIENEU_CAST_MALE[0], 'giọng online lỗi (đọc bằng VieNeu offline)')
+    # Không tự đổi giọng: câu vẫn lỗi sau các lượt đọc lại thì để trống & báo rõ (chọn giọng nào dùng đúng giọng đó)
     # Câu dài hơn chỗ trống (đọc ở tốc độ gốc) → AI viết gọn cho vừa rồi đọc lại; 2 lượt (cần tài khoản AI)
     from .postedit import word_count
     for rnd in range(3):
@@ -1100,9 +1116,23 @@ def run_vietsub_pipeline(job):
             if not scenes:
                 raise RuntimeError('Dịch phụ đề thất bại.')
             cues = _rechunk(scenes_to_cues(scenes, 'subtitle'), layout)
+        # Từ điển của người dùng: cách dịch sai đã chốt → tự thay trước khi đưa duyệt / ghép (sửa 1 lần, lần sau tự theo)
+        from core import user_glossary
+        n_fix = 0
+        if cues:
+            (texts, n) = user_glossary.apply_all([c['text'] for c in cues])
+            cues = [{**c, 'text': t} for (c, t) in zip(cues, texts)]
+            n_fix += n
+        if dub_plan and dub_plan.get('units'):
+            (texts, n) = user_glossary.apply_all([u['text'] for u in dub_plan['units']])
+            for (u, t) in zip(dub_plan['units'], texts):
+                u['text'] = t
+            n_fix = max(n_fix, n)
+        if n_fix:
+            job.log(f'   Từ điển của bạn: tự sửa {n_fix} câu theo cách dịch đã chốt', 'step')
         if dub_plan and dub_plan.get('units'):
             # lồng tiếng: duyệt theo CÂU LỒNG TIẾNG (thời gian nói thật) kèm vai từng câu — sửa vai / lời rồi mới tạo giọng
-            labs = (_norm_res(dub_plan.get('res')) or {}).get('labels') or []
+            labs =(_norm_res(dub_plan.get('res')) or {}).get('labels') or []
             if len(labs) != len(dub_plan['units']):          # nhãn vai lệch số câu (dữ liệu cũ) → không tin, để phân tích lại
                 labs = [0] * len(dub_plan['units'])
             job.scenes = [{'clip_start': u['start'], 'clip_end': u['end'], 'voiceover': u['text'], 'subtitle': u['text'],
@@ -1323,11 +1353,11 @@ def run_vietsub_pipeline(job):
                             logos.append([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100])
             if logos:
                 job.log('   Xoá logo / chữ đứng yên ở góc: ' + ', '.join(f'[{b[0]:.0f}%,{b[1]:.0f}% · {b[2]:.0f}×{b[3]:.0f}%]' for b in logos), 'step')
-            for (k, b) in enumerate(logos):     # logo / chữ cố định: che suốt video (đã xoá sạch thì thôi)
-                # logo nhỏ & đứng yên → XOÁ (delogo lấp bằng điểm ảnh xung quanh + mịn viền), không làm mờ thành ô chữ nhật lộ
-                (chain, cur) = _box_chain(cur, b, w, h, 'erase', None, f'lg{k}')
-                if chain:
-                    graph.append(chain)
+            # logo / chữ cố định: che suốt video. Logo nhỏ & đứng yên → XOÁ (delogo lấp bằng điểm ảnh xung quanh + mịn viền),
+            # không làm mờ thành ô chữ nhật lộ
+            (chain, cur) = _boxes_chain(cur, [(b, 'erase', None) for b in logos], w, h, 'lg', temp_dir)
+            if chain:
+                graph.append(chain)
         if cleaned and transcript and transcript.get('hardsub'):
             # xoá nét chữ hay sót khi chữ trắng nằm trên nền trắng / sáng → lấp thêm ĐÚNG khung từng câu phụ đề Trung, ĐÚNG
             # lúc câu đó hiện (thời gian & khung bao lấy từ bước đọc phụ đề cứng); câu khung gần giống nhau gộp 1 vùng che
@@ -1346,12 +1376,13 @@ def run_vietsub_pipeline(job):
                     g = groups.setdefault(key, {'b': [X1, Y1, X2, Y2], 'spans': []})
                     g['b'] = [min(g['b'][0], X1), min(g['b'][1], Y1), max(g['b'][2], X2), max(g['b'][3], Y2)]
                     g['spans'].append((max(0.0, float(sg['start']) - 0.1), float(sg['end']) + 0.1))
-                for (k, g) in enumerate(list(groups.values())[:40]):
+                items = []
+                for g in list(groups.values())[:40]:
                     (X1, Y1, X2, Y2) = g['b']
-                    pct = [X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100]
-                    (chain, cur) = _box_chain(cur, pct, w, h, 'erase', g['spans'], f'hs{k}')
-                    if chain:
-                        graph.append(chain)
+                    items.append(([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100], 'erase', g['spans']))
+                (chain, cur) = _boxes_chain(cur, items, w, h, 'hs', temp_dir)
+                if chain:
+                    graph.append(chain)
                 if groups:
                     job.log(f'   Lấp thêm đúng chỗ phụ đề cũ lúc câu hiện ({len(groups)} vùng) — hết vệt chữ sót trên nền sáng', 'step')
         if cfg.get('burn_subtitles', True):

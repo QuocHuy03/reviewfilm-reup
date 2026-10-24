@@ -6,6 +6,7 @@ from app.config import load_env_into_process
 load_env_into_process()
 
 from app.features.download.router import router as download_router  # noqa: E402
+from app.features.glossary.router import router as glossary_router  # noqa: E402
 from app.features.jobs.router import router as jobs_router  # noqa: E402
 from app.features.media.router import router as media_router  # noqa: E402
 from app.features.settings.router import router as settings_router  # noqa: E402
@@ -14,7 +15,7 @@ from app.features.voices.router import router as voices_router  # noqa: E402
 app = FastAPI(title='ReviewFilm API', version='2.0.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
 
-for r in (jobs_router, download_router, voices_router, settings_router, media_router):
+for r in (jobs_router, download_router, voices_router, settings_router, media_router, glossary_router):
     app.include_router(r)
 
 

@@ -1,13 +1,15 @@
 import {
   AlertTriangle, Captions, CheckCircle2, Info, CircleSlash, RefreshCw, ShieldCheck, Wand2, ExternalLink, Film, FolderOpen, Languages, Loader2, RotateCcw, StepForward, Trash2, XCircle,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Timeline } from "@/components/timeline/Timeline"
 import { PublishSummary } from "./PublishPanel"
 import { ReeditButton } from "./ReeditButton"
 import { RedubButton } from "./RedubButton"
+import { ResubButton } from "./ResubButton"
+import { FindReplaceBar } from "./GlossaryTools"
 import { VoiceSelect } from "@/components/VoiceSelect"
 import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
@@ -44,9 +46,59 @@ export function StageShell({ title, meta, dot, actions, monitor, side, timeline 
 }
 
 /** Màn hình phát một file video (gốc hoặc đã xuất). */
-function VideoMonitor({ path, videoRef, placeholder }: { path?: string; videoRef?: (el: HTMLVideoElement | null) => void; placeholder: ReactNode }) {
+function VideoMonitor({ path, videoRef, placeholder, subs }: {
+  path?: string; videoRef?: (el: HTMLVideoElement | null) => void; placeholder: ReactNode
+  /** Phụ đề Việt hiện chồng lên video gốc theo đúng giây (Dịch phụ đề) */
+  subs?: Scene[]
+}) {
+  const [el, setEl] = useState<HTMLVideoElement | null>(null)
+  // videoRef của trang là hàm mới mỗi lần render → giữ qua ref, để ref của <video> cố định (không gắn lại mỗi khung hình)
+  const outer = useRef(videoRef)
+  outer.current = videoRef
+  const ref = useCallback((v: HTMLVideoElement | null) => { setEl(v); outer.current?.(v) }, [])
   if (!path) return <div className="flex flex-col items-center gap-2 text-xs text-white/45">{placeholder}</div>
-  return <video ref={videoRef} src={mediaUrl(path)} controls preload="metadata" className="max-h-full max-w-full" />
+  return <>
+    <video ref={ref} src={mediaUrl(path)} controls preload="metadata" className="max-h-full max-w-full" />
+    {subs && subs.length > 0 && <SubOverlay video={el} scenes={subs} />}
+  </>
+}
+
+/** Câu phụ đề tại giây đang phát. Tự nghe video (không qua state của trang) và chỉ vẽ lại khi sang câu khác → không giật. */
+function SubOverlay({ video, scenes }: { video: HTMLVideoElement | null; scenes: Scene[] }) {
+  const [idx, setIdx] = useState(-1)
+  const list = useRef(scenes)
+  list.current = scenes
+  useEffect(() => {
+    if (!video) return
+    let raf = 0
+    const find = () => {
+      const t = video.currentTime
+      const i = list.current.findIndex((s) => !s.excluded && t >= s.clip_start && t < s.clip_end)
+      setIdx((cur) => (cur === i ? cur : i))
+    }
+    const loop = () => { find(); if (!video.paused && !video.ended) raf = requestAnimationFrame(loop) }
+    const onPlay = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(loop) }
+    video.addEventListener("play", onPlay)
+    video.addEventListener("seeked", find)
+    video.addEventListener("timeupdate", find)
+    find()
+    return () => {
+      cancelAnimationFrame(raf)
+      video.removeEventListener("play", onPlay)
+      video.removeEventListener("seeked", find)
+      video.removeEventListener("timeupdate", find)
+    }
+  }, [video])
+  const s = idx >= 0 ? scenes[idx] : undefined
+  const text = (s?.subtitle || s?.voiceover || "").trim()
+  if (!text) return null
+  return (
+    <div className="pointer-events-none absolute inset-x-6 bottom-14 flex justify-center">
+      <span className="max-w-[90%] rounded-md bg-black/65 px-3 py-1 text-center text-[15px] leading-snug font-semibold whitespace-pre-line text-white [text-shadow:0_1px_2px_#000]">
+        {text}
+      </span>
+    </div>
+  )
 }
 
 /**
@@ -128,7 +180,7 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
   return (
     <StageShell title={queued ? `Đang xếp hàng${job.queue_pos ? ` #${job.queue_pos}` : ""}` : job.stage || "Đang xử lý…"} dot="bg-primary animate-pulse"
       meta={<span>{job.progress}% · {fmtDuration(job.elapsed)} · có thể chuyển trang, job vẫn chạy nền</span>}
-      monitor={<VideoMonitor path={source} videoRef={tl.bindVideo(video)}
+      monitor={<VideoMonitor path={source} videoRef={tl.bindVideo(video)} subs={job.kind === "vietsub" ? job.scenes : undefined}
         placeholder={<><Loader2 className="size-6 animate-spin" /> Đang tải video…</>} />}
       actions={<>
         <ol className="flex items-center gap-1">
@@ -211,9 +263,11 @@ export function ScriptStage({ job }: { job: JobDetail }) {
   const dub = job.kind === "vietsub" && !!job.config.dub_voice
   const fits = useMemo(() => (dub ? scenes.map((_, i) => readFit(scenes, i)) : []), [dub, scenes])
   // duyệt theo vai: danh sách nhân vật AI nhận ra (đổi được nhân vật từng câu trước khi tạo giọng)
-  const cast = useMemo(() => Object.entries(job.result.dub_cast?.speakers ?? {})
+  // stream gửi lại job.result (object mới) mỗi lần có log → so theo nội dung, không theo tham chiếu, để danh sách câu không vẽ lại vô cớ
+  const castKey = JSON.stringify(job.result.dub_cast?.speakers ?? {})
+  const cast = useMemo<CastItem[]>(() => Object.entries(JSON.parse(castKey) as Record<string, { name?: string; gender?: string }>)
     .map(([id, v]) => ({ id: Number(id), name: v.name || `NV${Number(id) + 1}`, female: v.gender === "female" }))
-    .sort((a, b) => a.id - b.id), [job.result.dub_cast])
+    .sort((a, b) => a.id - b.id), [castKey])
   const byRole = dub && cast.length > 0 && scenes.some((s) => s.speaker_id !== undefined)
   // giọng từng nhân vật: NGƯỜI DÙNG chọn (mặc định nam → giọng nam, nữ → giọng nữ đã chọn ở tab Lồng tiếng)
   // khớp backend: nam 1 giọng, nữ 1 giọng — "giọng nam" lỡ là giọng nữ thì dùng Nam Bắc, chưa chọn giọng nữ thì Nữ Bắc
@@ -234,9 +288,16 @@ export function ScriptStage({ job }: { job: JobDetail }) {
     tl.setSelected(i)
     const c = tl.clips.find((x) => x.index === i)
     if (c) tl.setTime(c.start)
-    if (video.current) video.current.currentTime = scenes[i].clip_start
+    if (video.current && scenes[i]) video.current.currentTime = scenes[i].clip_start
     items.current[i]?.scrollIntoView({ block: "nearest", behavior: "smooth" })
   }
+  // callback cố định cho từng dòng (React.memo) — gõ 1 câu / phát video không vẽ lại cả trăm dòng còn lại
+  const pickLatest = useRef(pick)
+  pickLatest.current = pick
+  const pickRef = useCallback((i: number) => pickLatest.current(i), [])
+  const setRowRef = useCallback((i: number, el: HTMLDivElement | null) => { items.current[i] = el }, [])
+  const editScene = useCallback((i: number, patch: Partial<Scene>) => setScenes((prev) => prev.map((x, j) => (j === i ? { ...x, ...patch } : x))), [])
+  const removeScene = useCallback((i: number) => setScenes((prev) => prev.filter((_, j) => j !== i)), [])
 
   const submit = async (confirmed: boolean) => {
     setBusy(true)
@@ -264,8 +325,10 @@ export function ScriptStage({ job }: { job: JobDetail }) {
           {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} {job.kind === "vietsub" && !dub ? "Xác nhận & ghép phụ đề" : "Xác nhận & lồng tiếng"}
         </Button>
       </>}
-      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
+      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} subs={job.kind === "vietsub" ? scenes : undefined}
+        placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
       side={<>
+        <FindReplaceBar scenes={scenes} onChange={setScenes} onPick={pick} />
         {byRole && (
           <div className="flex flex-col gap-2 border-b border-border/60 bg-muted/30 px-3 py-3">
             <div>
@@ -285,37 +348,9 @@ export function ScriptStage({ job }: { job: JobDetail }) {
           </div>
         )}
         {scenes.map((s, i) => (
-        <div key={i} ref={(el) => { items.current[i] = el }} onClick={() => pick(i)}
-          className={cn("group grid cursor-pointer grid-cols-[40px_1fr_28px] gap-2 border-b border-border/60 px-3 py-2.5", tl.selected === i && "bg-primary/5")}>
-          <div className="pt-1 text-xs">
-            <div className={cn("tabular font-semibold", tl.selected === i ? "text-primary" : "text-muted-foreground")}>#{i + 1}</div>
-            <div className="tabular mt-0.5 text-[10px] text-muted-foreground/70">{fmtClock(s.clip_start)}</div>
-          </div>
-          <div className="flex flex-col gap-1">
-            {byRole && (
-              <select value={s.speaker_id ?? 0} onClick={(e) => e.stopPropagation()} onFocus={() => pick(i)}
-                onChange={(e) => setScenes(scenes.map((x, j) => j === i ? { ...x, speaker_id: Number(e.target.value) } : x))}
-                className={cn("h-7 w-fit max-w-full rounded-md border border-input bg-background px-2 text-[12px] font-medium",
-                  s.speaker_id === -1 ? "text-muted-foreground" : cast.find((c) => c.id === s.speaker_id)?.female ? "text-pink-600 dark:text-pink-300" : "text-sky-600 dark:text-sky-300")}
-                title="Nhân vật nói câu này — đổi nếu AI gán nhầm">
-                {cast.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.female ? "nữ" : "nam"})</option>)}
-                <option value={-1}>— Không lồng tiếng (nhạc, tiếng động…)</option>
-              </select>
-            )}
-            {(s.orig_text || s.description) && <p className="line-clamp-2 text-[11px] text-muted-foreground">{s.orig_text || s.description}</p>}
-            <Textarea value={s.voiceover} rows={2} className="min-h-0 resize-y text-[13px] leading-relaxed" onFocus={() => pick(i)}
-              onChange={(e) => setScenes(scenes.map((x, j) => j === i ? { ...x, voiceover: e.target.value, subtitle: e.target.value } : x))} />
-            {dub && fits[i] && (
-              <p className={cn("tabular text-[10.5px]", fits[i].level === "long" ? "text-destructive" : fits[i].level === "fast" ? "text-warning" : "text-muted-foreground/70")}>
-                {fits[i].slot.toFixed(1)}s · cần ~{fits[i].need.toFixed(1)}s đọc
-                {fits[i].level === "long" ? " — dài quá, AI sẽ rút gọn (hoặc tự sửa ngắn lại)" : fits[i].level === "fast" ? " — hơi dài, sẽ đọc nhanh nhẹ (≤ 1.2×)" : ""}
-              </p>
-            )}
-          </div>
-          <Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100" title="Xoá câu"
-            onClick={(e) => { e.stopPropagation(); setScenes(scenes.filter((_, j) => j !== i)) }}><Trash2 /></Button>
-        </div>
-      ))}
+          <ScriptRow key={i} index={i} scene={s} selected={tl.selected === i} fit={dub ? fits[i] : undefined}
+            cast={byRole ? cast : undefined} rowRef={setRowRef} onPick={pickRef} onEdit={editScene} onRemove={removeScene} />
+        ))}
       </>}
       timeline={<Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
         muted={NO_MUTE} bgmName="" showMute={false}
@@ -325,6 +360,55 @@ export function ScriptStage({ job }: { job: JobDetail }) {
     />
   )
 }
+
+type CastItem = { id: number; name: string; female: boolean }
+type Fit = ReturnType<typeof readFit>
+
+/**
+ * 1 câu trong bước sửa bản dịch. memo + callback cố định → chỉ dòng vừa sửa / vừa chọn vẽ lại.
+ * content-visibility: dòng ngoài khung nhìn không được dựng layout/vẽ (365+ câu vẫn cuộn mượt).
+ */
+const ScriptRow = memo(function ScriptRow({ index: i, scene: s, selected, fit, cast, rowRef, onPick, onEdit, onRemove }: {
+  index: number; scene: Scene; selected: boolean; fit?: Fit; cast?: CastItem[]
+  rowRef: (i: number, el: HTMLDivElement | null) => void; onPick: (i: number) => void
+  onEdit: (i: number, patch: Partial<Scene>) => void; onRemove: (i: number) => void
+}) {
+  const speaker = cast?.find((c) => c.id === s.speaker_id)
+  return (
+    <div ref={(el) => rowRef(i, el)} onClick={() => onPick(i)}
+      style={{ contentVisibility: "auto", containIntrinsicSize: "auto 120px" }}
+      className={cn("group grid cursor-pointer grid-cols-[40px_1fr_28px] gap-2 border-b border-border/60 px-3 py-2.5", selected && "bg-primary/5")}>
+      <div className="pt-1 text-xs">
+        <div className={cn("tabular font-semibold", selected ? "text-primary" : "text-muted-foreground")}>#{i + 1}</div>
+        <div className="tabular mt-0.5 text-[10px] text-muted-foreground/70">{fmtClock(s.clip_start)}</div>
+      </div>
+      <div className="flex flex-col gap-1">
+        {cast && (
+          <select value={s.speaker_id ?? 0} onClick={(e) => e.stopPropagation()} onFocus={() => onPick(i)}
+            onChange={(e) => onEdit(i, { speaker_id: Number(e.target.value) })}
+            className={cn("h-7 w-fit max-w-full rounded-md border border-input bg-background px-2 text-[12px] font-medium",
+              s.speaker_id === -1 ? "text-muted-foreground" : speaker?.female ? "text-pink-600 dark:text-pink-300" : "text-sky-600 dark:text-sky-300")}
+            title="Nhân vật nói câu này — đổi nếu AI gán nhầm">
+            {cast.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.female ? "nữ" : "nam"})</option>)}
+            <option value={-1}>— Không lồng tiếng (nhạc, tiếng động…)</option>
+          </select>
+        )}
+        {(s.orig_text || s.description) && <p className="line-clamp-2 text-[11px] text-muted-foreground">{s.orig_text || s.description}</p>}
+        <Textarea value={s.voiceover} rows={2} className="min-h-0 resize-y text-[13px] leading-relaxed" onFocus={() => onPick(i)}
+          onChange={(e) => onEdit(i, { voiceover: e.target.value, subtitle: e.target.value })} />
+        {fit && (
+          <p className={cn("tabular text-[10.5px]", fit.level === "long" ? "text-destructive" : fit.level === "fast" ? "text-warning" : "text-muted-foreground/70")}>
+            {fit.slot.toFixed(1)}s · cần ~{fit.need.toFixed(1)}s đọc
+            {fit.level === "long" ? " — dài quá, AI sẽ rút gọn (hoặc tự sửa ngắn lại)" : fit.level === "fast" ? " — hơi dài, sẽ đọc nhanh nhẹ (≤ 1.2×)" : ""}
+          </p>
+        )}
+      </div>
+      <Button variant="ghost" size="icon-xs" className="opacity-0 group-hover:opacity-100" title="Xoá câu"
+        onClick={(e) => { e.stopPropagation(); onRemove(i) }}><Trash2 /></Button>
+    </div>
+  )
+}, (a, b) => a.scene === b.scene && a.selected === b.selected && a.index === b.index && a.cast === b.cast
+  && a.fit?.level === b.fit?.level && a.fit?.slot === b.fit?.slot && a.fit?.need === b.fit?.need)
 
 /** Đổi chỗ phần tử `from` tới vị trí `to` (chỉ số trong mảng gốc). */
 export function moveItem<T>(arr: T[], from: number, to: number): T[] {
@@ -354,7 +438,26 @@ export function DoneStage({ job }: { job: JobDetail }) {
   useEffect(() => () => cancelAnimationFrame(raf.current), [])
   useEffect(() => { const c = tl.clips.find((x) => tl.time >= x.start && tl.time < x.start + x.dur); if (c) tl.setSelected(c.index) }, [tl.time, tl.clips]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const seek = (t: number) => { tl.setTime(t); if (video.current) video.current.currentTime = t }
+  const seek = useCallback((t: number) => { tl.setTime(t); if (video.current) video.current.currentTime = t }, [tl.setTime]) // eslint-disable-line react-hooks/exhaustive-deps
+  // danh sách câu chỉ dựng lại khi đổi câu đang chọn — không phải mỗi khung hình lúc video phát
+  const scriptList = useMemo(() => (
+    <div className="flex flex-col gap-0.5">
+      {tl.clips.map((c, k) => {
+        const on = tl.selected === c.index
+        return (
+          <button key={c.index} onClick={() => seek(c.start)} style={{ contentVisibility: "auto", containIntrinsicSize: "auto 52px" }}
+            className={cn("flex gap-2.5 rounded-md px-2 py-2 text-left transition", on ? "bg-primary/10" : "hover:bg-muted/60")}>
+            <span className={cn("tabular mt-px h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px]", on ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
+              {fmtClock(c.start)}
+            </span>
+            <span className={cn("line-clamp-3 text-[12.5px] leading-relaxed", on ? "text-foreground" : "text-muted-foreground")}>
+              {job.scenes[c.index]?.voiceover || `Cảnh ${k + 1}`}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  ), [tl.clips, tl.selected, job.scenes, seek])
   const files = ([
     ["Video", job.result.output_path, Film, "bg-sky-500/15 text-sky-500"],
     ["Phụ đề tiếng Việt", job.result.srt_path || job.result.vi_srt, Captions, "bg-violet-500/15 text-violet-500"],
@@ -365,6 +468,7 @@ export function DoneStage({ job }: { job: JobDetail }) {
     <StageShell title="Hoàn thành" dot="bg-success" meta={`${tl.clips.length} cảnh · ${fmtDuration(tl.total)} · xong sau ${fmtDuration(job.elapsed)}`}
       actions={<>
         {(job.kind === "review" || job.kind === "reup") && job.scenes.length > 0 && <ReeditButton job={job} />}
+        {job.kind === "vietsub" && job.result.vi_srt && <ResubButton job={job} />}
         {job.kind === "vietsub" && job.result.vi_srt && <RedubButton job={job} />}
         {job.result.output_path && <Button size="sm" variant="outline" onClick={() => bridge.open(job.result.output_path!)}><Film /> Mở video</Button>}
       </>}
@@ -393,22 +497,7 @@ export function DoneStage({ job }: { job: JobDetail }) {
           </>}
           <section className="min-h-0">
             <h4 className="mb-2 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">Kịch bản · {tl.clips.length} câu</h4>
-            <div className="flex flex-col gap-0.5">
-              {tl.clips.map((c, k) => {
-                const on = tl.selected === c.index
-                return (
-                  <button key={c.index} onClick={() => seek(c.start)}
-                    className={cn("flex gap-2.5 rounded-md px-2 py-2 text-left transition", on ? "bg-primary/10" : "hover:bg-muted/60")}>
-                    <span className={cn("tabular mt-px h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10.5px]", on ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>
-                      {fmtClock(c.start)}
-                    </span>
-                    <span className={cn("line-clamp-3 text-[12.5px] leading-relaxed", on ? "text-foreground" : "text-muted-foreground")}>
-                      {job.scenes[c.index].voiceover || `Cảnh ${k + 1}`}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+            {scriptList}
           </section>
         </div>
       }

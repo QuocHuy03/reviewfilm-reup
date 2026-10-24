@@ -231,36 +231,39 @@ def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False, words=F
 
 def _translate(job, segments, lang, cfg, video_path):
     """Dịch + Việt hoá phụ đề. AI khi bật ai_translate và có engine; không thì Google miễn phí."""
+    from core import user_glossary
     from core.translator import translate_and_localize_transcript
     use_ai = bool(cfg.get('ai_translate')) and _web_ai().available()
     job.log(f"   Dịch phụ đề ({'AI — tài khoản web' if use_ai else 'Google miễn phí'})...", 'info')
-    return translate_and_localize_transcript(
-        segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=(cfg.get('film_context') or '').strip(),
+    context = (user_glossary.prompt_block() + (cfg.get('film_context') or '')).strip()   # tên / thuật ngữ người dùng đã chốt
+    scenes = translate_and_localize_transcript(
+        segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=context,
         video_filename=os.path.basename(video_path), allow_web=use_ai)
+    # cách dịch sai người dùng đã chốt → tự thay (cả bản dịch Google miễn phí)
+    entries = user_glossary.load()
+    if scenes and entries:
+        n = 0
+        for s in scenes:
+            for k in ('voiceover', 'subtitle', 'text'):
+                if isinstance(s.get(k), str):
+                    new = user_glossary.apply(s[k], entries)
+                    n += new != s[k]
+                    s[k] = new
+        if n:
+            job.log(f'   Từ điển của bạn: tự sửa {n} chỗ theo cách dịch đã chốt', 'step')
+    return scenes
 
 
 def voice_in_use(job):
-    """Giọng để tạo lại câu: giọng đã đọc thật cho video (khác giọng đã chọn khi CapCut lỗi phải đọc bằng Edge)."""
-    return job.result.get('voice_fallback') or job.config.get('voice', '')
+    """Giọng để tạo lại câu = đúng giọng đã chọn (không bao giờ tự đổi giọng)."""
+    return job.config.get('voice', '')
 
 
-def _note_voice_fallback(job, rendered):
-    """Đã chọn CapCut mà cả video phải đọc bằng Edge → nhớ lại để tạo lại câu không bị lẫn 2 giọng."""
-    voice = _voice_id(job.config.get('voice', ''))
-    if not str(voice).lower().startswith('capcut-') or not rendered:
-        return
-    if all(s.get('_tts_engine_used') == 'edge' for s in rendered):
-        from core.capcut_tts import edge_fallback
-        job.result['voice_fallback'] = edge_fallback(voice[len('capcut-'):])
-        job.log('   Video đã đọc bằng Edge thay CapCut — các câu tạo lại sau này cũng dùng Edge cho đồng đều giọng', 'warn')
-    else:
-        job.result.pop('voice_fallback', None)
-
-
-def synthesize(scenes, voice_label, out_dir, log, strict=False):
+def synthesize(scenes, voice_label, out_dir, log, strict=True):
+    """Đọc bằng ĐÚNG giọng đã chọn — lỗi thì trả về thiếu cảnh, không tự đổi sang Edge / giọng khác."""
     from core.tts_engine import generate_tts_per_scene
     voice = _voice_id(voice_label)
-    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=strict)
+    return generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=True)
 
 
 # ═════════════════════════════════════════════════════════════════ review / reup
@@ -455,35 +458,29 @@ def _step_voice(run):
         rendered = synthesize([dict(s) for s in job.scenes], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False))
     if not rendered:
         raise RuntimeError('Tạo giọng đọc thất bại.')
-    _note_voice_fallback(job, rendered)
     rendered = _fill_missing_voices(job, rendered, voice_in_use(job), audio_dir, cfg)
     job.scenes = [_clean_scene(s) for s in rendered]
 
 
-EDGE_BACKUP_VOICE = 'Edge TTS — Nữ Bắc (miễn phí)'
-
-
 def _fill_missing_voices(job, rendered, voice_label, audio_dir, cfg):
     """Engine TTS bỏ qua cảnh lỗi (mạng, bị chặn tần suất…) → video sẽ mất đoạn mà không ai biết.
-    Đọc lại riêng từng cảnh thiếu; vẫn lỗi thì đọc bằng Edge; vẫn không được thì dừng job, báo rõ cảnh nào."""
+    Đọc lại riêng từng cảnh thiếu bằng CHÍNH giọng đã chọn (2 lần); vẫn lỗi thì dừng job, báo rõ cảnh nào."""
     wanted = [(i, s) for (i, s) in enumerate(job.scenes) if (s.get('voiceover') or '').strip()]
     got = {int(s.get('_original_index', -1)) for s in rendered}
     missing = [(i, s) for (i, s) in wanted if i not in got]
     if not missing:
         return rendered
     job.log(f"   [WARN] {len(missing)} cảnh chưa có giọng ({', '.join(f'#{i + 1}' for (i, _) in missing[:10])}) — đọc lại từng cảnh...", 'warn')
-    strict = cfg.get('strict_voice', False)
     fixed, still = [], []
     for (i, s) in missing:
         out = None
-        for label in [voice_label] + ([] if strict or voice_label == EDGE_BACKUP_VOICE else [EDGE_BACKUP_VOICE]):
+        for attempt in range(2):
             job.check()
-            r = synthesize([dict(s)], label, os.path.join(audio_dir, f'retry_{i}'), job.log, strict=strict)
+            r = synthesize([dict(s)], voice_label, os.path.join(audio_dir, f'retry_{i}_{attempt}'), job.log)
             if r and r[0].get('tts_path'):
                 out = {**r[0], '_original_index': i}
-                if label != voice_label:
-                    job.log(f'   Cảnh #{i + 1}: đọc bằng {label} thay giọng đã chọn', 'warn')
                 break
+            time.sleep(3)
         (fixed if out else still).append(out or i)
     if still:
         raise RuntimeError(f"Không tạo được giọng cho cảnh {', '.join(f'#{i + 1}' for i in still[:10])} — "
@@ -826,7 +823,7 @@ def _multi_voice(job, voice_label, audio_dir, cast_key, cfg):
     narrator = voice_label if voice_label in C.VIENEU_CAST_MALE + C.VIENEU_CAST_FEMALE else C.VIENEU_CAST_MALE[0]
     job.log(f"   Phân vai: người kể + {len(characters)} nhân vật ({', '.join(vmap)})", 'ok')
     return generate_tts_multi_voice(scenes, vmap, C.VOICE_OPTIONS[narrator], audio_dir, log_fn=job.log,
-                                    strict_voice=cfg.get('strict_voice', False))
+                                    strict_voice=True)
 
 
 def regenerate_scene(job, idx, text, scene=None):

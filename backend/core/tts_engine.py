@@ -2,7 +2,7 @@
 
 """
 Tạo giọng đọc từng cảnh: Edge TTS (miễn phí, song song), CapCut (gom gói, song song), FPT.AI (tuần tự, tránh giới hạn tần suất),
-VieNeu / VieNeu3 (chạy cục bộ). Lỗi thì tự đọc lại bằng Edge, cuối cùng là Google TTS.
+VieNeu / VieNeu3 (chạy cục bộ). Chọn giọng nào đọc đúng giọng đó — lỗi thì báo lỗi, KHÔNG tự đổi sang giọng / engine khác.
 """
 import os
 os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
@@ -146,15 +146,9 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
         if out and len(out) == len(nonempty):
             log_fn(f'''   Hoàn tất TTS (CapCut): {len(out)}/{len(nonempty)} cảnh''')
             return out
-        if strict_voice:
-            log_fn('   [LỖI] CapCut lỗi ở một số cảnh. Đang bật giữ đúng giọng nên KHÔNG tự đổi sang Edge TTS.')
-            return out or []
-        log_fn('   [WARN] CapCut lỗi — đọc lại TOÀN BỘ bằng Edge TTS cho đồng đều giọng'
-               + ('' if cookie else ' (thử dán cookie CapCut ở Cài đặt nếu lỗi lặp lại)') + '...')
-        from core.capcut_tts import edge_fallback
-        out = _render_edge_parallel(scenes, edge_fallback(cc_voice), rate, log_fn, temp_dir)
-        log_fn(f'''   Hoàn tất TTS (Edge - thay CapCut): {len(out)}/{len(nonempty)} cảnh''')
-        return out
+        log_fn(f'''   [LỖI] CapCut: {len(out or [])}/{len(nonempty)} cảnh có giọng — không đổi sang giọng khác'''
+               + ('' if cookie else ' (lỗi lặp lại thì thử dán cookie CapCut ở Cài đặt)'))
+        return out or []
     _voice_lower = voice.lower()
     if _voice_lower.startswith('vieneu-') or _voice_lower.startswith('vieneu3-'):
         if _voice_lower.startswith('vieneu3-'):
@@ -164,41 +158,30 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
         log_fn(f'''   Công nghệ TTS: VieNeu | Giọng: {vn_voice}''')
         if not _acquire_gpu_lock(log_fn, gpu_timeout, '   [GPU] Đang chờ GPU giải phóng (tiến trình khác đang xử lý)...'):
             return []
-        _vn_fallback = []
         try:
-            out = _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir, allow_fallback=not strict_voice, _fallback_flag=_vn_fallback)
+            out = _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir, allow_fallback=False)
         finally:
             _LOCAL_GPU_LOCK.release()
         out = out or []
-        if _vn_fallback:
-            log_fn(f'''   Hoàn tất TTS (Edge TTS - fallback từ VieNeu): {len(out)}/{len(nonempty)} cảnh''')
-        else:
-            log_fn(f'''   Hoàn tất TTS (VieNeu): {len(out)}/{len(nonempty)} cảnh''')
+        log_fn(f'''   Hoàn tất TTS (VieNeu): {len(out)}/{len(nonempty)} cảnh''')
         return out
-    use_fptai = bool(fptai_key) and voice in FPTAI_VOICES
-    edge_fallback = voice if voice in EDGE_VOICES else _get_fallback_edge_voice(voice)
-    if use_fptai:
+    if voice in FPTAI_VOICES:
+        if not fptai_key:
+            log_fn('   [LỖI] Chưa có FPT_API_KEY cho giọng FPT.AI đã chọn (Cài đặt → Key giọng đọc) — không đổi sang giọng khác')
+            return []
         log_fn(f'''   TTS Engine: FPT.AI | Giọng: {voice} ({FPTAI_VOICES.get(voice, '')})''')
         out = _render_fptai_sequential(scenes, voice, fptai_key, log_fn, temp_dir)
         if out and len(out) == len(nonempty):
             log_fn(f'''   Hoàn tất TTS (FPT.AI): {len(out)}/{len(nonempty)} cảnh''')
             return out
-        if strict_voice:
-            log_fn('   [LỖI] FPT.AI lỗi hoặc hết quota. Đang bật giữ đúng giọng nên KHÔNG tự đổi sang Edge TTS.')
-            return []
-        log_fn('   [WARN] FPT.AI hết quota / lỗi. Đọc lại TOÀN BỘ bằng Edge TTS...')
-    else:
-        if voice in FPTAI_VOICES and not fptai_key:
-            if strict_voice:
-                log_fn('   [LỖI] Chưa có FPT_AI_KEY cho giọng FPT.AI đã chọn. Đang bật giữ đúng giọng nên KHÔNG tự đổi sang Edge TTS.')
-                return []
-            log_fn('   [WARN] Chưa đặt FPT_AI_KEY, dùng Edge TTS')
-        log_fn(f'''   TTS Engine: Edge TTS (song song) | Giọng: {edge_fallback}''')
-    out = _render_edge_parallel(scenes, edge_fallback, rate, log_fn, temp_dir)
+        log_fn(f'''   [LỖI] FPT.AI: {len(out or [])}/{len(nonempty)} cảnh có giọng (lỗi / hết quota) — không đổi sang giọng khác''')
+        return out or []
+    if voice not in EDGE_VOICES:
+        log_fn(f'''   [LỖI] Giọng "{voice}" không có trong danh sách — chọn lại giọng đọc''')
+        return []
+    log_fn(f'''   TTS Engine: Edge TTS (song song) | Giọng: {voice}''')
+    out = _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir)
     log_fn(f'''   Hoàn tất TTS (Edge): {len(out)}/{len(nonempty)} cảnh''')
-    if not out:
-        log_fn('   [FALLBACK] Edge TTS thất bại hoàn toàn. Thử Google TTS (dự phòng cuối)...')
-        out = _render_gtts_fallback(scenes, log_fn, temp_dir)
     return out
 def _run_coro(make_coro):
     """Chay coroutine (tao boi make_coro) ke ca khi da co event loop dang chay."""
@@ -237,7 +220,12 @@ def _build_out_scenes(indexed, result_map, engine, log_fn, fail_msg, short_msg):
     return out_scenes
 _EDGE_CHUNK = 8          # gửi dồn 30 câu cùng lúc → Edge chặn tạm ("No audio was received") hàng loạt câu
 _EDGE_RETRY = 4
+_EDGE_CONNECT_TIMEOUT = 40
+
+
 def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
+    """Chỉ đọc bằng Edge (không đổi sang engine khác) — câu lỗi thử lại bằng chính Edge."""
+    retries = _EDGE_RETRY
     try:
         import edge_tts
     except ImportError:
@@ -246,22 +234,25 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
     os.makedirs(temp_dir, exist_ok=True)
     indexed = [(s.get('_original_index', i), s) for (i, s) in enumerate(scenes) if (s.get('voiceover') or '').strip()]
     total = len(indexed)
-    log_fn(f'''   Đang tạo giọng {total} cảnh (chunk {_EDGE_CHUNK}/batch, thử lại {_EDGE_RETRY}x)...''')
+    log_fn(f'''   Đang tạo giọng {total} cảnh (chunk {_EDGE_CHUNK}/batch, thử lại {retries}x)...''')
     async def _one(i, text):
         out_path = os.path.join(temp_dir, f'''vo_{i:04d}.mp3''')
         last_err = None
         # Edge hay không trả âm thanh với câu cảm thán rất ngắn ("Hả?", "Ơ!") → lần thử sau đổi cách viết (bỏ dấu hỏi / thêm dấu chấm)
         base = text.rstrip('?!.…, ').strip() or text
         variants = [text, text, base + '.', base, base + '...']
-        for attempt in range(_EDGE_RETRY + 1):
+        for attempt in range(retries + 1):
             try:
-                comm = edge_tts.Communicate(variants[min(attempt, len(variants) - 1)], voice, rate=rate)
+                # mặc định chờ kết nối 10s — mạng chậm bắt tay với máy chủ Edge hay quá 10s → bị cắt (ServerTimeoutError /
+                # "No audio was received"); nới 40s thì hết lỗi
+                comm = edge_tts.Communicate(variants[min(attempt, len(variants) - 1)], voice, rate=rate,
+                                            connect_timeout=_EDGE_CONNECT_TIMEOUT, receive_timeout=60)
                 await comm.save(out_path)
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                     return (i, out_path, True)
             except Exception as _e:
                 last_err = _e
-            if attempt < _EDGE_RETRY:
+            if attempt < retries:
                 import random
                 await asyncio.sleep(2.0 ** (attempt + 1) + random.uniform(0, 1.5))   # chờ tăng dần 2 → 4 → 8 → 16s cho Edge hồi
         if last_err and i == 0:
@@ -603,7 +594,7 @@ def generate_vieneu_cast(scenes, temp_dir, log_fn=print, gpu_timeout=600):
         _LOCAL_GPU_LOCK.release()
 
 
-def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir, allow_fallback=True, _fallback_flag=None, _retry_done=False, _display_override=None):
+def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir, allow_fallback=False, _fallback_flag=None, _retry_done=False, _display_override=None):
     _orig_voice = vn_voice
     _edge_voice = _get_fallback_edge_voice(_orig_voice)
     def _full_edge_fallback():

@@ -12,6 +12,22 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+### Added
+- Sửa bản dịch chuyên nghiệp ngay trong app: thanh **Tìm & thay** cho cả bản dịch (sửa 1 tên / cụm sai ở mọi câu một lần, Enter / Shift+Enter nhảy tới câu có chữ đó).
+- **Từ điển dịch** của bạn (nút "Từ điển" ở bước sửa bản dịch): chữ gốc → AI luôn dịch đúng; cách dịch sai → tự thay sau khi dịch (cả Dịch phụ đề lẫn Dịch & Reup, cả dịch Google miễn phí). "Tìm & thay" tích "Lưu vào Từ điển" là lần sau tự sửa.
+- Nút **Sửa phụ đề** ở job Dịch phụ đề đã xong: mở lại bước sửa bản dịch (giữ nguyên cấu hình, giọng, vai từng câu) rồi dựng lại video theo bản đã sửa — không nhận dạng / dịch lại từ đầu.
+- Dịch phụ đề: phụ đề Việt hiện chồng lên video gốc theo đúng giây ở bước đang chạy và bước sửa bản dịch (sửa câu nào thấy ngay trên hình). Bản dịch hiện lên timeline ngay khi dịch xong — không phải chờ tới cuối job.
+
+### Changed
+- Chọn giọng nào đọc đúng giọng đó: không còn tự đổi sang Edge / Google / VieNeu khi giọng đã chọn lỗi (CapCut, VieNeu, FPT.AI, lồng tiếng theo vai). Câu lỗi được đọc lại bằng chính giọng đó; vẫn lỗi thì báo rõ câu nào. Bỏ tuỳ chọn "Giữ đúng giọng đã chọn" (giờ luôn bật).
+
+- Dịch phụ đề: ô làm mờ chỗ phụ đề cũ / logo góc có mép mềm (mờ dần ra ngoài, vùng mờ nới rộng hơn vùng xoá chữ) — hết lộ ô chữ nhật cạnh sắc trên nền sáng.
+
+### Fixed
+- Bước sửa bản dịch / kịch bản giật lag với video dài (vài trăm câu): lúc chờ sửa, backend gửi lại toàn bộ danh sách câu mỗi 0.4 giây (đồng hồ job đổi → coi như "có thay đổi"), giờ chỉ gửi khi câu thật sự đổi. Gõ 1 câu / phát video không còn vẽ lại cả danh sách và cả nghìn khối trên timeline — chỉ dòng vừa sửa và đầu phát.
+- Edge TTS báo "No audio was received" / quá thời gian hàng loạt câu khi mạng chậm: chờ kết nối 40s (trước 10s).
+- Dựng video kẹt mãi ở 65% (Dịch phụ đề có nhiều vùng che phụ đề cũ / logo, Review có nhiều vùng chữ tự che): mỗi vùng 1 cặp split → overlay nối tiếp làm thời gian dựng tăng gấp đôi theo từng vùng (22 vùng đã không xong). Giờ tách luồng 1 lần cho mọi vùng, làm mờ chỉ lúc vùng cần che — 40 vùng dựng 10s video trong ~25s.
+
 ## [2.5.0] - 2026-10-23
 
 ### Added

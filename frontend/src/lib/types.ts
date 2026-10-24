@@ -85,6 +85,8 @@ export type DownloadItem = { url: string; platform: string; path?: string; size?
 
 export type Preset = { name: string; mode: string; cfg: Record<string, unknown> }
 
+/** Từ điển dịch: goc (chữ gốc) → AI dịch đúng `viet`; sai (cách dịch sai) → tự thay thành `viet`. */
+export type GlossaryEntry = { goc: string; sai: string; viet: string }
 export type JobDraft = { waiting: "script" | "preview"; scenes: Scene[]; mixer?: Record<string, unknown> | null; at: number }
 
 export type JobDetail = JobSummary & {
