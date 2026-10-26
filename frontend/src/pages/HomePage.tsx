@@ -1,4 +1,4 @@
-import { ArrowRight, AudioLines, Captions, CheckCircle2, Clapperboard, Cpu, Download, HardDrive, History, KeyRound, Languages, XCircle } from "lucide-react"
+import { ArrowRight, AudioLines, Captions, Subtitles, CheckCircle2, Clapperboard, Cpu, Download, HardDrive, History, KeyRound, Languages, XCircle } from "lucide-react"
 import { setCreateMode } from "@/pages/CreatePage"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
@@ -10,11 +10,12 @@ import { fmtRelative } from "@/lib/format"
 import type { JobSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-type Action = { page: Page; title: string; desc: string; icon: ReactNode; mode?: "review" | "reup" }
+type Action = { page: Page; title: string; desc: string; icon: ReactNode; mode?: "review" | "reup" | "vietsub" }
 const ACTIONS: Action[] = [
   { page: "download", title: "Tải video", desc: "Douyin, TikTok, Bilibili, Weibo, YouTube… tải về rồi làm video luôn.", icon: <Download /> },
   { page: "create", mode: "review", title: "Tạo review phim", desc: "AI xem phim, viết kịch bản, lồng tiếng, dựng video và viết bài đăng.", icon: <Clapperboard /> },
   { page: "create", mode: "reup", title: "Dịch & Reup", desc: "Nhận dạng lời thoại, dịch sang tiếng Việt, lồng tiếng thuyết minh.", icon: <Languages /> },
+  { page: "create", mode: "vietsub", title: "Dịch phụ đề", desc: "Dịch phim sang tiếng Việt, xoá phụ đề cũ, ghép phụ đề Việt — lồng tiếng theo nhân vật.", icon: <Subtitles /> },
   { page: "subtitles", title: "Phụ đề", desc: "Tách SRT bằng Whisper, sửa phụ đề, ghép phụ đề vào video.", icon: <Captions /> },
   { page: "voices", title: "Giọng đọc", desc: "", icon: <AudioLines /> },
 ]
@@ -44,7 +45,7 @@ export function HomePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {ACTIONS.map((a) => (
           <button key={a.title} onClick={() => { if (a.mode) setCreateMode(a.mode); go(a.page) }}
             className="group relative overflow-hidden rounded-xl border border-border bg-card p-4 text-left transition hover:border-primary/50 hover:bg-accent/40">

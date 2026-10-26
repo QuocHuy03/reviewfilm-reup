@@ -103,6 +103,8 @@ def list_voices():
 class TestVoiceRequest(BaseModel):
     voice: str
     text: str = 'Đây là thử nghiệm giọng đọc, xin chào các bạn, chúc một ngày tốt lành.'
+    vieneu_rate: float = 0          # giọng VieNeu: tốc độ ±%
+    vieneu_pitch: float = 0         # giọng VieNeu: dời cao độ ± Hz
 
 
 @router.post('/test')
@@ -110,7 +112,7 @@ def test_voice(req: TestVoiceRequest):
     text = req.text.strip()
     if not text:
         raise HTTPException(400, 'Câu thử đang trống.')
-    key = (req.voice, text)
+    key = (req.voice, text, req.vieneu_rate, req.vieneu_pitch)
     hit = _cache.get(key)
     if hit and os.path.isfile(hit['path']):
         return {**hit, 'cached': True}
@@ -118,10 +120,11 @@ def test_voice(req: TestVoiceRequest):
         raise HTTPException(409, 'Đang tạo giọng thử khác — đợi xong rồi bấm tiếp.')
     logs = []
     try:
-        from app.features.jobs.pipelines import synthesize
+        from app.features.jobs.pipelines import synthesize, vieneu_fx
         out_dir = os.path.join(_PREVIEW_DIR, uuid.uuid4().hex[:8])
         res = synthesize([{'voiceover': text, 'subtitle': text, 'clip_start': 0, 'clip_end': 5}], req.voice, out_dir,
-                         lambda m, t=None: logs.append(str(m)))
+                         lambda m, t=None: logs.append(str(m)),
+                         fx=vieneu_fx({'vieneu_rate': req.vieneu_rate, 'vieneu_pitch': req.vieneu_pitch}))
         if not res or not res[0].get('tts_path') or not os.path.isfile(res[0]['tts_path']):
             raise HTTPException(500, 'Không tạo được audio thử. ' + ' | '.join(logs[-3:]))
         out = {'path': res[0]['tts_path'], 'duration': res[0].get('tts_duration', 0),

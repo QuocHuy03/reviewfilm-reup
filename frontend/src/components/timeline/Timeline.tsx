@@ -312,7 +312,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
               {clips.map((c, k) => {
                 const span = c.scene.clip_end - c.scene.clip_start
                 const over = mode === "review" ? c.dur - span : 0           // Review: lời dài hơn đoạn hình → chiếu lấn sang hình phía sau
-                const rate = mode === "reup" && c.dur > 0 ? span / c.dur : 1  // Reup: tốc độ hình sau khi kéo giãn
+                const rate = mode === "reup" ? 1 / (c.pts ?? 1) : 1             // Reup: hình chỉ chậm lại khi lời quá dài (≤ 1.25×)
                 return (
                   <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
                     onBodyDown={(e) => startMove(e, c)} dragging={dragRole(c)}
@@ -335,7 +335,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                       <span className="flex items-center gap-1 truncate text-[11px] font-semibold">
                         Cảnh {k + 1}
                         {issues[c.index] && <AlertTriangle className={cn("size-3 shrink-0", issues[c.index] === "error" ? "text-red-300" : "text-amber-300")} />}
-                        {(rate > 1.35 || rate < 0.7) && <span className="rounded bg-amber-400/25 px-1 font-mono text-[9px] text-amber-200" title="Tốc độ hình sau khi kéo giãn cho vừa lời">×{rate.toFixed(1)}</span>}
+                        {rate < 0.99 && <span className="rounded bg-amber-400/25 px-1 font-mono text-[9px] text-amber-200" title="Lời quá dài so với khoảng trống tới câu sau — hình phải chậm lại. Nên rút gọn lời câu này.">×{rate.toFixed(2)}</span>}
                       </span>
                       <span className="tabular truncate font-mono text-[9.5px] text-white/55" title="Mốc trong video gốc · độ dài">▶ {fmtClock(c.scene.clip_start)} · {c.dur.toFixed(1)}s</span>
                     </div>

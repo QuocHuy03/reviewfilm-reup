@@ -9,7 +9,7 @@ import { SystemMeters } from "./SystemMeters"
 
 const TITLES: Record<Page, { title: string; sub: string }> = {
   home: { title: "Tổng quan", sub: "Bảng điều khiển ReviewFilm" },
-  create: { title: "Tạo video", sub: "Review phim bằng AI hoặc Dịch & Reup" },
+  create: { title: "Tạo video", sub: "Review phim · Dịch & Reup · Dịch phụ đề — 1 video hoặc hàng loạt" },
   studio: { title: "Studio", sub: "Tiến trình, kịch bản và xem trước" },
   subtitles: { title: "Phụ đề", sub: "Tách SRT · Ghép phụ đề vào video" },
   download: { title: "Tải video", sub: "Douyin · TikTok · Bilibili · Weibo · YouTube… — tải về rồi làm Review / Reup" },

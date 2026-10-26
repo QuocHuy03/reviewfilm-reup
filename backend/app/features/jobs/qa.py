@@ -16,7 +16,6 @@ CLIP_MAX_DB = -0.1       # đỉnh cao hơn → có thể rè
 DUR_TOLERANCE = 0.10
 OVERLAP_S = 1.0          # Review: lời lấn sang hình cảnh sau quá mức này → hình bị lặp
 SHORT_RATIO = 0.5        # Review: lời ngắn hơn nửa đoạn hình (hình > 4s) → bỏ phí hình
-SLOW_MAX, FAST_MIN = 1.35, 0.7   # Reup: tỉ lệ lời/hình ngoài khoảng này → hình chậm / tua nhanh thấy rõ
 LABEL_RE = re.compile(r'^\s*(?:\[\s*Cảnh|\*\*\s*Cảnh|Cảnh\s+\S+\s*[:：])', re.IGNORECASE)
 
 
@@ -25,8 +24,10 @@ def scene_fit(scenes, reup=False):
 
     Review: video_editor đọc hình gốc từ clip_start dài đúng bằng lời (không kéo giãn) → lời dài thì
             lấn sang hình của cảnh sau (lặp hình), lời ngắn thì bỏ phí hình.
-    Reup:   hình bị kéo giãn theo lời (setpts) → lệch nhiều thì thấy rõ hình chậm / tua nhanh.
+    Reup:   hình tốc độ thật; lời dài thì mượn khoảng lặng → giọng nhanh (≤1.35×) → hình chậm (≤1.25×) — giống video_editor.
+            Báo 'long' khi phải tăng tốc giọng mạnh / chậm hình (nên rút gọn lời); 'short' khi lời quá ngắn so với câu gốc.
     """
+    from core.video_editor import reup_fit
     out = []
     starts = [float(s.get('clip_start') or 0) for s in scenes]
     for (i, s) in enumerate(scenes):
@@ -35,11 +36,18 @@ def scene_fit(scenes, reup=False):
         if tts <= 0.1 or clip <= 0.1:
             continue
         if reup:
-            r = tts / clip
-            if r > SLOW_MAX:
-                out.append({'scene': i, 'kind': 'long', 'why': f'hình chậm {r:.1f}× (lời {tts:.0f}s / hình {clip:.0f}s)', 'fit': round(clip, 1)})
-            elif r < FAST_MIN:
-                out.append({'scene': i, 'kind': 'short', 'why': f'hình tua nhanh {1 / r:.1f}× (lời {tts:.0f}s / hình {clip:.0f}s)', 'fit': round(clip, 1)})
+            later = [x for x in starts if x > start + 0.05]
+            room = (min(later) - start) if later else clip + tts
+            (_, _, pts, at) = reup_fit(clip, room, tts)
+            if pts > 1.0:
+                out.append({'scene': i, 'kind': 'long', 'fit': round(max(clip, room), 1),
+                            'why': f'lời {tts:.1f}s quá dài so với {max(clip, room):.1f}s tới câu sau → giọng nhanh {at:.2f}× và hình chậm {pts:.2f}×'})
+            elif at > 1.2:
+                out.append({'scene': i, 'kind': 'long', 'fit': round(max(clip, room), 1),
+                            'why': f'lời {tts:.1f}s dài → giọng phải đọc nhanh {at:.2f}×'})
+            elif clip > 3 and tts < clip * 0.35:
+                out.append({'scene': i, 'kind': 'short', 'fit': round(clip, 1),
+                            'why': f'lời {tts:.1f}s / câu gốc {clip:.1f}s → lặng {clip - tts:.1f}s'})
             continue
         later = [x for x in starts if x > start + 0.05]
         nxt = min(later) if later else None
@@ -126,18 +134,22 @@ def text_repeats(scenes):
 
 
 def _run(cmd, timeout):
-    flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    from core.utils import _HIDE, _budgeted
+    flags = _HIDE                                # ưu tiên thấp + luồng theo ngân sách CPU chung
+    cmd = _budgeted(cmd)
     return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, creationflags=flags)
 
 
 def _probe(path):
     from core.utils import FFPROBE_EXE
-    r = _run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate,duration',
+    r = _run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height,r_frame_rate,avg_frame_rate,duration',
               '-of', 'json', path], 60)
     data = json.loads(r.stdout or '{}')
     v = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), {})
     a = next((s for s in data.get('streams', []) if s.get('codec_type') == 'audio'), None)
-    num, _, den = (v.get('r_frame_rate') or '0/1').partition('/')
+    # avg_frame_rate = tốc độ thật (r_frame_rate là "tốc độ nền": ghép clip khác timebase ra 120 fps ảo)
+    rate = v.get('avg_frame_rate') if v.get('avg_frame_rate') not in (None, '', '0/0') else v.get('r_frame_rate')
+    num, _, den = (rate or '0/1').partition('/')
     fps = float(num) / float(den or 1) if float(den or 1) else 0
     return {'duration': float(data.get('format', {}).get('duration') or 0), 'width': v.get('width', 0), 'height': v.get('height', 0),
             'fps': round(fps, 2), 'has_audio': a is not None,
@@ -294,6 +306,15 @@ def check_video(output_path, scenes=None, cfg=None, srt_path=''):
             add('subtitle', 'Phụ đề', 'ok' if n else 'warn', f'{n} dòng phụ đề · {os.path.basename(srt_path)}')
         else:
             add('subtitle', 'Phụ đề', 'warn', 'Không thấy file phụ đề đi kèm.', missing=True)
+
+    # Cảnh bị bỏ khỏi video: bước dựng ghi mốc thật (out_start / out_end) cho mọi cảnh dựng được — cảnh thiếu mốc
+    # trong khi cảnh khác có = dựng lỗi, bị bỏ (mất lời, phụ đề các câu sau dễ lệch). Đếm dòng SRT không bắt được lỗi này.
+    if scenes and any('out_start' in s for s in scenes):
+        lost = [i + 1 for (i, s) in enumerate(scenes) if 'out_start' not in s]
+        add('clips', 'Cảnh trong video', 'ok' if not lost else 'fail',
+            f'Đủ {len(scenes)} cảnh' if not lost
+            else f"{len(lost)} cảnh bị bỏ vì dựng lỗi: {', '.join(f'#{n}' for n in lost[:12])}" + (' …' if len(lost) > 12 else ''),
+            **({'scenes': [n - 1 for n in lost]} if lost else {}))
     return _result(checks)
 
 

@@ -5,11 +5,12 @@ _TS_RE = re.compile(r'(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2})
 
 
 def fmt_ts(sec):
-    sec = max(0.0, float(sec))
-    h = int(sec // 3600)
-    m = int(sec % 3600 // 60)
-    s = sec % 60
-    return f'{h:02d}:{m:02d}:{s:06.3f}'.replace('.', ',')
+    """Giây → hh:mm:ss,mmm. Làm tròn ms TRƯỚC khi tách giờ/phút/giây (59.9996s → 00:01:00,000, không ra 00:00:60,000)."""
+    ms_total = int(round(max(0.0, float(sec)) * 1000))
+    (h, rem) = divmod(ms_total, 3600000)
+    (m, rem) = divmod(rem, 60000)
+    (s, ms) = divmod(rem, 1000)
+    return f'{h:02d}:{m:02d}:{s:02d},{ms:03d}'
 
 
 def cues_to_srt(cues):

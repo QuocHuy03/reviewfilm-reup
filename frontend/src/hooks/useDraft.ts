@@ -12,7 +12,7 @@ export function draftFor(job: JobDetail, stage: "script" | "preview") {
  * Tự lưu chỉnh sửa lên backend 1 giây sau thay đổi cuối (và ngay khi rời màn hình) —
  * chuyển trang, đóng app rồi mở lại vẫn còn nguyên. → "saving" | "saved" | "error" | "".
  */
-export function useDraftAutosave(jobId: string, scenes: Scene[], mixer?: Record<string, unknown>) {
+export function useDraftAutosave(jobId: string, scenes: Scene[], mixer?: Record<string, unknown>, enabled = true) {
   const [state, setState] = useState<"" | "saving" | "saved" | "error">("")
   const first = useRef(true)
   const pending = useRef<{ scenes: Scene[]; mixer?: Record<string, unknown> } | null>(null)
@@ -25,7 +25,7 @@ export function useDraftAutosave(jobId: string, scenes: Scene[], mixer?: Record<
     api.saveDraft(jobId, p.scenes, p.mixer).then(() => setState("saved")).catch(() => setState("error"))
   }
   useEffect(() => {
-    if (first.current) { first.current = false; return }   // lần đầu = dữ liệu vừa tải, chưa có gì để lưu
+    if (first.current || !enabled) { first.current = false; return }   // lần đầu = dữ liệu vừa tải, chưa có gì để lưu
     pending.current = { scenes, mixer }
     const t = setTimeout(() => flush.current(), 1000)
     return () => clearTimeout(t)

@@ -97,8 +97,11 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
         log_fn('   [WARN] Kịch bản dạng marked thất bại, thử dự phòng dạng văn bản thường...')
         narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality)
     if not narrations:
-        log_fn('   [WARN] Cả hai phương pháp đều thất bại, dùng mô tả cảnh làm kịch bản tạm thời...')
-        narrations = [s['description'] for s in scenes_meta]
+        narrations = [_real_desc(s) for s in scenes_meta]
+        if sum(1 for t in narrations if t) < max(1, len(scenes_meta) // 2):
+            raise RuntimeError('AI không viết được kịch bản có nhãn [Cảnh N] (đã thử 2 cách) — chạy lại hoặc đổi tài khoản AI. '
+                               'Không dùng mô tả cảnh tự sinh làm lời đọc.')
+        log_fn('   [WARN] Cả hai phương pháp đều thất bại — tạm dùng mô tả cảnh THẬT làm lời (cảnh không có mô tả bị bỏ)')
     final_scenes = []
     for (i, meta) in enumerate(scenes_meta):
         text = narrations[i].strip() if i < len(narrations) else ''
@@ -115,10 +118,10 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
     for s in final_scenes:
         if _re.search('\\d', s['voiceover']):
             digits_found += 1
-            s['voiceover'] = _r2w(s['voiceover'])
-            s['subtitle'] = s['voiceover']
+            s['subtitle'] = s.get('subtitle') or s['voiceover']   # phụ đề giữ chữ số — chỉ lời đọc đổi số thành chữ
+            pass  # số → chữ để bước tạo giọng làm (voiceover_for_tts); lời & phụ đề giữ chữ số
     if digits_found:
-        log_fn(f'''   [Safety] Đã chuyển số thành chữ ở {digits_found} cảnh (kiểm tra an toàn TTS)''')
+        log_fn(f'''   {digits_found} cảnh có chữ số — phụ đề giữ chữ số, giọng đọc tự đọc thành chữ''')
     _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn)
     est_min = sum((len(s['voiceover'].split()) for s in final_scenes)) / TTS_WPM
     log_fn(f'''   Kịch bản hoàn chỉnh: {len(final_scenes)} cảnh, ~{est_min:.1f} phút TTS''')
@@ -143,10 +146,18 @@ def _enrich_scenes_with_transcript(scenes_meta, transcript):
             scene['_transcript'] = joined
     return scenes_meta
 def _safe_float(val, default=0.0):
+    """Số giây từ AI: 12 / "12" / "12s" / "12.5 giây" / "1:23" / "01:02:03" → float. Trước "12s" thành 0 → cảnh nhận
+    khoảng thời gian rác (đầu phim)."""
     try:
         return float(val)
     except (TypeError, ValueError):
-        return default
+        pass
+    t = str(val or '').strip().lower()
+    m = re.fullmatch(r'(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)', t)
+    if m:
+        return int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    m = re.match(r'^(\d+(?:[.,]\d+)?)\s*(?:s|sec|giây|gi[aâ]y)?', t)
+    return float(m.group(1).replace(',', '.')) if m else default
 def _build_scenes_from_beats(plot_beats, video_duration, target_minutes):
     video_duration = _safe_float(video_duration, 0.0)
     if video_duration <= 0:
@@ -155,7 +166,7 @@ def _build_scenes_from_beats(plot_beats, video_duration, target_minutes):
     if not plot_beats or len(plot_beats) < 4:
         n_fb = min_scenes
         step_fb = video_duration / n_fb
-        plot_beats = [{'timestamp': i * step_fb, 'description': f'''Phan {i + 1} trong {n_fb}'''} for i in range(n_fb)]
+        plot_beats = [{'timestamp': i * step_fb, 'description': f'''Phan {i + 1} trong {n_fb}''', '_placeholder': True} for i in range(n_fb)]
     beats = sorted((b for b in plot_beats if _safe_float(b.get('timestamp', 0)) < video_duration), key=lambda b: _safe_float(b.get('timestamp', 0)))
     if len(beats) < min_scenes:
         real_beats = list(beats)
@@ -168,7 +179,7 @@ def _build_scenes_from_beats(plot_beats, video_duration, target_minutes):
             if real_beats:
                 nearest = min(real_beats, key=lambda b: abs(_safe_float(b.get('timestamp', 0)) - ts))
                 nearest_desc = nearest.get('description', '')
-            beats.append({'timestamp': ts, 'description': nearest_desc or f'''Tiep dien canh {ts:.0f}s'''})
+            beats.append({'timestamp': ts, 'description': nearest_desc or f'''Tiep dien canh {ts:.0f}s''', '_placeholder': not nearest_desc})
             existing_ts.add(ts)
         beats = sorted(beats, key=lambda b: _safe_float(b.get('timestamp', 0)))
     scene_cap = min(MAX_SCENES, max(min_scenes, int(video_duration / MIN_SCENE_SECONDS)))
@@ -191,8 +202,25 @@ def _build_scenes_from_beats(plot_beats, video_duration, target_minutes):
         clip_end = min(clip_end, float(video_duration))
         if clip_end - clip_start < 2.0:
             continue
-        scenes.append({'clip_start': clip_start, 'clip_end': clip_end, 'description': beat.get('description', f'''Canh {i + 1}''')})
+        desc = str(beat.get('description') or '').strip()
+        scenes.append({'clip_start': clip_start, 'clip_end': clip_end, 'description': desc or f'''Canh {i + 1}''',
+                       '_placeholder': bool(beat.get('_placeholder')) or not desc or _is_placeholder(desc)})
     return scenes
+_PLACEHOLDER_RE = re.compile(r'^\s*(?:ph[aầ]n\s+\d+\s+trong\s+\d+|ti[eế]p\s+di[eễ]n\s+c[aả]nh\b.*|c[aả]nh\s+\d+)\s*$', re.IGNORECASE)
+
+
+def _is_placeholder(desc):
+    """Mô tả GIẢ do code tự sinh khi thiếu dữ liệu ("Phan 3 trong 60", "Tiep dien canh 120s", "Canh 5") — không phải
+    nội dung hình → không bao giờ được đọc thành lời thuyết minh."""
+    return bool(_PLACEHOLDER_RE.match(str(desc or '')))
+
+
+def _real_desc(meta):
+    """Mô tả cảnh dùng được làm lời dự phòng — '' nếu là mô tả giả."""
+    d = str((meta or {}).get('description') or '').strip()
+    return '' if not d or (meta or {}).get('_placeholder') or _is_placeholder(d) else d
+
+
 _SENT_END_RE = re.compile('(?:\\.{3}|…|[.!?])["\\\'”’»]?(?=\\s|$)')
 def _trim_to_word_limit(text, max_words):
     words = text.split()
@@ -376,10 +404,9 @@ def _parse_marked_script(content, num_scenes, log_fn=print, scenes_meta=None):
     if _dup_labels:
         log_fn(f'''   [WARN] AI ghi trung nhan [Cảnh N] cho {len(set(_dup_labels))} cảnh ({sorted(set(_dup_labels))[slice(None, 10, None)]}{'...' if len(set(_dup_labels)) > 10 else ''}) — đã giữ bản dài nhất (bỏ dòng tiêu đề/mục lục trùng nhãn).''')
     if len(non_empty) < num_scenes * 0.7:
-        log_fn('   [WARN] Số cảnh khớp được quá ít, tiến hành chia đều văn bản tự động...')
-        clean_content = pattern.sub('', content)
-        clean_content = '\n'.join((line.strip() for line in clean_content.split('\n') if line.strip()))
-        return _split_text_to_n(clean_content, num_scenes)
+        # KHÔNG chia đều văn bản cho các cảnh: lời kể sẽ lệch hình (cảnh 5 đọc chuyện cảnh 8) — để bước gọi thử lại / báo lỗi
+        log_fn(f'   [WARN] Chỉ khớp được nhãn [Cảnh N] cho {len(non_empty)}/{num_scenes} cảnh — không chia đều (sẽ lệch lời với hình)')
+        return None
     n_own_desc = 0
     n_dropped = 0
     for i in range(num_scenes):
@@ -388,7 +415,7 @@ def _parse_marked_script(content, num_scenes, log_fn=print, scenes_meta=None):
         own_desc = ''
         if scenes_meta:
             if i < len(scenes_meta):
-                own_desc = ((scenes_meta[i].get('description') or '')).strip()
+                own_desc = _real_desc(scenes_meta[i])    # mô tả giả ("Phan 3 trong 60") → bỏ cảnh, không đọc thành lời
         if own_desc:
             final_narrations[i] = own_desc
             n_own_desc += 1
@@ -402,11 +429,11 @@ def _parse_marked_script(content, num_scenes, log_fn=print, scenes_meta=None):
     return final_narrations
 def _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn=print, quality='standard'):
     total_words = words_per_scene * len(scenes_meta)
-    beats_text = '\n'.join((f'''- Canh {i + 1}: {s['description']}''' for (i, s) in enumerate(scenes_meta)))
+    beats_text = '\n'.join((f'''- [Cảnh {i + 1}]: {_real_desc(s) or '(chưa có mô tả — kể tiếp mạch truyện)'}''' for (i, s) in enumerate(scenes_meta)))
     _vi_title = analysis.get('_vi_title') or '?'
     _src_title = analysis.get('_vi_title_src', '')
     title_line = f'''Tên phim (DÙNG ĐÚNG TÊN NÀY): {_vi_title}''' + (f''' ({_src_title})''' if _src_title else '')
-    prompt = f'''Bạn là biên kịch viết kịch bản review phim (Movie Recap) cho kênh YouTube Việt Nam.\n{title_line}\nThể loại: {analysis.get('genre', '?')}. Tóm tắt cốt truyện: {analysis.get('summary', '')}\nCác mốc sự kiện chính:\n{beats_text}\n\nNHIỆM VỤ: Viết một bài thuyết minh kể chuyện phim bằng tiếng Việt dài khoảng {total_words} từ, liền mạch, dễ hiểu, giải thích rõ động cơ nhân vật và các tình tiết cốt truyện từ đầu đến cuối phim. Tránh miêu tả hình ảnh thô sơ.\nQUY TẮC TÊN PHIM: dùng tên tiếng Việt phổ biến (ví dụ \'Ma Thổi Đèn\', \'Chân Hoàn Truyện\').\nQUY TẮC TÊN NHÂN VẬT: {_origin_name_rule(analysis.get('origin', ''))}\nQUAN TRỌNG: TUYỆT ĐỐI KHÔNG dùng chữ số (0-9). Viết tất cả số bằng chữ tiếng Việt (ví dụ: \'ba người\', \'hai nghìn hai mươi sáu\', \'một trăm năm\').\nChỉ trả về văn bản thuần của bài thuyết minh, không chứa định dạng markdown, không chứa JSON.'''
+    prompt = f'''Bạn là biên kịch viết kịch bản review phim (Movie Recap) cho kênh YouTube Việt Nam.\n{title_line}\nThể loại: {analysis.get('genre', '?')}. Tóm tắt cốt truyện: {analysis.get('summary', '')}\nCác mốc sự kiện chính:\n{beats_text}\n\nNHIỆM VỤ: Viết một bài thuyết minh kể chuyện phim bằng tiếng Việt dài khoảng {total_words} từ, liền mạch, dễ hiểu, giải thích rõ động cơ nhân vật và các tình tiết cốt truyện từ đầu đến cuối phim. Tránh miêu tả hình ảnh thô sơ.\nQUY TẮC TÊN PHIM: dùng tên tiếng Việt phổ biến (ví dụ \'Ma Thổi Đèn\', \'Chân Hoàn Truyện\').\nQUY TẮC TÊN NHÂN VẬT: {_origin_name_rule(analysis.get('origin', ''))}\nQUAN TRỌNG: TUYỆT ĐỐI KHÔNG dùng chữ số (0-9). Viết tất cả số bằng chữ tiếng Việt (ví dụ: \'ba người\', \'hai nghìn hai mươi sáu\', \'một trăm năm\').\nĐỊNH DẠNG BẮT BUỘC: chia bài thành đúng {len(scenes_meta)} đoạn theo thứ tự các mốc trên, MỖI đoạn mở đầu bằng nhãn [Cảnh N] (N = 1…{len(scenes_meta)}) rồi tới lời thuyết minh của đúng mốc đó. Không bỏ nhãn, không gộp 2 mốc vào 1 đoạn.\nChỉ trả về văn bản thuần (các đoạn có nhãn), không markdown, không JSON.'''
     fallback_max_tokens = min(64000, len(scenes_meta) * 150 + 1000)
     text = ''
     for (eng, key) in engines:
@@ -418,7 +445,8 @@ def _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn
     parsed = _parse_marked_script(text, len(scenes_meta), log_fn, scenes_meta=scenes_meta)
     if parsed:
         return parsed
-    return _split_text_to_n(text, len(scenes_meta))
+    log_fn('   [WARN] Bản dự phòng cũng thiếu nhãn [Cảnh N] — không chia đều (sẽ lệch lời với hình)')
+    return None
 def _split_text_to_n(text, n):
     if n <= 0:
         if text.strip():
@@ -505,8 +533,11 @@ def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, eng
         log_fn('   [WARN] Kịch bản dạng marked thất bại, thử dự phòng dạng văn bản thường...')
         narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality)
     if not narrations:
-        log_fn('   [WARN] Cả hai phương pháp đều thất bại, dùng mô tả cảnh làm kịch bản tạm thời...')
-        narrations = [s['description'] for s in scenes_meta]
+        narrations = [_real_desc(s) for s in scenes_meta]
+        if sum(1 for t in narrations if t) < max(1, len(scenes_meta) // 2):
+            raise RuntimeError('AI không viết được kịch bản có nhãn [Cảnh N] (đã thử 2 cách) — chạy lại hoặc đổi tài khoản AI. '
+                               'Không dùng mô tả cảnh tự sinh làm lời đọc.')
+        log_fn('   [WARN] Cả hai phương pháp đều thất bại — tạm dùng mô tả cảnh THẬT làm lời (cảnh không có mô tả bị bỏ)')
     final_scenes = []
     for (i, meta) in enumerate(scenes_meta):
         text = narrations[i].strip() if i < len(narrations) else ''
@@ -515,17 +546,18 @@ def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, eng
         limit = meta.get('_word_limit', 0)
         safety_limit = int(limit * 1.05) if limit > 0 else 150
         text = _trim_to_word_limit(text, safety_limit)
-        final_scenes.append({'voiceover': text, 'clip_start': meta['clip_start'], 'clip_end': meta['clip_end'], 'subtitle': text})
+        final_scenes.append({'voiceover': text, 'clip_start': meta['clip_start'], 'clip_end': meta['clip_end'], 'subtitle': text,
+                             'description': _real_desc(meta)})   # giữ mô tả cảnh cho AI hậu kỳ (không có thì AI dễ bịa)
     import re as _re
     from .tts_engine import replace_numbers_with_words as _r2w
     digits_found = 0
     for s in final_scenes:
         if _re.search('\\d', s['voiceover']):
             digits_found += 1
-            s['voiceover'] = _r2w(s['voiceover'])
-            s['subtitle'] = s['voiceover']
+            s['subtitle'] = s.get('subtitle') or s['voiceover']   # phụ đề giữ chữ số — chỉ lời đọc đổi số thành chữ
+            pass  # số → chữ để bước tạo giọng làm (voiceover_for_tts); lời & phụ đề giữ chữ số
     if digits_found:
-        log_fn(f'''   [Safety] Đã chuyển số thành chữ ở {digits_found} cảnh (kiểm tra an toàn TTS)''')
+        log_fn(f'''   {digits_found} cảnh có chữ số — phụ đề giữ chữ số, giọng đọc tự đọc thành chữ''')
     _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn)
     est_min = sum((len(s['voiceover'].split()) for s in final_scenes)) / TTS_WPM
     log_fn(f'''   Kịch bản hoàn chỉnh: {len(final_scenes)} cảnh, ~{est_min:.1f} phút TTS''')
@@ -562,6 +594,14 @@ def write_review_script_v2(analysis, transcript, video_duration, video_path, api
         return {'scenes': [], 'num_cut_points': len(real_cuts or []), 'num_scene_chapters': 0}
     log_fn(f'''   Đã xây dựng {len(scenes_meta)} chương cảnh (khớp cảnh) từ video''')
     scenes_meta = _enrich_scenes_with_transcript(scenes_meta, transcript)
+    # B10: video chỉ chiếu từ đầu chương, dài đúng bằng lời đọc (~số từ / tốc độ đọc) — không phải cả chương. Cho Vision xem
+    # đúng phần hình SẼ CHIẾU để lời kể nói đúng chuyện đang hiện trên hình (trước rải khắp chương → kể chuyện ở giây
+    # 8–17 của chương nhưng hình đó không bao giờ được chiếu)
+    try:
+        for (s, w) in zip(scenes_meta, _per_scene_word_targets(scenes_meta, int(TTS_WPM * target_minutes))):
+            s['_shown_span'] = round(min(s['clip_end'] - s['clip_start'], max(4.0, w / _SCRIPT_WPS * 1.15)), 2)
+    except Exception as e:
+        log_fn(f'   [WARN] Không ước được phần hình mỗi chương ({e}) — Vision xem cả chương')
     _map_tmp_dir = temp_dir or __import__('tempfile').gettempdir()
     outline = analyze_scenes_with_vision(scenes_meta, video_path, openai_key, _map_tmp_dir, log_fn=log_fn, quality=quality, film_context=analysis.get('_user_context', ''), char_glossary=analysis.get('_char_glossary'))
     if outline:

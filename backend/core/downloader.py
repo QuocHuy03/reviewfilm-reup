@@ -238,16 +238,121 @@ def _safe_name(title):
     return name or 'video'
 
 
+def platform_folder(output_dir, url):
+    """Video lẻ: '<thư mục tải>/<Nền tảng>/' (YouTube, Douyin…) — nhiều nguồn không lẫn vào nhau."""
+    if is_direct_media(url):
+        return os.path.join(output_dir, 'Video khác')
+    label = detect_platform(url)[1] or 'Video khác'
+    return os.path.join(output_dir, _safe_name(label.split(' (')[0]))
+
+
+def _poster_candidates(url):
+    """Link ảnh bìa thường là bản thu nhỏ → thử bản gốc trước: bỏ hậu tố resize của CDN (…jpg@w=360&h=640, x-oss-process,
+    imageView2, ~tplv-…), YouTube hqdefault → maxresdefault."""
+    out = []
+    u = re.sub(r'(\.(?:jpe?g|png|webp))@[^/?#]*$', r'\1', url, flags=re.I)
+    u = re.sub(r'[?&](?:x-oss-process|imageView2|image_process|imageMogr2)=[^&]*', '', u)
+    if 'ytimg.com' in u:
+        out.append(re.sub(r'/(?:hq|mq|sd)?default(\.jpg|\.webp)', r'/maxresdefault\1', u))
+    out += [u, url]
+    return list(dict.fromkeys(out))
+
+
+def save_poster(image_url, path, referer=''):
+    """Tải ảnh bìa → JPEG chất lượng cao (webp / png đổi sang jpg để mọi trình xem / Plex / Kodi đọc được). Lỗi → None."""
+    import io
+    import requests
+    if not image_url or not str(image_url).startswith('http'):
+        return None
+    try:
+        headers = {'User-Agent': UA, **({'Referer': referer} if referer else {})}
+        data = None
+        for u in _poster_candidates(image_url):      # bản gốc nét nhất trước, lỗi thì lùi về link thường
+            try:
+                r = requests.get(u, headers=headers, timeout=20)
+                if r.status_code == 200 and len(r.content) >= 500 and r.headers.get('Content-Type', 'image').startswith('image'):
+                    data = r.content
+                    break
+            except requests.RequestException:
+                continue
+        if not data:
+            return None
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        if data[:3] == b'\xff\xd8\xff':                   # đã là JPEG → giữ nguyên, không nén lại
+            with open(path, 'wb') as f:
+                f.write(data)
+            return path
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        if im.mode not in ('RGB', 'L'):
+            bg = Image.new('RGB', im.size, (0, 0, 0))
+            im = im.convert('RGBA')
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        im.convert('RGB').save(path, 'JPEG', quality=95)
+        return path
+    except Exception:
+        return None
+
+
+def unique_path(path):
+    (stem, ext) = os.path.splitext(path)
+    k = 2
+    while os.path.exists(path):
+        path = f'{stem} ({k}){ext}'
+        k += 1
+    return path
+
+
+def write_series_info(series, folder, link=''):
+    """Phim nhiều tập: poster.jpg + 'Thông tin phim.txt' trong thư mục phim (1 lần, có rồi thì thôi)."""
+    import datetime
+    os.makedirs(folder, exist_ok=True)
+    poster = os.path.join(folder, 'poster.jpg')
+    if series.cover and not os.path.isfile(poster):
+        save_poster(series.cover, poster)
+    info = os.path.join(folder, 'Thông tin phim.txt')
+    if not os.path.isfile(info):
+        lines = [f'Tên phim: {series.name}', f'Nền tảng: {series.platform}',
+                 f'Số tập: {series.episode_count or len(series.episodes)}' + (f' (xem được {series.accessible_count})' if series.accessible_count else ''),
+                 f'Link: {link or series.url or ""}', f'Tải lúc: {datetime.datetime.now():%Y-%m-%d %H:%M}']
+        if series.description:
+            lines += ['', 'Nội dung:', str(series.description).strip()]
+        with open(info, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+    return poster if os.path.isfile(poster) else None
+
+
+def series_folder(output_dir, series):
+    return os.path.join(output_dir, _safe_name(series.name))
+
+
+_VIDEO_EXTS = ('.mp4', '.webm', '.mkv', '.mov', '.m4v', '.flv', '.ts', '.avi')
+_CTYPE_EXT = {'video/mp4': '.mp4', 'video/webm': '.webm', 'video/x-matroska': '.mkv', 'video/quicktime': '.mov',
+              'video/x-flv': '.flv', 'video/mp2t': '.ts', 'video/x-msvideo': '.avi', 'video/x-m4v': '.m4v'}
+
+
 def download_direct(url, output_dir, title='', log_fn=print, progress_fn=None, should_stop=None):
     """Tải link video trực tiếp (CDN) bằng HTTP — có tiến độ, huỷ giữa chừng, file dở được xoá."""
     import time
     import requests
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.join(output_dir, _safe_name(title))
-    path, k = base + '.mp4', 2
-    while os.path.exists(path):
-        path, k = f'{base} ({k}).mp4', k + 1
-    part = path + '.part'
+    # đuôi theo link (.webm / .mkv / .mov…), không có thì .mp4 — sửa lại theo Content-Type khi máy chủ trả về
+    ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower()
+    ext = ext if ext in _VIDEO_EXTS else '.mp4'
+    # GIỮ CHỖ tên file ngay (tạo .part độc quyền): 2 lượt tải cùng lúc cùng tên không chọn trùng file / ghi đè nhau
+    k = 1
+    while True:
+        path = base + ext if k == 1 else f'{base} ({k}){ext}'
+        part = path + '.part'
+        if not os.path.exists(path):
+            try:
+                open(part, 'xb').close()
+                break
+            except FileExistsError:
+                pass
+        k += 1
     host = (urllib.parse.urlparse(url).hostname or '').lower()
     headers = {'User-Agent': UA}
     if 'douyin' in host or 'zjcdn' in host or 'bytecdn' in host:
@@ -258,6 +363,8 @@ def download_direct(url, output_dir, title='', log_fn=print, progress_fn=None, s
             if r.status_code != 200:
                 raise RuntimeError(f'Link không tải được (HTTP {r.status_code}) — link trực tiếp thường hết hạn sau 1–2 giờ, hãy lấy link mới.')
             total = int(r.headers.get('Content-Length') or 0)
+            ctype = (r.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            real_ext = _CTYPE_EXT.get(ctype)
             got, t0, last = 0, time.time(), 0.0
             with open(part, 'wb') as f:
                 for chunk in r.iter_content(1 << 20):
@@ -274,6 +381,10 @@ def download_direct(url, output_dir, title='', log_fn=print, progress_fn=None, s
                                     f'{speed / 1048576:.2f}MiB/s', f'{int(eta // 60):02d}:{int(eta % 60):02d}' if total else '')
         if total and got < total:
             raise RuntimeError(f'Tải chưa đủ ({got / 1048576:.0f}/{total / 1048576:.0f} MB) — mạng bị ngắt, thử lại.')
+        if real_ext and real_ext != ext:          # máy chủ báo định dạng khác đuôi đã đặt → đổi đuôi cho đúng
+            new = os.path.splitext(path)[0] + real_ext
+            if not os.path.exists(new):
+                path = new
         os.replace(part, path)
         return path
     except requests.RequestException as e:
@@ -283,9 +394,11 @@ def download_direct(url, output_dir, title='', log_fn=print, progress_fn=None, s
             os.remove(part)
 
 
-def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, should_stop=None, title=''):
-    """Tải 1 video → đường dẫn file. Ném RuntimeError (thông báo dễ hiểu) nếu lỗi."""
+def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, should_stop=None, title='', meta=None):
+    """Tải 1 video → đường dẫn file. Ném RuntimeError (thông báo dễ hiểu) nếu lỗi.
+    meta (dict, tuỳ chọn): điền thêm {'thumbnail': link ảnh bìa} nếu nguồn có — để lưu poster."""
     url = normalize(url)
+    meta = meta if meta is not None else {}
     if is_direct_media(url):
         return download_direct(url, output_dir, title, log_fn, progress_fn, should_stop)
     if detect_platform(url)[0] == 'drama':     # 1 file → tập đầu tiên xem được (trong các tập đã chọn bằng #ep=)
@@ -297,11 +410,13 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
         if not ep:
             raise RuntimeError('Không có tập nào tải được (tập bị khoá hoặc sai số tập).')
         log_fn(f'   {s.name} · tập {ep.num}')
+        meta['thumbnail'] = s.cover
         return download_drama_episode(s, ep, output_dir, log_fn, progress_fn, should_stop)
     if detect_platform(url)[0] in DTK_PLATFORMS:
         try:
             v = dtk_resolve(url)
             log_fn(f"   {v['platform_label']}: {v['height']}p, không logo — {v['title'][:50]}")
+            meta['thumbnail'] = v.get('cover')
             return download_direct(v['video'], output_dir, title or v['title'], log_fn, progress_fn, should_stop)
         except RuntimeError as e:
             log_fn(f'   [WARN] Nguồn API mở lỗi ({e}) — thử yt-dlp...')
@@ -310,6 +425,7 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
     template = os.path.join(output_dir, '%(title).80B [%(id)s].%(ext)s')
     fmt = QUALITY.get(quality, QUALITY['best'])
     base = ['--no-playlist', '-f', fmt, '-o', template, '--newline', '--progress', '--print', 'after_move:filepath', '--windows-filenames',
+            '--print', 'after_move:RFTHUMB %(thumbnail)s',
             '--progress-template', 'download:RFPROG %(progress._percent_str)s|%(progress._total_bytes_str)s%(progress._total_bytes_estimate_str)s|%(progress._speed_str)s|%(progress._eta_str)s']
     if quality != 'audio':
         base += ['--merge-output-format', 'mp4']
@@ -325,6 +441,11 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
         lines_out, err_lines = [], []
 
         def run(p):
+            # đọc stderr ở luồng riêng SONG SONG: đọc hết stdout rồi mới đọc stderr thì yt-dlp in nhiều lỗi (đầy bộ đệm
+            # stderr) sẽ đứng chờ ghi, còn ta đứng chờ stdout → treo mãi
+            import threading
+            t_err = threading.Thread(target=lambda: err_lines.append(p.stderr.read()), daemon=True)
+            t_err.start()
             for line in p.stdout:
                 line = line.strip()
                 if should_stop and should_stop():
@@ -339,10 +460,12 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
                             continue
                         clean = [re.sub(r'N/?A|Unknown( B/s)?', '', x).strip() for x in parts[1:4]] + ['', '', '']
                         progress_fn(pct, clean[0], clean[1], clean[2])
+                elif line.startswith('RFTHUMB '):
+                    meta['thumbnail'] = line[8:].strip() if line[8:].strip() not in ('NA', 'None') else None
                 elif line and not line.startswith('['):
                     lines_out.append(line)
-            err_lines.append(p.stderr.read())
             p.wait()
+            t_err.join(timeout=10)
             return p.returncode
 
         code = _ytdlp(base + extra + [url], proc_cb=run)
@@ -487,7 +610,7 @@ def _save_drama_subs(ep, video_path, log_fn):
 def download_drama_episode(series, ep, output_dir, log_fn=print, progress_fn=None, should_stop=None):
     """Tải 1 tập phim ngắn vào '<output_dir>/<tên phim>/EP01.mp4' (+ phụ đề). Tập đã tải rồi thì bỏ qua."""
     from core.drama_downloader import get_video_url
-    folder = os.path.join(output_dir, _safe_name(series.name))
+    folder = series_folder(output_dir, series)
     name = f'EP{ep.num:0{3 if len(series.episodes) >= 100 else 2}d}'
     path = os.path.join(folder, name + '.mp4')
     if os.path.isfile(path) and os.path.getsize(path) > 0:

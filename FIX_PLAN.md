@@ -1,5 +1,44 @@
 # Kế hoạch sửa: vùng che lệch, giọng lệch timeline, âm lượng, phụ đề, kịch bản
 
+## ✅ Trạng thái (cập nhật 2026-10-26)
+
+Bộ test `backend/tests`: **18/18 PASS** (16 test gốc + 2 test mới cho mô hình Reup). Đã chạy thật 1 job Reup trọn vẹn (QA 92/100, đủ 13/13 cảnh, mỗi đoạn hình chỉ chiếu 1 lần).
+
+| Mục | Trạng thái | Ghi chú |
+|---|---|---|
+| A1–A4 vùng che | ✅ | test pass |
+| B1 Reup không tua nhanh / chậm tuỳ tiện | ✅ | `video_editor.reup_fit` dùng chung cho dựng, SRT, QA, xem trước |
+| B2 không gộp block 12s | ✅ | ≤6s, ≤100 ký tự, khoảng lặng <0.35s |
+| B3 hook nhét vào thoại | ✅ | bỏ hook (hàm dịch dùng chung cả Dịch phụ đề) |
+| B4 SRT lệch | ✅ | ghi SRT SAU khi dựng theo độ dài clip thật + intro + tốc độ; `.vi.srt` = file đó |
+| B5 cắt lặng TTS | ✅ | `polish_tts` cho mọi engine |
+| B6 Whisper | ✅ | Reup bật mốc theo từ; câu gợi ý đúng ngôn ngữ nguồn |
+| B7 ngân sách độ dài | ✅ | `toi_da N tu` mỗi câu + AI rút gọn câu phải chậm hình (Reup) |
+| B8 tự hậu kỳ trên Reup | ✅ | không `fix_durations`, không cho AI bỏ câu; câu người dùng bỏ giữ tiếng gốc nhỏ |
+| B9 phụ đề theo WordBoundary | ⏳ chưa làm | tuỳ chọn (chỉ Edge có mốc từ); hiện chia theo ký tự — giống hệt giữa xem trước & xuất |
+| B10 hình khớp lời kể (Review) | ✅ | Vision chỉ xem phần hình sẽ chiếu (`_shown_span`) |
+| B11 lặp hình (Review) | ✅ | `review_cap`: hình không lấn sang cảnh sau, lời dư → chậm nhẹ / giữ khung |
+| B12 chia đều lời khi thiếu nhãn | ✅ | không chia đều; dự phòng bắt buộc nhãn; mô tả giả không bao giờ thành lời |
+| B13 lỗi nhỏ kịch bản | ✅ (trừ TTS_WPM) | mốc "12s"/"1:23"; thoại mẫu đều cả phim; khung hình từ đầu phim; AI hậu kỳ thấy mô tả hình |
+| C1 amix | ✅ | test pass |
+| C2 cân âm lượng TTS | ✅ | ≈ -17…-18 LUFS mọi engine |
+| D1, D2 | ✅ | test pass |
+| D3 sửa lời mà giọng cũ | ✅ | `tts_text` + lỗi đỏ ở Hậu kỳ + tự đọc lại khi xác nhận |
+| D4 regen gắn nhầm cảnh | ✅ | ghép theo mã cố định |
+| D5 VieNeu dùng file cũ | ✅ | xoá file đích trước khi tạo (Edge, CapCut, VieNeu) |
+| D6 phân vai | ✅ | so khớp bỏ khoảng trắng; thiếu / ghép lỗi → đọc lại cả câu giọng người kể |
+| E1 dấu % | ✅ | test pass |
+| E2 quá số dòng | ✅ | |
+| E3 xem trước ≠ xuất | ✅ (trừ kiểu chữ) | cùng nguồn chữ, cùng thuật toán chia đoạn (đã đối chiếu 5/5), chia theo ký tự, bỏ line-clamp |
+| E4 cỡ chữ ASS | ✅ | chỉ "Ghép phụ đề" (Dịch phụ đề giữ cỡ hiện tại) |
+| E5 lỗi nhỏ | ✅ | gte/lt, fmt_ts, ≤ số dòng, log font |
+| F1–F4 QA / tự sửa | ✅ | mốc thật từ bước dựng; hoàn tác đủ bộ file; QA đếm cảnh bị bỏ; QA Reup theo mô hình mới; fps thật |
+| G1 đọc số | ✅ | 7/7 + phụ đề giữ chữ số |
+| G2 engine | ✅ | CapCut nhận tốc độ (khi chỉ định); VieNeu không treo; Edge ghi lý do lỗi; lỗi đọc file báo đúng |
+| H1–H7 | ✅ | |
+
+---
+
 Mục lục: A. Vùng che · B. Timeline giọng đọc (B1–B9 Reup/chung, B10–B13 Review) · C. Âm lượng · D. Giọng gắn nhầm cảnh · E. Phụ đề · F. QA/tự sửa · G. Đọc số & engine TTS · H. Khác
 
 Review ngày 2026-10-24, trên commit `6c79ce7`. Mọi lỗi dưới đây đã **đọc code + tái hiện bằng ffmpeg thật**, trừ chỗ ghi rõ "chưa tái hiện".

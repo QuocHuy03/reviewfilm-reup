@@ -7,7 +7,7 @@ import subprocess
 import json
 import logging
 import traceback
-from core.utils import FFMPEG_EXE, _HIDE
+from core.utils import FFMPEG_EXE, _HIDE, audio_lead_filter
 
 def _inject_ffmpeg_to_path():
     ffmpeg_dir = os.path.dirname(FFMPEG_EXE)
@@ -98,6 +98,29 @@ def _split_by_words(words, pause=0.3):
     return segs
 
 
+# Câu gợi ý cho Whisper ĐÚNG ngôn ngữ nguồn (câu tiếng Việt cho audio Trung / Hàn dễ kéo Whisper ra chữ sai ngôn ngữ
+# hoặc tự bịa). Tự nhận ngôn ngữ ('auto') → không gợi ý.
+_PROMPTS = {'zh': '以下是电影对白，请勿重复句子。', 'ja': '以下は映画の台詞です。', 'ko': '다음은 영화 대사입니다.',
+            'en': 'The following is movie dialogue.', 'vi': 'Dưới đây là đoạn phim, xin vui lòng không lặp lại câu.',
+            'th': 'ต่อไปนี้คือบทสนทนาในภาพยนตร์', 'es': 'El siguiente es el diálogo de una película.',
+            'fr': "Voici les dialogues d'un film.", 'de': 'Im Folgenden der Filmdialog.', 'ru': 'Далее следуют диалоги из фильма.'}
+
+
+def _cpu_threads(device):
+    """faster-whisper trên CPU: số luồng theo ngân sách CPU chung (mặc định nó lấy hết lõi, tranh với tách giọng chạy song song)."""
+    if device != 'cpu':
+        return {}
+    try:
+        from core import perf
+        return {'cpu_threads': perf.threads_for(2)}
+    except Exception:
+        return {}
+
+
+def _prompt_for(language):
+    return _PROMPTS.get(str(language or '').lower()[:2]) if language and language != 'auto' else None
+
+
 def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5, should_stop=None,
                      word_timestamps=False):
     """word_timestamps=True (lồng tiếng): đầu / cuối đoạn bám đúng chữ đầu / chữ cuối, tách đoạn ở chỗ ngừng nói dài."""
@@ -117,7 +140,7 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
     audio_path = os.path.join(temp_dir, 'audio_extracted.wav')
     def _extract():
         log_fn('   Trích xuất audio từ video...')
-        r = subprocess.run([FFMPEG_EXE, '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
+        r = subprocess.run([FFMPEG_EXE, '-y', '-i', video_path, '-vn', *audio_lead_filter(video_path), '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
         if r.returncode != 0 or not os.path.exists(audio_path):
             log_fn(f'   [LỖI] Trích audio: {r.stderr[:200] if r.stderr else "Không tạo được file audio"}')
             return False
@@ -248,7 +271,7 @@ def _run_whisper_py(audio_path, model_name, language, log_fn, device, beam_size=
         import whisper
         whisper_cache = get_whisper_cache_dir(audio_path)
         model = whisper.load_model(model_name, download_root=whisper_cache)
-        kwargs = {'verbose': False, 'fp16': False, 'condition_on_previous_text': False, 'initial_prompt': 'Dưới đây là đoạn phim, xin vui lòng không lặp lại câu.'}
+        kwargs = {'verbose': False, 'fp16': False, 'condition_on_previous_text': False, 'initial_prompt': _prompt_for(language)}
         if language and language != 'auto':
             kwargs['language'] = language
         result = model.transcribe(audio_path, **kwargs)
@@ -351,13 +374,13 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
         try:
             if model is None:
                 _MODEL_CACHE.clear()           # chỉ giữ 1 model — đổi model thì nhả model cũ cho đỡ RAM/VRAM
-                model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+                model = WhisperModel(local_dir, device=device, compute_type=compute_type, **_cpu_threads(device))
                 _MODEL_CACHE[key] = model
         except Exception as e:
             if device == 'cuda':
                 log_fn(f'   [WARN] CUDA không dùng được ({str(e)[:60]}) — lùi về CPU (int8)')
                 device, compute_type = 'cpu', 'int8'
-                model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+                model = WhisperModel(local_dir, device=device, compute_type=compute_type, **_cpu_threads(device))
             else:
                 raise e
 
@@ -371,7 +394,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             'vad_filter': True,
             'vad_parameters': {'min_silence_duration_ms': 500},
             'condition_on_previous_text': False,
-            'initial_prompt': 'Dưới đây là đoạn phim, xin vui lòng không lặp lại câu.'
+            'initial_prompt': _prompt_for(language),
         }
         if language and language != 'auto':
             kwargs['language'] = language
@@ -396,7 +419,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             kwargs.pop('vad_parameters', None)
             if device == 'cuda':
                 device, compute_type = 'cpu', 'int8'
-                model = WhisperModel(local_dir, device=device, compute_type=compute_type)
+                model = WhisperModel(local_dir, device=device, compute_type=compute_type, **_cpu_threads(device))
             segments_gen, info = model.transcribe(audio_in, **kwargs)
             segments_list = _collect(segments_gen)
 

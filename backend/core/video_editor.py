@@ -26,15 +26,7 @@ def _resolve_subtitle_text(scene, source_mode='prefer_voiceover'):
         return voiceover or subtitle
     return voiceover or subtitle
 def _generate_srt_file(scenes, srt_path, sub_max_chars_per_chunk=56, sub_max_lines=2, sub_source_mode='prefer_voiceover'):
-    def format_time_srt(seconds):
-        seconds = max(0.0, float(seconds))
-        h = int(seconds // 3600)
-        m = int(seconds % 3600 // 60)
-        s = int(seconds % 60)
-        ms = int(round((seconds - int(seconds)) * 1000))
-        if ms >= 1000:
-            ms = 999
-        return f'''{h:02d}:{m:02d}:{s:02d},{ms:03d}'''
+    from app.srt_utils import fmt_ts as format_time_srt   # làm tròn ms trước khi tách giờ/phút/giây
     with open(srt_path, 'w', encoding='utf-8') as f:
         srt_idx = 1
         for scene in scenes:
@@ -52,7 +44,7 @@ def _generate_srt_file(scenes, srt_path, sub_max_chars_per_chunk=56, sub_max_lin
             for chunk in chunks:
                 chunk_dur = total_dur * (len(chunk) / total_chars)
                 chunk_end = min(end_s, t_cursor + chunk_dur)
-                wrapped = _wrap_text(chunk, max_len=max(18, int(max(24, sub_max_chars_per_chunk) / max(1, sub_max_lines))))
+                wrapped = _wrap_lines(chunk, max(18, int(max(24, sub_max_chars_per_chunk) / max(1, sub_max_lines))), sub_max_lines)
                 f.write(f'''{srt_idx}\n''')
                 f.write(f'''{format_time_srt(t_cursor)} --> {format_time_srt(chunk_end)}\n''')
                 f.write(f'''{wrapped}\n\n''')
@@ -82,7 +74,7 @@ def _has_audio(video_path):
         return 'audio' in r.stdout.lower()
     except Exception:
         return False
-def _stretch_audio_to_duration(src, target_dur, out):
+def _stretch_audio_to_duration(src, target_dur, out, max_ratio=1.18):
     try:
         r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', src], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10, creationflags=_HIDE)
         src_dur = float(r.stdout.strip())
@@ -92,12 +84,11 @@ def _stretch_audio_to_duration(src, target_dur, out):
         return False
     if src_dur <= target_dur:
         return False
-    ratio = src_dur / target_dur
-    if ratio > 1.18:
-        ratio = 1.18
-    if ratio <= 1.02:
+    ratio = min(src_dur / target_dur, max_ratio)
+    if ratio <= 1.005:
         return False
-    atempo = f'''atempo={ratio:.4f}'''
+    # đệm đuôi trước atempo: bộ co giãn nuốt phần cuối file → mất âm cuối chữ (đuôi lặng thừa bị -t cắt khi dựng)
+    atempo = f'''apad=pad_dur=0.4,atempo={ratio:.4f}'''
     cmd = [FFMPEG_EXE, '-y', '-i', src, '-filter:a', atempo, '-ac', '1', '-ar', '44100', '-acodec', 'pcm_s16le', out]
     r2 = subprocess.run(cmd, capture_output=True, creationflags=_HIDE)
     return r2.returncode == 0 and os.path.getsize(out) > 0
@@ -156,9 +147,11 @@ def _find_system_font(font_name='Segoe UI'):
         found = find_font_file(font_name)
         if found:
             return found.replace('\\', '/')
-    except Exception:
-        pass
-    return _find_font()
+    except Exception as e:
+        print(f'[font] Lỗi tìm font "{font_name}": {e}')
+    fb = _find_font()
+    print(f'[font] Không tìm thấy font "{font_name}" — dùng font mặc định {fb}')
+    return fb
 def cap_spans(spans, max_terms=50):
     """Gộp khoảng thời gian [(a, b)] cho còn tối đa `max_terms` (gộp 2 khoảng sát nhau nhất trước) — biểu thức
     enable='between(..)+between(..)…' quá dài (phim dài có hàng trăm câu phụ đề) làm ffmpeg báo "Cannot allocate memory".
@@ -366,46 +359,107 @@ def _safe_duration(path):
         return float(get_video_duration(path) or 0.0)
     except Exception:
         return 0.0
+_RENDER_PRIVATE_KEYS = ('_video_scale', '_video_position', '_manual_sub_chunks')
+REUP_MAX_VOICE = 1.35     # Reup: giọng nhanh tối đa
+REUP_MAX_SLOW = 1.25      # Reup: hình chậm tối đa (sau khi đã mượn khoảng lặng + tăng tốc giọng)
+
+
+def reup_fit(src, room, tts):
+    """Căn 1 câu Reup (dùng chung cho dựng video, SRT, QA, xem trước). src = độ dài câu gốc, room = khoảng tới câu sau,
+    tts = độ dài lời Việt → (span: đoạn hình gốc dùng, out: độ dài trong video xuất, pts: hình chậm ×, at: giọng nhanh ×)."""
+    src = max(0.05, float(src))
+    room = max(src, float(room))
+    tts = float(tts)
+    if tts <= src:
+        return (src, src, 1.0, 1.0)
+    if tts <= room:
+        return (tts, tts, 1.0, 1.0)
+    at = min(REUP_MAX_VOICE, tts / room)
+    voice = tts / at
+    if voice <= room + 0.01:
+        return (voice, voice, 1.0, at)
+    pts = min(REUP_MAX_SLOW, voice / room)
+    return (room, max(room * pts, voice), pts, at)
+
+
 def build_review_video(scenes, source_video, output_path, temp_dir, target_resolution='1920x1080', fps=30, original_volume=0.08, burn_subtitles=True, bgm_path='', bgm_volume=0.05, log_fn=print, is_reup=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, speed_up_video=False, video_speed=1.0, audio_ducking=True, watermark_path='', intro_path='', outro_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, music_clips=None, mute_music=False, mute_sfx=False, **kwargs):
     if not scenes:
         log_fn('   [LỖI] Không có cảnh nào để dựng video')
         return
+    # mốc thật trên video xuất của từng cảnh trả về cho pipeline (QA / tự sửa tìm đúng cảnh) — không vào khoá cache clip
+    timeline_out = kwargs.pop('timeline_out', None)
+    muted_spans = sorted((float(a), float(b)) for (a, b) in (kwargs.pop('muted_spans', None) or []) if float(b) > float(a))
+    for (k, s) in enumerate(scenes):
+        s.setdefault('_job_index', k)
     if is_reup:
-        log_fn('   [Reup Mode] Tiến hành phân tích và cắt ghép video theo phương án B (co giãn video)...')
+        # Căn thời gian Reup (như pyVideoTrans / VideoLingo): hình LUÔN chạy tốc độ thật trừ khi buộc phải chậm lại.
+        #  lời ≤ câu gốc            → hình 1x dài bằng câu gốc, lời ở đầu, phần còn lại lặng;
+        #  câu gốc < lời ≤ khoảng trống tới câu sau → hình 1x dài bằng lời (mượn khoảng lặng phía sau);
+        #  lời > khoảng trống        → giọng nhanh tối đa REUP_MAX_VOICE; vẫn thiếu → hình chậm tối đa REUP_MAX_SLOW;
+        #                              vẫn thiếu nữa → giữ khung cuối. Không bao giờ tua nhanh hình.
+        # Kết quả (đoạn hình dùng, tốc độ hình, tốc độ giọng, độ dài xuất) ghi vào cảnh → _process_one_scene chỉ áp dụng,
+        # và SRT tính từ đúng các độ dài đó (không mỗi bên tự tính một kiểu).
+        log_fn('   [Reup] Căn lời theo câu gốc: hình tốc độ thật, lời dài thì mượn khoảng lặng → giọng nhanh nhẹ → hình chậm nhẹ')
         video_dur = _safe_duration(source_video)
         has_audio = _has_audio(source_video)
         continuous_scenes = []
         sorted_scenes = sorted(scenes, key=lambda x: x['clip_start'])
         last_end = sorted_scenes[0]['clip_start'] if sorted_scenes else 0.0
+        if sorted_scenes and last_end > 0.05:
+            last_end = 0.0                       # đoạn hình trước câu đầu tiên vẫn giữ (tiếng gốc)
         accumulated_time = 0.0
+        (n_borrow, n_fast, n_slow) = (0, 0, 0)
+
+        def _gap(a, b, tag):
+            # đoạn không có lời Việt: tiếng gốc 100% — trừ chỗ là câu thoại gốc đã bị bỏ (muted_spans) → giữ mức nhỏ
+            nonlocal accumulated_time
+            cuts = sorted({a, b} | {x for sp in muted_spans for x in sp if a < x < b})
+            for (k, (p, q)) in enumerate(zip(cuts, cuts[1:])):
+                if q - p < 0.02:
+                    continue
+                muted = any(ma <= (p + q) / 2 <= mb for (ma, mb) in muted_spans)
+                d = q - p
+                wav = os.path.join(temp_dir, f'silent_{tag}_{k}.wav')
+                _create_silent_wav(wav, d)
+                continuous_scenes.append({'is_reup': True, 'clip_start': p, 'clip_end': q, 'voiceover': '', 'subtitle': '', 'tts_path': wav,
+                                          'tts_duration': d, 'reup_out': d, 'reup_pts': 1.0, 'reup_atempo': 1.0,
+                                          'orig_volume': (original_volume if muted else 1.0) if original_volume > 0.001 else 0.0,
+                                          'has_audio': has_audio, 'out_start': accumulated_time, 'out_end': accumulated_time + d})
+                accumulated_time += d
         for (idx, s) in enumerate(sorted_scenes):
-            start = s['clip_start']
-            end = s['clip_end']
+            start = max(float(s['clip_start']), last_end)
+            end = max(start + 0.05, float(s['clip_end']))
             if start > last_end + 0.05:
-                gap_dur = start - last_end
-                gap_silent_wav = os.path.join(temp_dir, f'''silent_gap_{idx}.wav''')
-                _create_silent_wav(gap_silent_wav, gap_dur)
-                continuous_scenes.append({'is_reup': True, 'clip_start': last_end, 'clip_end': start, 'voiceover': '', 'subtitle': '', 'tts_path': gap_silent_wav, 'tts_duration': gap_dur, 'orig_volume': 1.0 if original_volume > 0.001 else 0.0, 'has_audio': has_audio, 'out_start': accumulated_time, 'out_end': accumulated_time + gap_dur})
-                accumulated_time += gap_dur
+                _gap(last_end, start, f'gap_{idx}')
             tts_path = s.get('tts_path')
-            tts_dur = s.get('tts_duration', end - start)
-            if not tts_path or not os.path.exists(tts_path):
-                fallback_wav = os.path.join(temp_dir, f'''silent_fail_{idx}.wav''')
-                _create_silent_wav(fallback_wav, end - start)
-                tts_path = fallback_wav
+            tts_dur = float(s.get('tts_duration') or 0)
+            if not tts_path or not os.path.exists(tts_path) or tts_dur <= 0.05:
+                tts_path = os.path.join(temp_dir, f'silent_fail_{idx}.wav')
                 tts_dur = end - start
-            clip_dur_orig = max(0.05, end - start)
-            _pr = max(0.4, min(2.5, tts_dur / clip_dur_orig)) if tts_dur > 0.05 else 1.0
-            real_dur = clip_dur_orig * _pr
-            continuous_scenes.append({'is_reup': True, 'clip_start': start, 'clip_end': end, 'voiceover': s.get('voiceover', ''), 'subtitle': s.get('subtitle', s.get('voiceover', '')), 'tts_path': tts_path, 'tts_duration': tts_dur, 'orig_volume': original_volume, 'has_audio': has_audio, 'out_start': accumulated_time, 'out_end': accumulated_time + real_dur})
-            accumulated_time += real_dur
-            last_end = end
+                _create_silent_wav(tts_path, tts_dur)
+            src = end - start
+            nxt = float(sorted_scenes[idx + 1]['clip_start']) if idx + 1 < len(sorted_scenes) else (video_dur or end + tts_dur)
+            room = max(src, nxt - start)
+            (span, out, pts, at) = reup_fit(src, room, tts_dur)
+            if pts > 1.0:
+                n_slow += 1
+            elif at > 1.0:
+                n_fast += 1
+            elif tts_dur > src:
+                n_borrow += 1
+            continuous_scenes.append({'is_reup': True, 'clip_start': start, 'clip_end': start + span, 'voiceover': s.get('voiceover', ''),
+                                      'subtitle': s.get('subtitle', s.get('voiceover', '')), 'tts_path': tts_path, 'tts_duration': tts_dur,
+                                      '_job_index': s.get('_job_index'),
+                                      'reup_out': round(out, 4), 'reup_pts': round(pts, 4), 'reup_atempo': round(at, 4),
+                                      'orig_volume': original_volume, 'has_audio': has_audio,
+                                      'out_start': accumulated_time, 'out_end': accumulated_time + min(out, tts_dur / at)})
+            accumulated_time += out
+            last_end = start + span
         if video_dur > last_end + 0.05:
-            gap_dur = video_dur - last_end
-            gap_silent_wav = os.path.join(temp_dir, 'silent_end.wav')
-            _create_silent_wav(gap_silent_wav, gap_dur)
-            continuous_scenes.append({'is_reup': True, 'clip_start': last_end, 'clip_end': video_dur, 'voiceover': '', 'subtitle': '', 'tts_path': gap_silent_wav, 'tts_duration': gap_dur, 'orig_volume': 1.0 if original_volume > 0.001 else 0.0, 'has_audio': has_audio, 'out_start': accumulated_time, 'out_end': accumulated_time + gap_dur})
-            accumulated_time += gap_dur
+            _gap(last_end, video_dur, 'end')
+        if n_borrow or n_fast or n_slow:
+            log_fn(f'   [Reup] {n_borrow} câu mượn khoảng lặng · {n_fast} câu giọng nhanh nhẹ (≤{REUP_MAX_VOICE}×) · '
+                   f'{n_slow} câu phải chậm hình (≤{REUP_MAX_SLOW}×) — nên rút gọn lời các câu này')
         scenes = continuous_scenes
     else:
         _SRT_TAIL = 0.12
@@ -424,18 +478,18 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                 real_clip_dur = max(tts_dur, min(tts_dur + _SRT_TAIL, max_available))
             else:
                 real_clip_dur = tts_dur + _SRT_TAIL
+            # hình của cảnh không lấn sang điểm bắt đầu của cảnh khác phía sau (B11): lấn thì cảnh kia chiếu lại đúng
+            # đoạn đó → lặp hình. _process_one_scene đọc 'review_cap' (đoạn hình tối đa) → lời dư thì chậm hình / giữ khung
+            later = [float(x['clip_start']) for x in scenes if float(x['clip_start']) > float(s['clip_start']) + 0.05]
+            s['review_cap'] = round(min(later) - float(s['clip_start']), 3) if later else None
             s['out_start'] = accumulated_time
             s['out_end'] = accumulated_time + tts_dur
             accumulated_time += real_clip_dur
     final_srt_path = os.path.splitext(output_path)[0] + '.srt'
     should_stop = kwargs.pop('should_stop', None)        # callable → True khi job bị huỷ
     sub_source_mode = kwargs.get('sub_source_mode', 'prefer_voiceover')
-    try:
-        speech_scenes = [s for s in scenes if _resolve_subtitle_text(s, sub_source_mode)]
-        _generate_srt_file(speech_scenes, final_srt_path, sub_max_chars_per_chunk=kwargs.get('sub_max_chars_per_chunk', 56), sub_max_lines=kwargs.get('sub_max_lines', 2), sub_source_mode=sub_source_mode)
-        log_fn(f'''   Đã tạo file phụ đề SRT đồng bộ: {final_srt_path}''')
-    except Exception as e:
-        log_fn(f'''   [WARN] Lỗi tạo file phụ đề SRT: {e}''')
+    # SRT ghi SAU khi dựng (đo độ dài clip thật, cộng intro, chia tốc độ video) — xem _write_synced_srt
+    _srt_opts = (final_srt_path, kwargs.get('sub_max_chars_per_chunk', 56), kwargs.get('sub_max_lines', 2), sub_source_mode)
     use_nvenc = _check_nvenc()
     if use_nvenc:
         log_fn('   Phát hiện GPU NVIDIA NVENC — encode bằng GPU (nhanh gấp 5-10 lần)')
@@ -453,7 +507,8 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     # chuyển cảnh chỉ dùng lúc ghép → tách khỏi kwargs để đổi kiểu chuyển cảnh không phải dựng lại clip
     transition = str(kwargs.pop('transition', 'none') or 'none')
     transition_duration = kwargs.pop('transition_duration', 0.5)
-    workers = max(1, min(4, (os.cpu_count() or 2) // 2))
+    from core import perf
+    workers = perf.render_workers()              # theo ngân sách CPU chung (chế độ nhẹ máy → 1)
     if kwargs.get('low_memory_mode'):
         workers = 1
     if use_nvenc:
@@ -468,8 +523,9 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                                'blur': blur_boxes, 'kw': kwargs}, sort_keys=True, default=str)
 
     def _clip_path(i, scene):
-        sc = {k: v for (k, v) in scene.items() if not str(k).startswith('_')}
-        sig = hashlib.md5(json.dumps([sc, _render_opts, bool(mirror_video) and i % 2 == 0], sort_keys=True, default=str).encode()).hexdigest()[:20]
+        # trường '_' là dữ liệu tạm (bỏ khỏi khoá) — TRỪ các trường ảnh hưởng hình dựng ra (zoom / vị trí / chia phụ đề tay)
+        sc = {k: v for (k, v) in scene.items() if not str(k).startswith('_') or k in _RENDER_PRIVATE_KEYS}
+        sig = hashlib.md5(json.dumps([sc, _render_opts, bool(mirror_video)], sort_keys=True, default=str).encode()).hexdigest()[:20]
         return os.path.join(clips_dir, f'clip_{sig}.mp4')
 
     reused = [0]
@@ -485,12 +541,13 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         if should_stop and should_stop():
             return (i, None)
         try:
-            ok = _process_one_scene(source_video, scene, clip_out, target_resolution, fps, original_volume, burn_subtitles, log_fn, i, font_path, video_total_duration, use_nvenc=use_nvenc, remove_old_sub=remove_old_sub, sub_cover_height=sub_cover_height, mirror_video=bool(mirror_video) and i % 2 == 0, watermark_path=watermark_path, ai_sub_box=ai_sub_box, ai_logo_box=ai_logo_box, remove_old_logo=remove_old_logo, manual_logo_corner=manual_logo_corner, manual_logo_size=manual_logo_size, watermark_corner=watermark_corner, watermark_size_pct=watermark_size_pct, watermark_margin_x_pct=watermark_margin_x_pct, watermark_margin_y_pct=watermark_margin_y_pct, watermark_opacity=watermark_opacity, blur_boxes=blur_boxes, **kwargs)
+            ok = _process_one_scene(source_video, scene, clip_out, target_resolution, fps, original_volume, burn_subtitles, log_fn, i, font_path, video_total_duration, use_nvenc=use_nvenc, remove_old_sub=remove_old_sub, sub_cover_height=sub_cover_height, mirror_video=bool(mirror_video), watermark_path=watermark_path, ai_sub_box=ai_sub_box, ai_logo_box=ai_logo_box, remove_old_logo=remove_old_logo, manual_logo_corner=manual_logo_corner, manual_logo_size=manual_logo_size, watermark_corner=watermark_corner, watermark_size_pct=watermark_size_pct, watermark_margin_x_pct=watermark_margin_x_pct, watermark_margin_y_pct=watermark_margin_y_pct, watermark_opacity=watermark_opacity, blur_boxes=blur_boxes, **kwargs)
         except Exception as e:
             log_fn(f'''   [LỖI] Cảnh {i + 1} gặp lỗi: {e}''')
             ok = False
         return (i, clip_out if ok else None)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    from core import perf
+    with perf.parallel(workers), ThreadPoolExecutor(max_workers=workers) as executor:   # mỗi ffmpeg = ngân sách ÷ workers luồng
         futures = {executor.submit(_render_one, (i, s)): i for (i, s) in enumerate(scenes)}
         for future in as_completed(futures):
             (i, clip_path) = future.result()
@@ -511,11 +568,15 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     if not final_clips:
         log_fn('   [LỖI] Không dựng được clip nào')
         return
+    if len(results) < len(scenes):
+        log_fn(f'   [WARN] {len(scenes) - len(results)} cảnh dựng lỗi bị bỏ khỏi video — phụ đề vẫn khớp các cảnh còn lại')
+    _intro_used = [0.0]
     if intro_path and os.path.exists(intro_path):
         intro_std = os.path.join(temp_dir, 'intro_std.mp4')
         log_fn('   [Branding] Đang đồng bộ hóa cấu hình Video Intro đầu kênh...')
         if _standardize_clip(intro_path, intro_std, target_resolution, fps, log_fn):
             final_clips.insert(0, intro_std)
+            _intro_used[0] = _stream_duration(intro_std, 'v:0') or _safe_duration(intro_std)
             log_fn('   [Branding] Đã chèn Video Intro thành công.')
         else:
             log_fn('   [WARN] Đồng bộ Video Intro thất bại, bỏ qua.')
@@ -541,6 +602,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         return
     enc = _video_encode_args(use_nvenc)
     _final_speed = video_speed
+    _applied_speed = 1.0                         # tốc độ thật sự đã áp (đổi tốc độ lỗi → video vẫn 1x, SRT cũng không chia)
     if speed_up_video and video_speed == 1.0:
         _final_speed = 1.03
     try:
@@ -560,9 +622,14 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
             r_speed = run_subprocess_heartbeat(cmd_speed_cpu, log_fn=log_fn, label=f'''Đang chỉnh tốc độ video {_final_speed:.2f}x (CPU)''', text=True, encoding='utf-8', errors='replace')
         if r_speed.returncode == 0 and os.path.exists(speed_output):
             concat_output = speed_output
+            _applied_speed = _final_speed
             log_fn(f'''   Chỉnh tốc độ {_final_speed:.2f}x thành công!''')
         else:
             log_fn(f'''   [WARN] Chỉnh tốc độ video thất bại: {(r_speed.stderr or '')[-200:]}''')
+    _write_synced_srt(scenes, results, _intro_used[0], _applied_speed, _srt_opts, log_fn)
+    if timeline_out is not None:
+        timeline_out.extend({'i': s['_job_index'], 'out_start': s['out_start'], 'out_end': s['out_end']}
+                            for (k, s) in enumerate(scenes) if k in results and s.get('_job_index') is not None)
     audio_src = concat_output
     if bgm_path and os.path.exists(bgm_path):
         log_fn('   Trộn nhạc nền (BGM)...')
@@ -587,11 +654,35 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     except Exception:
         pass
     return output_path
+def _write_synced_srt(scenes, clips, intro_dur, speed, opts, log_fn):
+    """SRT khớp video XUẤT: mốc mỗi câu = tổng độ dài THẬT các clip đã dựng trước nó (đo từng file — tính cả nén giọng,
+    chậm hình, giữ khung cuối, cảnh dựng lỗi bị bỏ) + intro, rồi chia tốc độ video toàn cục. Phần có lời trong clip =
+    độ dài lời đã tính lúc lên lịch (không vượt clip). Ghi lại out_start / out_end vào cảnh."""
+    (path, max_chars, max_lines, mode) = opts
+    try:
+        t = float(intro_dur or 0.0)
+        sp = float(speed or 1.0) or 1.0
+        timed = []
+        for i in sorted(clips):
+            s = scenes[i]
+            d = _stream_duration(clips[i], 'v:0') or _safe_duration(clips[i]) or 0.0
+            speech = max(0.0, float(s.get('out_end', 0) or 0) - float(s.get('out_start', 0) or 0)) or d
+            s['out_start'] = t / sp
+            s['out_end'] = (t + min(speech, d)) / sp
+            if _resolve_subtitle_text(s, mode):
+                timed.append(s)
+            t += d
+        _generate_srt_file(timed, path, sub_max_chars_per_chunk=max_chars, sub_max_lines=max_lines, sub_source_mode=mode)
+        log_fn(f'''   Đã tạo file phụ đề SRT đồng bộ (theo độ dài clip thật): {path}''')
+    except Exception as e:
+        log_fn(f'''   [WARN] Lỗi tạo file phụ đề SRT: {e}''')
+
+
 def _mix_bgm(video_in, bgm_path, video_out, bgm_volume, log_fn=print, audio_ducking=True):
     if audio_ducking:
-        filter_str = f'''[1:a]volume={bgm_volume}[bgm];[bgm][0:a]sidechaincompress=threshold=-25dB:ratio=10:attack=100:release=400[bgm_ducked];[0:a][bgm_ducked]amix=inputs=2:duration=first:dropout_transition=0[a]'''
+        filter_str = f'''[1:a]volume={bgm_volume}[bgm];[bgm][0:a]sidechaincompress=threshold=-25dB:ratio=10:attack=100:release=400[bgm_ducked];[0:a][bgm_ducked]amix=inputs=2:normalize=0:duration=first:dropout_transition=0,alimiter=limit=0.97:level=disabled[a]'''
     else:
-        filter_str = f'''[1:a]volume={bgm_volume}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=0[a]'''
+        filter_str = f'''[1:a]volume={bgm_volume}[bgm];[0:a][bgm]amix=inputs=2:normalize=0:duration=first:dropout_transition=0,alimiter=limit=0.97:level=disabled[a]'''
     cmd = [FFMPEG_EXE, '-y', '-i', video_in, '-stream_loop', '-1', '-i', bgm_path, '-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Trộn nhạc nền (BGM)', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
@@ -629,14 +720,14 @@ def _mix_multi_audio(video_in, clips, video_out, log_fn=print, mute_music=False,
         chains.append(chain)
         labels.append(f'''[a{i}]''')
     n_inputs = len(usable) + 1
-    filter_str = ';'.join(chains) + f''';[0:a]{''.join(labels)}amix=inputs={n_inputs}:duration=first:dropout_transition=0[a]'''
+    filter_str = ';'.join(chains) + f''';[0:a]{''.join(labels)}amix=inputs={n_inputs}:normalize=0:duration=first:dropout_transition=0,alimiter=limit=0.97:level=disabled[a]'''
     cmd += ['-filter_complex', filter_str, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-shortest', video_out]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label=f'''Trộn {len(usable)} đoạn Nhạc/SFX''', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         log_fn(f'''   [WARN] Trộn nhiều âm thanh lỗi: {r.stderr[slice(-300, None, None)]}''')
         return False
     return os.path.exists(video_out) and os.path.getsize(video_out) > 0
-def _process_one_scene(source_video, scene, out_path, resolution, fps, original_volume, burn_subtitles, log_fn, i=0, font_path=None, video_total_duration=0, use_nvenc=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, watermark_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, **kwargs):
+def _process_one_scene(source_video, scene, out_path, resolution, fps, original_volume, burn_subtitles, log_fn, i=0, font_path=None, video_total_duration=0.0, use_nvenc=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, watermark_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, **kwargs):
     clip_start = scene['clip_start']
     clip_end = scene['clip_end']
     tts_duration = scene['tts_duration']
@@ -644,7 +735,18 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     tts_path = scene['tts_path']
     subtitle = _resolve_subtitle_text(scene, kwargs.get('sub_source_mode', 'prefer_voiceover'))
     is_reup = scene.get('is_reup', False)
-    if is_reup:
+    if is_reup and 'reup_out' in scene:
+        # đã tính sẵn ở build_review_video: đoạn hình gốc [clip_start, clip_end], tốc độ hình, tốc độ giọng, độ dài xuất
+        clip_duration = max(0.05, clip_end - clip_start)
+        pts_ratio = float(scene.get('reup_pts') or 1.0)
+        _at = float(scene.get('reup_atempo') or 1.0)
+        if _at > 1.001 and tts_duration > 0.05:
+            stretched_wav = out_path + '_fast.wav'
+            if _stretch_audio_to_duration(tts_path, tts_duration / _at, stretched_wav, max_ratio=_at + 0.001):
+                tts_path = stretched_wav
+        tts_duration = float(scene['reup_out'])
+        sub_span_duration = min(_raw_tts_duration / _at, tts_duration) if _raw_tts_duration > 0.1 else tts_duration
+    elif is_reup:
         clip_duration = max(0.05, clip_end - clip_start)
         if tts_duration <= 0.05:
             tts_duration = clip_duration
@@ -670,15 +772,28 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         else:
             max_available = tts_duration + 5
         TAIL = 0.12
+        cap = scene.get('review_cap')
+        if cap:                                  # không đọc hình lấn sang cảnh khác phía sau (tránh lặp hình)
+            max_available = min(max_available, max(0.3, float(cap)))
         clip_duration = min(tts_duration + TAIL, max_available)
         if clip_duration < tts_duration:
             clip_duration = min(tts_duration, max_available)
         pts_ratio = 1.0
+        if cap and tts_duration + TAIL > clip_duration + 0.05:
+            # lời dài hơn đoạn hình của riêng cảnh này → chiếu chậm nhẹ (≤1.25×); vẫn thiếu thì tpad giữ khung cuối
+            pts_ratio = round(min(1.25, (tts_duration + TAIL) / clip_duration), 4)
         sub_span_duration = clip_duration
+        # đuôi TAIL thật sự có trong clip xuất (trước bị '-t tts_duration' cắt mất → hằng TAIL vô dụng, cảnh kết thúc
+        # đúng lúc tắt tiếng, nghe cụt); hình thiếu thì bước tpad bên dưới giữ khung cuối
+        tts_duration = max(tts_duration, clip_duration)
     (w, h) = resolution.split('x')
     vf = _crop_prefix(kwargs.get('crop_box'), kwargs.get('crop_fill', True), w, h) or \
         f'''scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'''
     vf += f',fps={fps}'
+    # vf = chỉ co hình vào khung xuất (+ viền đen) — đúng hệ toạ độ của khung xem trước nơi người dùng kéo vùng che.
+    # vf_post = mọi biến đổi hình KHÁC (zoom theo cảnh, đổi tốc độ, lật gương, màu, phóng 3%) — chạy SAU bước làm mờ,
+    # nếu chạy trước thì chữ gốc dời chỗ còn vùng che vẫn đứng yên → che lệch.
+    vf_post = ''
     _v_scale = scene.get('_video_scale')
     _v_pos = str(scene.get('_video_position') or 'center').strip().lower()
     if _v_scale is not None:
@@ -687,7 +802,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         except (TypeError, ValueError):
             _v_scale = 1.0
         if abs(_v_scale - 1.0) > 0.001:
-            vf += f''',scale=iw*{_v_scale:.4f}:ih*{_v_scale:.4f}'''
+            vf_post += f''',scale=iw*{_v_scale:.4f}:ih*{_v_scale:.4f}'''
             if _v_scale > 1.0:
                 if _v_pos == 'top':
                     crop_y = '0'
@@ -695,7 +810,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     crop_y = 'in_h-out_h'
                 else:
                     crop_y = '(in_h-out_h)/2'
-                vf += f''',crop={w}:{h}:(in_w-out_w)/2:{crop_y}'''
+                vf_post += f''',crop={w}:{h}:(in_w-out_w)/2:{crop_y}'''
             else:
                 if _v_pos == 'top':
                     pad_y = '0'
@@ -703,11 +818,11 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     pad_y = 'oh-ih'
                 else:
                     pad_y = '(oh-ih)/2'
-                vf += f''',pad={w}:{h}:(ow-iw)/2:{pad_y}:color=black'''
+                vf_post += f''',pad={w}:{h}:(ow-iw)/2:{pad_y}:color=black'''
     if pts_ratio != 1.0:
-        vf += f''',setpts={pts_ratio:.4f}*PTS'''
+        vf_post += f''',setpts={pts_ratio:.4f}*PTS'''
     if mirror_video:
-        vf += ',hflip'
+        vf_post += ',hflip'
     _extra_blur_boxes = []
     sub_cover_boxes = kwargs.get('sub_cover_boxes')
     if sub_cover_boxes is None:
@@ -749,13 +864,13 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             if w_pct > 0.01:
                 if h_pct > 0.01:
                     vf += f''',drawbox=x=iw*{xmin:.4f}:y=ih*{ymin:.4f}:w=iw*{w_pct:.4f}:h=ih*{h_pct:.4f}:color=black:t=fill'''
-    vf += ',' + COLOR_PRESETS.get(str(kwargs.get('color_preset') or 'none'), COLOR_PRESETS['none'])
-    vf += f''',crop=iw*0.97:ih*0.97,scale={w}:{h}'''
-    if not is_reup:
-        if clip_duration < tts_duration:
-            pad_dur = tts_duration - clip_duration
-            if pad_dur > 0.01:
-                vf += f''',tpad=stop_mode=clone:stop_duration={pad_dur:.4f}'''
+    vf_post += ',' + COLOR_PRESETS.get(str(kwargs.get('color_preset') or 'none'), COLOR_PRESETS['none'])
+    vf_post += f''',crop=iw*0.97:ih*0.97,scale={w}:{h}'''
+    _video_len = clip_duration * pts_ratio
+    if (not is_reup or 'reup_out' in scene) and tts_duration - _video_len > 0.01:
+        # lời dài hơn đoạn hình (đã chậm tối đa) → giữ khung cuối cho đủ lời
+        vf_post += f''',tpad=stop_mode=clone:stop_duration={tts_duration - _video_len:.4f}'''
+    vf_post = vf_post.lstrip(',')
     has_audio = _has_audio(source_video)
     orig_vol = scene.get('orig_volume', original_volume)
     mute_orig = float(orig_vol) <= 0.001 or not has_audio
@@ -855,7 +970,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     y_expr = '(h-text_h)/2'
                 else:
                     y_expr = f'''h-text_h-{margin_v}'''
-                clause = f'''drawtext={eff_font_str}textfile=\'{subtxt_esc}\':fontcolor={eff_font_color}:fontsize={fontsize}:borderw={sub_border_width}:bordercolor={sub_border_color}:line_spacing={sub_line_spacing}:x=(w-text_w)/2:y={y_expr}:{eff_box_str}enable=\'between(t\\,{t_cur:.3f}\\,{t_end:.3f})\''''
+                clause = f'''drawtext={eff_font_str}textfile=\'{subtxt_esc}\':fontcolor={eff_font_color}:fontsize={fontsize}:borderw={sub_border_width}:bordercolor={sub_border_color}:line_spacing={sub_line_spacing}:x=(w-text_w)/2:y={y_expr}:{eff_box_str}enable=\'gte(t\\,{t_cur:.3f})*lt(t\\,{t_end:.3f})\''''
                 sub_filters.append(clause)
                 if c_style.get('bgBlur', kwargs.get('sub_bg_blur')):
                     reg = _text_region(wrapped, eff_font_path, fontsize, sub_line_spacing, sub_border_width, vid_w, vid_h, eff_position_mode, margin_v, center_y)
@@ -873,6 +988,9 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     if blur_chain:
         fc += ';' + blur_chain
         last = blur_last
+    if vf_post:
+        fc += f'; [{last}]{vf_post}[vgeo]'
+        last = 'vgeo'
     # zoom chậm / tối viền: sau lớp che sub cũ (vùng che khớp chữ gốc), trước phụ đề mới (phụ đề không zoom theo)
     _fx = _scene_fx_filter(kwargs, i, w, h, fps, tts_duration)
     if _fx:
@@ -881,7 +999,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     # nền mờ sau phụ đề: làm mờ đúng khung chữ, chỉ lúc dòng đó hiện (sau hiệu ứng → khớp vị trí chữ trên khung cuối)
     for (bi, (bx, by, bw, bh, ta, tb)) in enumerate(_sub_blur):
         fc += (f'; [{last}]split[sba{bi}][sbc{bi}]; [sbc{bi}]crop={bw}:{bh}:{bx}:{by},gblur=sigma=18:steps=2[sbb{bi}]'
-               f"; [sba{bi}][sbb{bi}]overlay={bx}:{by}:enable='between(t\\,{ta:.3f}\\,{tb:.3f})'[sbo{bi}]")
+               f"; [sba{bi}][sbb{bi}]overlay={bx}:{by}:enable='gte(t\\,{ta:.3f})*lt(t\\,{tb:.3f})'[sbo{bi}]")
         last = f'sbo{bi}'
     for (si, sub_filter) in enumerate(sub_filters):
         out_lbl = f'''vsub{si}'''
@@ -923,7 +1041,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     else:
         af_src = f'''[0:a]volume={orig_vol}{atempo_filter},atrim=duration={tts_duration},asetpts=N/SR/TB[ao]'''
-        filter_complex = f'''{filter_complex_v};{af_src};[1:a]asetpts=N/SR/TB[vo];[vo]asplit=2[vo_sc][vo_mix];[ao][vo_sc]sidechaincompress=threshold=-35dB:ratio=20:attack=50:release=400[ao_ducked];[ao_ducked][vo_mix]amix=inputs=2:duration=longest:weights=1 3[a]'''
+        filter_complex = f'''{filter_complex_v};{af_src};[1:a]asetpts=N/SR/TB[vo];[vo]asplit=2[vo_sc][vo_mix];[ao][vo_sc]sidechaincompress=threshold=-35dB:ratio=20:attack=50:release=400[ao_ducked];[ao_ducked][vo_mix]amix=inputs=2:normalize=0:duration=longest,alimiter=limit=0.97:level=disabled,apad[a]'''
         cmd = [FFMPEG_EXE, '-y', '-ss', str(clip_start), '-t', str(clip_duration), '-i', source_video, '-i', tts_path]
         if watermark_path:
             if os.path.exists(watermark_path):
@@ -937,6 +1055,9 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         if blur_chain:
             fc_fb += ';' + blur_chain
             last_fb = blur_last
+        if vf_post:
+            fc_fb += f'; [{last_fb}]{vf_post}[vgeo_fb]'
+            last_fb = 'vgeo_fb'
         if _fx:
             fc_fb += f'; [{last_fb}]{_fx}[vfx_fb]'
             last_fb = 'vfx_fb'
@@ -1143,8 +1264,12 @@ def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None):
             (x1, y1, x2, y2) = [float(v) for v in box_xy]
         except Exception:
             continue
-        (x1, x2) = sorted((max(0.0, min(1.0, x1)), max(0.0, min(1.0, x2))))
-        (y1, y2) = sorted((max(0.0, min(1.0, y1)), max(0.0, min(1.0, y2))))
+        (x1, x2) = sorted((x1, x2))
+        (y1, y2) = sorted((y1, y2))
+        # nới 0.5% mỗi phía: viền / bóng chữ thường rộng hơn chỗ người dùng kéo, và zoom sau bước làm mờ hay lộ 1 hàng mép
+        PAD = 0.005
+        (x1, x2) = (max(0.0, min(1.0, x1 - PAD)), max(0.0, min(1.0, x2 + PAD)))
+        (y1, y2) = (max(0.0, min(1.0, y1 - PAD)), max(0.0, min(1.0, y2 + PAD)))
         dw = x2 - x1
         dh = y2 - y1
         if dw < 0.01 or dh < 0.01:
@@ -1161,37 +1286,54 @@ def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None):
         a = f'''ba{idx}'''
         c = f'''bc{idx}'''
         nxt = f'''bm{idx}'''
-        cw = f'''trunc(iw*{dw:.4f}/2)*2'''
-        ch = f'''trunc(ih*{dh:.4f}/2)*2'''
+        # mép trái/trên làm tròn XUỐNG, mép phải/dưới làm tròn LÊN (số chẵn cho yuv420) và dán lại đúng toạ độ đã cắt
+        # — trước: cắt ở toạ độ làm tròn nhưng dán ở W*x không làm tròn → khối mờ trượt 1px, lộ 1 hàng điểm ảnh chữ
         cx = f'''trunc(iw*{x1:.4f}/2)*2'''
         cy = f'''trunc(ih*{y1:.4f}/2)*2'''
+        cw = f'''min(iw\\,ceil(iw*{x2:.4f}/2)*2)-{cx}'''
+        ch = f'''min(ih\\,ceil(ih*{y2:.4f}/2)*2)-{cy}'''
+        ox = f'''trunc(W*{x1:.4f}/2)*2'''
+        oy = f'''trunc(H*{y1:.4f}/2)*2'''
         parts.append(f'''[{cur}]split[{a}][{c}]''')
         parts.append(f'''[{c}]crop={cw}:{ch}:{cx}:{cy},gblur=sigma=20:steps=3[{c}b]''')
-        parts.append(f'''[{a}][{c}b]overlay=W*{x1:.4f}:H*{y1:.4f}{enable_clause}[{nxt}]''')
+        parts.append(f'''[{a}][{c}b]overlay={ox}:{oy}{enable_clause}[{nxt}]''')
         cur = nxt
         idx += 1
     if idx == 0:
         return ('', in_label)
     return (';'.join(parts), cur)
 def _fit_subtitle(text, vid_w, vid_h, font_size_factor=1.0, max_lines=2, line_spacing=6, max_width_pct=0.82):
+    """Chữ phụ đề → (chữ đã ngắt dòng, cỡ chữ) vừa khung: thu cỡ chữ tới min_font; vẫn quá số dòng thì nới độ dài dòng và
+    thu tiếp cỡ chữ cho vừa bề ngang — KHÔNG bao giờ trả về quá max_lines dòng. Chữ IN HOA rộng ~0.7× cỡ chữ (thường 0.6×)."""
     text = ' '.join(((text or '')).split())
     if not text:
         return ('', max(24, int(vid_h // 24 * font_size_factor)))
+    max_lines = max(1, int(max_lines or 2))
     max_block_h = vid_h * 0.28
     base_font = max(24, int(vid_h // 26 * font_size_factor))
     min_font = max(18, int(vid_h // 42 * font_size_factor))
     safe_w = vid_w * max(0.3, min(0.95, float(max_width_pct or 0.82)))
+    letters = [c for c in text if c.isalpha()]
+    upper = len(letters) > 0 and sum(1 for c in letters if c.isupper()) / len(letters) > 0.6
+    cw = 0.7 if upper else 0.6                    # bề ngang 1 ký tự ≈ cw × cỡ chữ
     fontsize = base_font
     while True:
-        chars_per_line = max(16, int(safe_w / (fontsize * 0.6)))
+        chars_per_line = max(16, int(safe_w / (fontsize * cw)))
         wrapped = _wrap_text(text, max_len=chars_per_line)
         n_lines = wrapped.count('\n') + 1
         line_h = fontsize * 1.15 + max(0, int(line_spacing))
         if n_lines <= max_lines and n_lines * line_h <= max_block_h:
             return (wrapped, int(fontsize))
         if fontsize <= min_font:
-            return (wrapped, int(fontsize))
+            break
         fontsize -= 2
+    # tới cỡ nhỏ nhất vẫn quá số dòng → ép về max_lines dòng, thu cỡ chữ cho dòng dài nhất vừa bề ngang
+    wrapped = _wrap_lines(text, max(16, int(safe_w / (fontsize * cw))), max_lines)
+    longest = max(len(x) for x in wrapped.split('\n'))
+    fontsize = max(14, min(int(fontsize), int(safe_w / (max(1, longest) * cw))))
+    return (wrapped, int(fontsize))
+
+
 def _split_subtitle_chunks(text, max_chars_per_chunk=56, max_lines_per_chunk=2):
     text = text or ''
     if '||' in text:
@@ -1238,6 +1380,17 @@ def _auto_split_subtitle_chunks(text, max_chars_per_chunk=56, max_lines_per_chun
                 continue
         merged.append(c)
     return merged
+def _wrap_lines(text, max_len, max_lines):
+    """Ngắt dòng ~max_len ký tự nhưng KHÔNG quá max_lines dòng (nới độ dài dòng khi cần) — SRT 28 ký tự/dòng hay ra 3 dòng."""
+    n = max(1, int(max_lines or 2))
+    width = max(8, int(max_len))
+    wrapped = _wrap_text(text, max_len=width)
+    while wrapped.count('\n') + 1 > n and width < len(text):
+        width += 2
+        wrapped = _wrap_text(text, max_len=width)
+    return wrapped
+
+
 def _wrap_text(text, max_len=50):
     if len(text) <= max_len:
         return text

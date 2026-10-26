@@ -84,6 +84,13 @@ def main():
     if '--vieneu-worker' in sys.argv:
         _run_worker('--vieneu-worker', 'workers.vieneu_worker')
 
+    # chạy nền ƯU TIÊN THẤP như HandBrake / Resolve: Windows & app khác luôn được phục vụ trước → máy không đơ khi dựng.
+    # Mọi tiến trình con (ffmpeg, worker VieNeu / Whisper, yt-dlp) thừa hưởng mức ưu tiên này.
+    try:
+        from core import perf
+        perf.lower_priority()
+    except Exception:
+        pass
     port = 8765
     if '--port' in sys.argv:
         port = int(sys.argv[sys.argv.index('--port') + 1])

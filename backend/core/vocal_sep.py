@@ -94,7 +94,8 @@ def separate(media, out_dir, log=print, progress=None, should_stop=None):
     mix = mix.reshape(-1, 2).T                                 # [2, n]
     n = mix.shape[1]
     so = ort.SessionOptions()
-    so.intra_op_num_threads = max(1, min(16, (os.cpu_count() or 4) - 1))   # >16 luồng gần như không nhanh hơn, lại giành CPU với xoá chữ
+    from core import perf
+    so.intra_op_num_threads = max(1, min(16, perf.threads_for(2)))   # chạy song song Whisper / xoá chữ → nửa ngân sách CPU chung
     sess = ort.InferenceSession(mp, so, providers=['CPUExecutionProvider'])
     pad = GEN - n % GEN
     mixp = np.concatenate([np.zeros((2, TRIM), np.float32), mix, np.zeros((2, pad + TRIM), np.float32)], axis=1)

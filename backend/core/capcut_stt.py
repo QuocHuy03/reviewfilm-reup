@@ -10,7 +10,7 @@ import subprocess
 import time
 from types import SimpleNamespace
 
-from core.utils import FFMPEG_EXE, _HIDE
+from core.utils import FFMPEG_EXE, _HIDE, audio_lead_filter
 
 MODEL = 'capcut'                   # tên "model" trong danh sách Whisper model của app
 LANGS = {'auto': 'zh-CN', 'zh': 'zh-CN', 'en': 'en-US', 'ja': 'ja-JP', 'ko': 'ko-KR', 'vi': 'vi-VN'}
@@ -33,7 +33,7 @@ def _client():
 def _to_mp3(audio_path, temp_dir):
     """WAV 16kHz → MP3 mono 48kbps: file upload nhỏ ~10 lần, CapCut nhận dạng như nhau."""
     out = os.path.join(temp_dir, 'audio_capcut.mp3')
-    r = subprocess.run([FFMPEG_EXE, '-y', '-v', 'error', '-i', audio_path, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', out],
+    r = subprocess.run([FFMPEG_EXE, '-y', '-v', 'error', '-i', audio_path, '-vn', *audio_lead_filter(audio_path), '-ac', '1', '-ar', '16000', '-b:a', '48k', out],
                        capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE)
     if r.returncode != 0 or not os.path.isfile(out):
         raise CapcutSttError(f'không chuyển được audio sang mp3: {(r.stderr or "").strip()[-200:]}')

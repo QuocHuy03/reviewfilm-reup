@@ -48,7 +48,8 @@ export function ReeditButton({ job, label = "Mở lại hậu kỳ" }: { job: Jo
             </DialogDescription>
           </DialogHeader>
           <Segmented value={mode} onChange={setMode} items={[{ value: "keep", label: "Giữ giọng cũ" }, { value: "change", label: "Đổi giọng" }]} />
-          {mode === "change" && <VoiceSelect value={voice} onChange={setVoice} />}
+          {mode === "change" && <VoiceSelect value={voice} onChange={setVoice}
+            fx={{ vieneu_rate: Number(job.config.vieneu_rate ?? 0) || 0, vieneu_pitch: Number(job.config.vieneu_pitch ?? 0) || 0 }} />}
           {mode === "keep" && <p className="text-xs text-muted-foreground">Giọng: <b>{oldVoice.split(" — ")[1] ?? oldVoice}</b></p>}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>Thôi</Button>

@@ -159,6 +159,9 @@ class Job:
 
     def resolve(self, payload):
         self.draft = {}                 # đã xác nhận → bản nháp hết tác dụng
+        # hết chờ NGAY lúc xác nhận (không đợi luồng pipeline chạy tiếp mới xoá): lần lưu nháp đến muộn (rời màn hình,
+        # hẹn giờ 1s) bị từ chối thay vì tạo lại bản nháp cũ; bấm xác nhận 2 lần cũng không lọt
+        self.waiting = None
         self._reply = payload
         self._event.set()
 
@@ -353,9 +356,12 @@ class JobManager:
 
         def _run():
             holding = False
+            meter = None
             try:
                 slot.acquire(job, WorkSlot.NEW)
                 holding = True
+                from core import perf
+                meter = perf.Meter().start()     # đo CPU máy + thời gian job → ghi log cuối job (chẩn đoán chậm / nặng máy)
                 job.status = 'running'
                 job.stage = 'Bắt đầu'
                 job.started = time.time()
@@ -378,6 +384,11 @@ class JobManager:
                 job.log(f'[LỖI] {job.error}', 'err')
                 job.log(traceback.format_exc(), 'err')
             finally:
+                if meter is not None:
+                    try:
+                        job.log('   ' + meter.summary() + ' (kể cả lúc chờ bạn duyệt)', 'info')
+                    except Exception:
+                        pass
                 if holding:
                     slot.release(job)
                 job.finished = time.time()

@@ -178,7 +178,7 @@ export function Monitor({ videoPath, attachVideo, subtitle, time, total, label, 
           <div className={cn("pointer-events-none absolute inset-x-0 flex justify-center px-[9%]", subCenterPct != null && "-translate-y-1/2")}
             style={subCenterPct != null ? { top: `${subCenterPct}%` } : { bottom: `${subMarginPct}%` }}>
             {/* cỡ chữ = 1/26 chiều cao khung, rộng tối đa 82% — giống lúc dựng */}
-            <span className="line-clamp-2 rounded bg-black/55 px-[0.6em] py-[0.15em] text-center leading-snug font-semibold break-words text-white [text-shadow:0_1px_2px_#000]"
+            <span className="rounded bg-black/55 px-[0.6em] py-[0.15em] text-center leading-snug font-semibold break-words text-white [text-shadow:0_1px_2px_#000]"
               style={{ fontSize: "max(10px, 3.85cqh)" }}>{subtitle}</span>
           </div>
         )}
@@ -189,21 +189,50 @@ export function Monitor({ videoPath, attachVideo, subtitle, time, total, label, 
   )
 }
 
-/**
- * Đoạn phụ đề đang hiện tại `offset` giây trong cảnh dài `dur` giây — chia lời thành các đoạn ≤ maxChars
- * (ưu tiên ngắt ở dấu câu) rồi rải đều theo thời gian, giống cách video_editor ghép phụ đề.
- */
-export function subtitleChunk(text: string, offset: number, dur: number, maxChars = 80) {
-  const words = (text || "").replace(/\s+/g, " ").trim().split(" ").filter(Boolean)
-  if (!words.length) return ""
-  const chunks: string[] = []
-  let cur = ""
-  for (const w of words) {
-    const next = cur ? `${cur} ${w}` : w
-    if (next.length > maxChars && cur) { chunks.push(cur); cur = w } else cur = next
-    if (/[.!?…;]$/.test(w) && cur.length > maxChars * 0.45) { chunks.push(cur); cur = "" }
+/** Chia lời thành các đoạn phụ đề — GIỐNG HỆT backend video_editor._split_subtitle_chunks / _auto_split_subtitle_chunks:
+ *  đoạn ≤ maxChars ký tự, ưu tiên ngắt sau dấu câu (.!?,;) ở 60% cuối cửa sổ, không thì ở dấu cách; đoạn < 20 ký tự gộp
+ *  vào đoạn trước nếu vừa; "||" = ngắt tay. */
+export function splitSubtitleChunks(text: string, maxChars = 56): string[] {
+  const parts = (text || "").includes("||") ? text.split("||") : [text || ""]
+  const out: string[] = []
+  const max = Math.max(18, Math.floor(maxChars || 56))
+  for (const part of parts) {
+    let rest = part.replace(/\s+/g, " ").trim()
+    if (!rest) continue
+    if (rest.length <= max) { out.push(rest); continue }
+    const chunks: string[] = []
+    while (rest) {
+      if (rest.length <= max) { chunks.push(rest); break }
+      const win = rest.slice(0, max + 1)
+      let cut = -1
+      for (let k = win.length - 1; k > Math.floor(win.length * 0.4); k--) if (".!?,;".includes(win[k])) { cut = k + 1; break }
+      if (cut === -1) { const sp = win.lastIndexOf(" "); cut = sp > 0 ? sp : max }
+      chunks.push(rest.slice(0, cut).trim())
+      rest = rest.slice(cut).trim()
+    }
+    const merged: string[] = []
+    for (const c of chunks.filter(Boolean)) {
+      const last = merged[merged.length - 1]
+      if (last !== undefined && c.length < 20 && `${last} ${c}`.trim().length <= max) merged[merged.length - 1] = `${last} ${c}`.trim()
+      else merged.push(c)
+    }
+    out.push(...merged)
   }
-  if (cur) chunks.push(cur)
-  const i = Math.min(chunks.length - 1, Math.max(0, Math.floor((offset / Math.max(0.1, dur)) * chunks.length)))
-  return chunks[i]
+  return out
+}
+
+/**
+ * Đoạn phụ đề đang hiện tại `offset` giây trong khoảng có lời dài `dur` giây — chia như backend (splitSubtitleChunks) và
+ * rải thời gian THEO SỐ KÝ TỰ mỗi đoạn (backend cũng vậy), hết lời thì không hiện.
+ */
+export function subtitleChunk(text: string, offset: number, dur: number, maxChars = 56) {
+  const chunks = splitSubtitleChunks(text, maxChars)
+  if (!chunks.length || offset < 0 || offset >= dur) return ""
+  const total = chunks.reduce((n, c) => n + c.length, 0) || 1
+  let t = 0
+  for (const c of chunks) {
+    t += (dur * c.length) / total
+    if (offset < t) return c
+  }
+  return chunks[chunks.length - 1]
 }

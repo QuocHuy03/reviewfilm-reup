@@ -93,9 +93,32 @@ def create_download(req: DownloadJobRequest):
         raise HTTPException(400, 'Chưa có link hợp lệ (cần bắt đầu bằng http…).')
     out_dir = req.out_dir or os.path.join(load_settings()['output_dir'], 'Downloads')
     _check_disk(out_dir)
-    cfg = {'urls': urls, 'quality': req.quality, 'out_dir': out_dir, 'titles': req.titles, 'subs': req.subs}
+    cfg = {'urls': urls, 'quality': req.quality, 'out_dir': out_dir, 'titles': req.titles, 'subs': req.subs, 'poster': req.poster}
     title = f'Tải video · {detect_platform(urls[0])[1]} · {urls[0].split("?")[0][-40:]}' if len(urls) == 1 else f'Tải video · {len(urls)} link'
     return manager.start('download', cfg, pipelines.run_download_pipeline, title).summary()
+
+
+@router.post('/{job_id}/download-retry')
+def retry_download_failed(job_id: str):
+    """Job tải video: tải lại ĐÚNG các mục lỗi (tập phim gom theo phim: 'link#ep=3,7'), giữ cấu hình cũ. Tập đã có tự bỏ qua."""
+    try:
+        old = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if old.kind != 'download':
+        raise HTTPException(409, 'Chỉ dùng cho job tải video.')
+    failed = [it for it in old.result.get('items') or [] if it.get('error') and not it.get('path')]
+    if not failed:
+        raise HTTPException(409, 'Không có mục nào lỗi.')
+    (urls, eps) = ([], {})
+    for it in failed:
+        if it.get('drama') and it.get('ep') is not None:
+            eps.setdefault(it['drama'], []).append(int(it['ep']))
+        else:
+            urls.append(it['url'])
+    urls += [f"{b}#ep={','.join(str(n) for n in sorted(ns))}" for (b, ns) in eps.items()]
+    cfg = {**old.config, 'urls': urls}
+    return manager.start('download', cfg, pipelines.run_download_pipeline, f'Tải lại {len(failed)} mục lỗi').summary()
 
 
 @router.post('/{job_id}/resume')
@@ -124,7 +147,7 @@ def retry_job(job_id: str):
         raise HTTPException(409, 'Job đang chạy — chờ xong hoặc dừng trước khi chạy lại.')
     if old.kind not in RUNNERS:
         raise HTTPException(400, 'Loại job này không chạy lại được.')
-    return _start(old.kind, dict(old.config))
+    return _start(old.kind, {k: v for (k, v) in old.config.items() if k != 'preset_scenes'})
 
 
 @router.post('/{job_id}/reedit')
@@ -142,7 +165,7 @@ def reedit_job(job_id: str, req: ReeditRequest):
     video = old.result.get('video_path') or (old.config.get('inp') if os.path.isfile(old.config.get('inp', '')) else '')
     if not video or not os.path.isfile(video):
         raise HTTPException(409, 'Không còn file video gốc (video tải từ link đã bị dọn cùng thư mục tạm) — hãy Chạy lại từ đầu.')
-    cfg = dict(old.config)
+    cfg = {k: v for (k, v) in old.config.items() if k != 'preset_scenes'}   # bản sửa sẵn chỉ dùng cho đúng job đó
     if req.voice:
         cfg['voice'] = req.voice
     cfg.update(script_edit=False, scene_preview=True, auto_post=False)   # giữ nguyên kịch bản đã duyệt, dừng ở Xem trước
@@ -292,6 +315,8 @@ class RedubRequest(BaseModel):
     dub_orig_volume: int = Field(20, ge=0, le=100)
     char_voices: dict[str, str] = Field(default_factory=dict)   # {mã nhân vật: giọng} — đổi giọng từng nhân vật
     reuse_cast: bool = True                                     # giữ phân vai lần trước (không phân tích lại)
+    vieneu_rate: int | None = Field(None, ge=-30, le=50)       # rate / pitch giọng VieNeu cho lần lồng tiếng lại (None = giữ)
+    vieneu_pitch: float | None = Field(None, ge=-50, le=50)
 
 
 class SubBoxRequest(BaseModel):
@@ -334,10 +359,13 @@ def redub_job(job_id: str, req: RedubRequest):
     vi = old.result.get('vi_srt') or ''
     if not os.path.isfile(vi):
         raise HTTPException(409, 'Không còn file phụ đề tiếng Việt của job này.')
-    cfg = dict(old.config)
+    cfg = {k: v for (k, v) in old.config.items() if k != 'preset_scenes'}   # bản sửa sẵn chỉ dùng cho đúng job đó
     cfg.update(inp=video, vi_srt_path=vi, orig_srt_path=old.result.get('original_srt') or '', dub_voice=True,
                voice=req.voice or cfg.get('voice', ''), voice_female=req.voice_female, dub_by_gender=req.dub_by_gender and bool(req.voice_female),
                dub_orig_volume=req.dub_orig_volume, script_edit=True, char_voices=req.char_voices, cast_reuse=None)
+    for k in ('vieneu_rate', 'vieneu_pitch'):
+        if getattr(req, k) is not None:
+            cfg[k] = getattr(req, k)
     if old.result.get('dub_units'):              # câu lồng tiếng theo thời gian nói thật + vai từng câu (phân tích trên SRT gốc)
         cfg['dub_plan_reuse'] = {'units': old.result['dub_units'], 'res': old.result.get('dub_cast') if req.reuse_cast else None}
     if req.reuse_cast and old.result.get('cast_labels') and old.result.get('cast'):
@@ -350,7 +378,7 @@ def redub_job(job_id: str, req: RedubRequest):
 
 
 @router.post('/{job_id}/resub')
-def resub_job(job_id: str):
+def resub_job(job_id: str, req: ConfirmRequest | None = None):
     """Dịch phụ đề đã xong → job mới mở lại bước SỬA BẢN DỊCH (dùng lại bản dịch, giữ nguyên cấu hình: lồng tiếng hay không,
     giọng, vai từng câu) rồi dựng lại video theo bản đã sửa. Không chạy lại nhận dạng / dịch. Video cũ giữ nguyên."""
     try:
@@ -367,14 +395,49 @@ def resub_job(job_id: str):
         raise HTTPException(409, 'Không còn file phụ đề tiếng Việt của job này.')
     cfg = dict(old.config)
     cfg.update(inp=video, vi_srt_path=vi, orig_srt_path=old.result.get('original_srt') or '', script_edit=True, cast_reuse=None)
+    cfg.pop('preset_scenes', None)
+    if req and req.scenes:
+        # đã sửa xong ngay trên job cũ (timeline + bản dịch) → job mới dựng lại luôn, không dừng chờ / phân tích lại
+        cfg['preset_scenes'] = req.scenes
+        if req.char_voices:
+            cfg['char_voices'] = {str(k): str(v) for (k, v) in req.char_voices.items() if v}
+        for k in ('vieneu_rate', 'vieneu_pitch'):
+            if getattr(req, k) is not None:
+                cfg[k] = getattr(req, k)
     if cfg.get('dub_voice') and old.result.get('dub_units'):
         # giữ câu lồng tiếng + vai từng câu đã duyệt lần trước (không phân tích nhân vật lại)
         cfg['dub_plan_reuse'] = {'units': old.result['dub_units'], 'res': old.result.get('dub_cast')}
     (runner, prefix) = RUNNERS['vietsub']
     name = old.title.split(' · ', 1)[-1]
     job = manager.start('vietsub', cfg, runner, f'{prefix} · {name} (sửa phụ đề)')
-    job.log(f'[SỬA PHỤ ĐỀ] Mở lại bản dịch của job {old.id} để sửa — bỏ qua nhận dạng & dịch', 'info')
+    job.log(f'[SỬA PHỤ ĐỀ] ' + (f'Dựng lại job {old.id} theo bản đã sửa' if cfg.get('preset_scenes') else f'Mở lại bản dịch của job {old.id} để sửa')
+            + ' — bỏ qua nhận dạng & dịch', 'info')
     return job.summary()
+
+
+def _timeline_video(job_id):
+    try:
+        job = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    v = job.result.get('video_path') or job.config.get('inp') or ''
+    if not (isinstance(v, str) and os.path.isfile(v)):
+        raise HTTPException(409, 'Không còn file video gốc của job này.')
+    return v
+
+
+@router.get('/{job_id}/waveform')
+def job_waveform(job_id: str):
+    """Sóng âm video gốc cho timeline chỉnh tay (đỉnh 20 ms, cache theo video)."""
+    from . import timeline_media
+    return timeline_media.waveform(_timeline_video(job_id))
+
+
+@router.get('/{job_id}/shots')
+def job_shots(job_id: str):
+    """Điểm chuyển cảnh của video gốc — vạch trên timeline, phụ đề hít vào để không vắt qua 2 cảnh."""
+    from . import timeline_media
+    return timeline_media.shots(_timeline_video(job_id))
 
 
 @router.post('/{job_id}/qa')

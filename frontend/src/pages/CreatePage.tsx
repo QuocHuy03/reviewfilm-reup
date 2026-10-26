@@ -1,12 +1,12 @@
-import { AlertTriangle, Captions, Clapperboard, FileVideo, FolderOpen, FolderOutput, Languages, Link2, ListPlus, Loader2, Mic2, Rocket, Settings2, Sparkles, Wand2 } from "lucide-react"
+import { AlertTriangle, ArrowLeft, SlidersHorizontal, Captions, Clapperboard, FileVideo, FolderOpen, FolderOutput, Languages, ListPlus, Loader2, Mic2, Rocket, Settings2, Sparkles, Wand2 } from "lucide-react"
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Field, PathInput, Section, Segmented, ToggleRow } from "@/components/common"
 import { SubtitlePreview } from "@/components/SubtitlePreview"
 import { SubtitleStyleEditor } from "@/components/SubtitleStyleEditor"
-import type { SubStyle } from "@/lib/types"
-import { VoiceSelect } from "@/components/VoiceSelect"
+import type { JobDetail, SubStyle } from "@/lib/types"
+import { VieneuFx, VoiceSelect, isVieneu } from "@/components/VoiceSelect"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -21,9 +21,10 @@ import { DEFAULT_TEXT_COVER, TextCoverOptions } from "@/components/TextCoverOpti
 import { PresetBar } from "@/components/PresetBar"
 import { FxPicker, fxSummary } from "@/components/FxPicker"
 import { cn } from "@/lib/utils"
+import { confirmAction } from "@/components/ConfirmHost"
 
 type Mode = "review" | "reup" | "vietsub"
-type Source = "file" | "url" | "batch"
+type Source = "file" | "batch"
 
 const PRESETS = [{ m: 8, label: "Ngắn ~8′" }, { m: 12, label: "Vừa ~12′" }, { m: 18, label: "Dài ~18′" }]
 // Độ dài review tự động theo độ dài phim — cùng bảng với backend (pipelines.auto_review_minutes)
@@ -50,10 +51,10 @@ export function SimpleSelect({ value, onChange, items, placeholder }: { value: s
 const DEFAULT_CFG = {
   source_lang: "Tự động", whisper_model: "base", device: "GPU (NVIDIA)", minutes: 0, film_context: "",
   scene_accurate: false, ai_translate: true, video_speed: "1.0x (mặc định)", mirror_video: false,
-  voice: "Edge TTS — Nữ Bắc (miễn phí)", multi_voice: false,
+  voice: "Edge TTS — Nữ Bắc (miễn phí)", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
-  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: true, voice_female: "Edge TTS — Nữ Bắc (miễn phí)", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
+  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
   script_edit: true, scene_preview: true, out_dir: "",
   auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080",
   watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, intro_path: "", outro_path: "",
@@ -90,7 +91,7 @@ const TABS: { value: Tab; label: string; icon: ReactNode; desc: string }[] = [
 const VIETSUB_TABS: Tab[] = ["script", "voice", "subs", "output"]
 
 const CREATE_DRAFT_KEY = "rf.create.draft.v1"
-type CreateDraft = { mode: Mode; source: Source; inp: string; cfg: Partial<typeof DEFAULT_CFG> }
+type CreateDraft = { mode: Mode; source: Source; inp: string; cfg: Partial<typeof DEFAULT_CFG>; fromJob?: { id: string; title: string } }
 function loadCreateDraft(): CreateDraft | null {
   try { const raw = localStorage.getItem(CREATE_DRAFT_KEY); return raw ? (JSON.parse(raw) as CreateDraft) : null } catch { return null }
 }
@@ -98,21 +99,56 @@ function loadCreateDraft(): CreateDraft | null {
 /** Điền sẵn video vào trang Tạo video (giữ nguyên cấu hình đang có) — dùng khi bấm "Tạo Review" ở trang Tải video. */
 export function openInCreate(path: string, mode: Mode) {
   const cur = loadCreateDraft()
-  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { cfg: {} }), mode, source: "file", inp: path })) } catch { /* bị chặn */ }
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { cfg: {} }), mode, cfg: modeCfg(mode, cur?.cfg), source: "file", inp: path, fromJob: undefined })) } catch { /* bị chặn */ }
+}
+
+/** Chuyển sang Dịch phụ đề: phụ đề Việt phải đè lên phụ đề cũ → bật sẵn che phụ đề + phụ đề nằm giữa vùng che (như bấm tab trên trang). */
+function modeCfg(mode: Mode, cfg?: Partial<typeof DEFAULT_CFG>): Partial<typeof DEFAULT_CFG> {
+  return mode === "vietsub" ? { ...(cfg ?? {}), remove_old_sub: true, sub_in_cover: true, burn_subtitles: true } : (cfg ?? {})
+}
+
+/** Studio → "Chỉnh thông số": nạp lại video + toàn bộ thông số của job vào trang Tạo video để sửa rồi chạy lại. */
+export function reopenJobInCreate(job: JobDetail) {
+  const c = job.config ?? {}
+  const cfg: Record<string, unknown> = {}
+  for (const k of Object.keys(DEFAULT_CFG)) if (k in c && c[k] !== null && c[k] !== undefined) cfg[k] = c[k]
+  const crop = Array.isArray(c.crop_box) ? (c.crop_box as number[]) : []
+  cfg.crop_on = crop.length >= 4
+  if (crop.length < 4) delete cfg.crop_box
+  if (!Array.isArray(c.cover_boxes) || !(c.cover_boxes as unknown[]).length) delete cfg.cover_boxes
+  // nguồn là link (bản cũ) → dùng file video đã tải về của job đó (đã bỏ ô URL — nhập link không dùng được)
+  const raw = String(c.inp ?? "")
+  const inp = /^https?:\/\//i.test(raw) ? String(job.result.video_path ?? "") : raw
+  const mode: Mode = job.kind === "reup" || job.kind === "vietsub" ? job.kind : "review"
+  const draft: CreateDraft = { mode, source: "file", inp, cfg: cfg as Partial<typeof DEFAULT_CFG>,
+    fromJob: { id: job.id, title: job.title } }
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify(draft)) } catch { /* bị chặn */ }
+}
+
+/** Trang Tải video → "Làm hàng loạt": đưa cả lô video vào chế độ Nhiều video (giữ chế độ & cấu hình đang có). */
+export function openBatchInCreate(paths: string[]) {
+  const cur = loadCreateDraft()
+  const draft = { ...(cur ?? { mode: "review" as Mode, cfg: {} }), source: "batch" as Source, inp: paths.join("\n"), fromJob: undefined }
+  draft.cfg = modeCfg(draft.mode, draft.cfg)
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify(draft)) } catch { /* bị chặn */ }
 }
 
 /** Mở trang Tạo video ở chế độ cho trước (Review / Dịch & Reup), giữ nguyên các cấu hình khác. */
 export function setCreateMode(mode: Mode) {
   const cur = loadCreateDraft()
-  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { source: "file", inp: "", cfg: {} }), mode })) } catch { /* bị chặn */ }
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { source: "file", inp: "", cfg: {} }), mode, cfg: modeCfg(mode, cur?.cfg) })) } catch { /* bị chặn */ }
 }
 
 export function CreatePage() {
-  const { options, settings, system, openJob, go } = useStore()
+  const { options, settings, system, openJob, go, voices } = useStore()
   const saved = useMemo(loadCreateDraft, [])
   const [mode, setMode] = useState<Mode>(saved?.mode ?? "review")
-  const [source, setSource] = useState<Source>(saved?.source ?? "file")
-  const [inp, setInp] = useState(saved?.inp ?? "")
+  // bản nháp cũ đang ở ô URL (đã bỏ) → về ô File, bỏ link
+  const oldUrl = (saved?.source as string | undefined) === "url"
+  const [source, setSource] = useState<Source>(saved?.source === "batch" ? "batch" : "file")
+  const [inp, setInp] = useState(oldUrl ? "" : saved?.inp ?? "")
+  // đang chỉnh lại thông số của 1 job từ Studio → hiện thanh báo, chạy lại thì hỏi dừng job cũ
+  const [fromJob, setFromJob] = useState(saved?.fromJob)
   const [cfg, setCfg] = useState(() => {
     const c = { ...DEFAULT_CFG, ...(saved?.cfg ?? {}) }
     // một lần khi lên bản có "Tự động theo video": bản nháp cũ (độ dài cố định) chuyển sang tự động
@@ -125,16 +161,22 @@ export function CreatePage() {
       // kiểu che mặc định: xoá sạch nét chữ (đẹp nhất) — đổi một lần cho bản nháp cũ
       // kiểu che mặc định: làm mờ cả dải phụ đề y như Review phim — đổi một lần cho bản nháp cũ
       // lồng tiếng: nam 1 giọng, nữ 1 giọng — bật chia giọng theo giới tính một lần cho bản nháp cũ
-      if (!localStorage.getItem("rf_dub_gender_on")) { c.dub_by_gender = true; if (!c.voice_female) c.voice_female = "Edge TTS — Nữ Bắc (miễn phí)"; localStorage.setItem("rf_dub_gender_on", "1") }
+      // không tự chọn giọng nam / nữ: bản nháp cũ đang để giọng nữ mặc định do app tự gán → về 1 giọng (một lần)
+      if (!localStorage.getItem("rf_single_voice")) {
+        if (c.voice_female === "Edge TTS — Nữ Bắc (miễn phí)") { c.dub_by_gender = false; c.voice_female = "" }
+        localStorage.setItem("rf_single_voice", "1")
+      }
+      // pitch VieNeu đổi từ nửa cung sang Hz → số cũ (±6) không còn đúng nghĩa, về 0 (một lần)
+      if (!localStorage.getItem("rf_pitch_hz")) { c.vieneu_pitch = 0; localStorage.setItem("rf_pitch_hz", "1") }
       if (!localStorage.getItem("rf_cover_review_blur")) { c.cover_style = "blur"; localStorage.setItem("rf_cover_review_blur", "1") }
     } catch { /* bị chặn */ }
     return c
   })
   // Tự lưu form — trang này bị dựng lại mỗi lần chuyển trang
   useEffect(() => {
-    const t = setTimeout(() => { try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ mode, source, inp, cfg })) } catch { /* bị chặn / đầy */ } }, 400)
+    const t = setTimeout(() => { try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ mode, source, inp, cfg, fromJob })) } catch { /* bị chặn / đầy */ } }, 400)
     return () => clearTimeout(t)
-  }, [mode, source, inp, cfg])
+  }, [mode, source, inp, cfg, fromJob])
   const [starting, setStarting] = useState(false)
   const [tab, setTab] = useState<Tab>("script")
   // chấm cam trên tab = đang bật tuỳ chọn khác mặc định trong tab đó (để biết mà mở xem)
@@ -147,6 +189,9 @@ export function CreatePage() {
     output: !cfg.script_edit || !cfg.scene_preview,
   }
   const set = <K extends keyof typeof cfg>(k: K, v: (typeof cfg)[K]) => setCfg((c) => ({ ...c, [k]: v }))
+  const vfx = { vieneu_rate: cfg.vieneu_rate, vieneu_pitch: cfg.vieneu_pitch }
+  const voiceId = (label: string) => voices.find((v) => v.label === label)?.id
+  const usesVieneu = isVieneu(voiceId(cfg.voice)) || (mode === "vietsub" && cfg.dub_by_gender && isVieneu(voiceId(cfg.voice_female)))
 
   useEffect(() => {
     // đã có bản nháp cấu hình của người dùng → không ghi đè bằng mặc định trong Cài đặt
@@ -213,12 +258,22 @@ export function CreatePage() {
 
   const start = async () => {
     if (source === "batch") return startBatch()
+    if (fromJob) {
+      // job cũ còn đang chạy / chờ → hỏi dừng để không chạy 2 bản cùng lúc
+      const old = await api.job(fromJob.id).catch(() => null)
+      if (old && ["running", "queued", "waiting"].includes(old.status)) {
+        const stop = await confirmAction({ title: "Dừng job cũ rồi chạy lại?", action: "Dừng job cũ & chạy lại", cancel: "Giữ cả 2",
+          desc: `Job "${fromJob.title}" vẫn đang chạy. Dừng nó để chạy bản mới với thông số vừa chỉnh — hoặc giữ cả 2 (bản mới xếp hàng sau).` })
+        if (stop) await api.cancel(fromJob.id).catch(() => {})
+      }
+    }
     setStarting(true)
     try {
       const job = await api.createVideoJob({ ...cfg, mode, inp: inp.trim(),
         cover_boxes: cfg.remove_old_sub ? cfg.cover_boxes : [], crop_box: cfg.crop_on ? cfg.crop_box : [] })
       toast.success(job.queue_pos ? `Đã xếp hàng (#${job.queue_pos}) — chạy khi job trước xong` : "Đã bắt đầu xử lý", { description: job.title })
       setInp("")                       // giữ cấu hình cho video tiếp theo, chỉ xoá nguồn vừa chạy
+      setFromJob(undefined)
       openJob(job.id)
     } catch (e) {
       toast.error("Không thể bắt đầu", { description: (e as Error).message })
@@ -234,6 +289,17 @@ export function CreatePage() {
       {/* ---------- Form ---------- */}
       <div className="min-h-0 overflow-y-auto pr-1 pb-6">
         <div className="flex flex-col gap-4">
+          {fromJob && (
+            <div className="flex items-center gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-2.5">
+              <SlidersHorizontal className="size-4 shrink-0 text-primary" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-medium">Đang chỉnh lại thông số</p>
+                <p className="truncate text-[11px] text-muted-foreground" title={fromJob.title}>Từ job: {fromJob.title} — sửa xong bấm <b>Bắt đầu</b> để chạy lại.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => openJob(fromJob.id)}><ArrowLeft /> Về Studio</Button>
+              <Button variant="ghost" size="sm" onClick={() => setFromJob(undefined)} title="Giữ thông số, coi như tạo video mới">Bỏ liên kết</Button>
+            </div>
+          )}
           <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-1.5">
             <Segmented value={mode} onChange={(m) => {
               setMode(m)
@@ -255,14 +321,13 @@ export function CreatePage() {
               : mode === "vietsub" ? "Whisper → dịch tiếng Việt → che phụ đề cũ & ghép phụ đề Việt — giữ nguyên tiếng gốc"
               : "Whisper → dịch → lồng tiếng → dựng video"}
             action={<Segmented size="sm" value={source} onChange={(v) => { setSource(v); setInp("") }} items={[
-              { value: "file", label: "File", icon: <FileVideo /> }, { value: "url", label: "URL", icon: <Link2 /> },
+              { value: "file", label: "File", icon: <FileVideo /> },
               { value: "batch", label: "Nhiều video", icon: <ListPlus /> }]} />}>
             {source === "file" && <PathInput value={inp} onChange={setInp} pick={bridge.pickVideo} placeholder="Chọn file video (.mp4, .mkv, .mov…)" />}
-            {source === "url" && <Input value={inp} onChange={(e) => setInp(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" className="font-mono text-xs placeholder:font-sans" />}
             {source === "batch" && (
               <div className="flex flex-col gap-2">
                 <Textarea value={inp} onChange={(e) => setInp(e.target.value)} rows={5} className="font-mono text-xs placeholder:font-sans"
-                  placeholder={"Mỗi dòng 1 video — đường dẫn file hoặc link YouTube / TikTok\nC:\\Phim\\tap1.mp4\nhttps://www.youtube.com/watch?v=…"} />
+                  placeholder={"Mỗi dòng 1 file video\nC:\\Phim\\tap1.mp4\nC:\\Phim\\tap2.mp4\n(video trên mạng: tải ở trang Tải video rồi bấm Làm hàng loạt)"} />
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Button variant="outline" size="sm" disabled={!bridge.available()}
                     onClick={async () => { const fs = await bridge.pickVideos(); if (fs.length) setInp((v) => [...batchItems(v), ...fs].join("\n")) }}>
@@ -270,6 +335,7 @@ export function CreatePage() {
                   </Button>
                   <span>{batchItems(inp).length} video · chạy lần lượt, tự động hoàn toàn (không dừng chờ sửa từng video)</span>
                 </div>
+                <p className="text-[11px] text-muted-foreground">Mẹo: chọn <b className="text-foreground">Mẫu kênh</b> ở góc trên để cả lô dùng chung giọng, phụ đề, logo, intro / outro của kênh.</p>
               </div>
             )}
             <div className="grid grid-cols-3 gap-3">
@@ -289,11 +355,16 @@ export function CreatePage() {
               <CropEditor src={isLocalFile ? mediaUrl(inp) : undefined} resolution={cfg.target_resolution} box={cfg.crop_box} fill={cfg.crop_fill}
                 onChange={(b) => set("crop_box", b)} onFill={(v) => set("crop_fill", v)} />
             )}
+            {mode === "vietsub" && <>
+              <ToggleRow label="Video gốc có phụ đề Trung in sẵn" checked={cfg.hardsub_source && cfg.remove_old_sub}
+                onChange={(v) => setCfg((c) => ({ ...c, hardsub_source: v, remove_old_sub: v, dub_only_subbed: v }))}
+                desc={cfg.hardsub_source && cfg.remove_old_sub ? "Đọc phụ đề trên hình làm lời gốc, xoá phụ đề cũ." : "Nghe giọng bằng Whisper, không xoá phụ đề cũ."} />
+              <ToggleRow label="Hiện phụ đề tiếng Việt trên video" checked={cfg.burn_subtitles} onChange={(v) => set("burn_subtitles", v)}
+                desc={cfg.burn_subtitles ? "Ghép chữ Việt vào video (kèm file .srt)." : "Video không có chữ — vẫn xuất file .srt riêng."} />
+            </>}
             {mode === "vietsub" && (
               <ToggleRow label="Lồng tiếng Việt" checked={cfg.dub_voice} onChange={(v) => set("dub_voice", v)}
-                desc={cfg.dub_voice
-                  ? `Đọc tiếng Việt đúng lúc từng câu thoại · giọng ${cfg.dub_by_gender && cfg.voice_female ? "nam / nữ theo nhân vật" : cfg.voice} · ${cfg.dub_separate ? "tách giọng gốc, giữ nhạc nền" : `tiếng gốc hạ còn ${cfg.dub_orig_volume}%`} — đổi ở tab Lồng tiếng.`
-                  : "Tắt: chỉ ghép phụ đề Việt, giữ nguyên tiếng gốc."} />
+                desc={cfg.dub_voice ? "Giọng & tuỳ chọn ở tab Lồng tiếng bên dưới." : "Tắt: chỉ ghép phụ đề Việt, giữ nguyên tiếng gốc."} />
             )}
             <TextCoverOptions value={cfg} onChange={(p) => setCfg((c) => ({ ...c, ...p }))}
               minutes={mode === "review" ? reviewMins || undefined : undefined} reup={mode === "reup"} />
@@ -363,39 +434,57 @@ export function CreatePage() {
             )}
 
             {tab === "voice" && mode === "vietsub" && (
-              <Section title="Lồng tiếng Việt" icon={<Mic2 />} desc="Đọc từng câu đúng lúc câu thoại gốc — giữ nguyên thời gian video, không kéo giãn hình">
-                <ToggleRow label="Lồng tiếng Việt" checked={cfg.dub_voice} onChange={(v) => set("dub_voice", v)}
-                  desc="Căn thời gian như VideoLingo: câu được mượn tối đa 1.5s khoảng lặng phía sau, dài hơn thì đọc nhanh nhẹ (tối đa 1.2×), vẫn không vừa thì AI viết gọn. Không bao giờ chồng tiếng." />
+              <Section title="Lồng tiếng Việt" icon={<Mic2 />} desc="Đọc đúng lúc từng câu thoại gốc — không kéo giãn hình, không chồng tiếng">
+                {!cfg.dub_voice && (
+                  <p className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                    Đang tắt lồng tiếng — chỉ ghép phụ đề, giữ tiếng gốc.
+                    <Button size="sm" variant="outline" className="h-7" onClick={() => set("dub_voice", true)}>Bật lồng tiếng</Button>
+                  </p>
+                )}
                 <div className={cn("flex flex-col gap-4", !cfg.dub_voice && "pointer-events-none opacity-50")}>
-                  {cfg.dub_by_gender && <p className="-mb-2 text-xs font-medium text-muted-foreground">Giọng cho nhân vật nam</p>}
-                  <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} />
-                  {cfg.dub_by_gender && (cfg.voice || "").includes("Nữ") && (
-                    <p className="-mt-2 text-[11px] text-warning">Giọng cho nhân vật nam đang là giọng nữ — khi lồng tiếng tool sẽ dùng "Edge TTS — Nam Bắc". Chọn giọng nam khác ở trên nếu muốn.</p>
-                  )}
-                  <ToggleRow label="Giọng theo nhân vật nam / nữ" checked={cfg.dub_by_gender} onChange={(v) => set("dub_by_gender", v)}
-                    desc="Phân tích SRT gốc trước (nghe giọng + AI đọc kịch bản): ai nói câu nào, nam / nữ. Ở bước duyệt kịch bản theo vai, bạn tự chọn giọng cho từng nhân vật (mặc định nam → giọng nam, nữ → giọng nữ ở đây)." />
-                  {cfg.dub_by_gender && <>
-                    <p className="-mb-2 text-xs font-medium text-muted-foreground">Giọng cho nhân vật nữ</p>
-                    <VoiceSelect value={cfg.voice_female} onChange={(v) => set("voice_female", v)} />
-                  </>}
-                  <ToggleRow label="Lấy phụ đề cứng làm lời gốc" checked={cfg.hardsub_source} onChange={(v) => set("hardsub_source", v)}
-                    desc="Video có phụ đề Trung in sẵn: đọc thẳng phụ đề trên hình (đúng chữ, đúng lúc từng câu hiện) để dịch & lồng tiếng — khớp hình hơn nhận dạng giọng. Không có phụ đề thì tự dùng Whisper." />
-                  <ToggleRow label="Chỉ lồng câu có phụ đề Trung trên hình" checked={cfg.dub_only_subbed} onChange={(v) => set("dub_only_subbed", v)}
-                    desc="AI quét phụ đề cứng của video gốc: câu nhân vật nói (có phụ đề) mới lồng tiếng, tiếng đám đông / lời nền / nhạc giữ tiếng gốc. Video không có phụ đề cứng thì lồng mọi câu thoại." />
-                  <ToggleRow label="Tách giọng gốc, giữ nhạc nền" checked={cfg.dub_separate} onChange={(v) => set("dub_separate", v)}
-                    desc="AI tách giọng nói khỏi nhạc nền & tiếng động: lúc giọng Việt đọc thì tắt hẳn giọng Trung, nhạc nền vẫn nguyên. Model ~64MB tải lần đầu, chạy thêm vài phút." />
-                  {!cfg.dub_separate && (
-                    <Field label={`Tiếng gốc khi có lời Việt: ${cfg.dub_orig_volume}%`}
-                      hint="Tự hạ nhỏ (lên xuống mượt) lúc giọng Việt đọc, giữ nguyên chỗ khác — vẫn nghe nhạc & hiệu ứng.">
-                      <Slider value={[cfg.dub_orig_volume]} min={0} max={60} step={5} onValueChange={([v]) => set("dub_orig_volume", v)} className="mt-2.5" />
-                    </Field>
-                  )}
+                  <ToggleRow label="Giọng riêng cho nhân vật nam / nữ" checked={cfg.dub_by_gender} onChange={(v) => set("dub_by_gender", v)}
+                    desc={cfg.dub_by_gender ? "Nhân vật nam đọc giọng nam, nữ đọc giọng nữ bên dưới. Ở bước duyệt vẫn đổi được giọng từng nhân vật."
+                      : "Tắt: 1 giọng cho mọi nhân vật — đúng giọng bạn chọn, không tự đổi. Ở bước duyệt vẫn đổi được giọng từng nhân vật."} />
+                  <div className={cn("grid gap-4", cfg.dub_by_gender && "xl:grid-cols-2")}>
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">{cfg.dub_by_gender ? "Giọng nhân vật nam" : "Giọng đọc"}</span>
+                      <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} />
+                    </div>
+                    {cfg.dub_by_gender && (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">Giọng nhân vật nữ</span>
+                        <VoiceSelect value={cfg.voice_female} onChange={(v) => set("voice_female", v)} fx={vfx} />
+                      </div>
+                    )}
+                  </div>
+                  {usesVieneu && <VieneuFx value={vfx} onChange={(p) => setCfg((c) => ({ ...c, ...p }))} />}
+                  <details className="group rounded-lg border border-border">
+                    <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                      Tuỳ chọn nâng cao
+                      <span className="text-[11px] font-normal">
+                        {cfg.dub_separate ? "tách giọng gốc" : `tiếng gốc ${cfg.dub_orig_volume}%`}{cfg.dub_only_subbed ? " · chỉ câu có phụ đề" : ""}
+                        <span className="ml-1.5 inline-block transition group-open:rotate-90">›</span>
+                      </span>
+                    </summary>
+                    <div className="flex flex-col gap-3 border-t border-border px-3 py-3">
+                      <ToggleRow label="Tách giọng gốc, giữ nhạc nền" checked={cfg.dub_separate} onChange={(v) => set("dub_separate", v)}
+                        desc="Lúc giọng Việt đọc thì tắt hẳn giọng Trung, nhạc nền giữ nguyên (tải model ~64MB lần đầu)." />
+                      {!cfg.dub_separate && (
+                        <Field label={`Tiếng gốc khi có lời Việt: ${cfg.dub_orig_volume}%`}>
+                          <Slider value={[cfg.dub_orig_volume]} min={0} max={60} step={5} onValueChange={([v]) => set("dub_orig_volume", v)} className="mt-2.5" />
+                        </Field>
+                      )}
+                      <ToggleRow label="Chỉ lồng câu có phụ đề Trung trên hình" checked={cfg.dub_only_subbed} onChange={(v) => set("dub_only_subbed", v)}
+                        desc="Tiếng đám đông / lời nền không có phụ đề thì giữ tiếng gốc." />
+                    </div>
+                  </details>
                 </div>
               </Section>
             )}
             {tab === "voice" && mode !== "vietsub" && (
               <Section title="Giọng đọc" icon={<Mic2 />} desc="CapCut & Edge TTS miễn phí · FPT.AI cao cấp · VieNeu offline">
-              <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} />
+              <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} />
+              {(usesVieneu || cfg.multi_voice) && <VieneuFx value={vfx} onChange={(p) => setCfg((c) => ({ ...c, ...p }))} />}
                 <div className="grid grid-cols-2 gap-3">
                 <Field label="Tốc độ video & giọng">
                   <SimpleSelect value={cfg.video_speed} onChange={(v) => set("video_speed", v)} items={options.speeds} />
@@ -428,7 +517,15 @@ export function CreatePage() {
               </div>
               {cfg.burn_subtitles && <SubtitleStyleEditor base={preset} custom={cfg.sub_custom} onChange={(c) => set("sub_custom", c)} />}
               {mode === "vietsub" ? (
-                <p className="text-[11px] text-muted-foreground">Xoá sạch phụ đề cũ & chữ / logo 4 góc: AI tìm đúng nét chữ Trung từng khung rồi lấp bằng hình xung quanh — không dải mờ, không ô nền; phụ đề Việt chữ trắng viền đen. Chữ trong cảnh giữ nguyên. (~1–1.5 phút xử lý / 1 phút video)</p>
+                <Field label="Che phụ đề cũ">
+                  <Segmented size="sm" value={cfg.cover_quality} onChange={(v) => set("cover_quality", v)}
+                    items={[{ value: "fast", label: "Nhanh (khuyên dùng)" }, { value: "clean", label: "Xoá sạch nét chữ (chậm)" }]} />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {cfg.cover_quality === "clean"
+                      ? "AI xoá từng nét chữ Trung trên từng khung hình — đẹp nhất nhưng rất chậm (~1–1.5 phút xử lý / 1 phút video)."
+                      : "Chỉ che đúng khung chữ Trung của từng câu, đúng lúc câu đó hiện — không che cả dải suốt video, không thêm lượt xử lý từng khung, nhanh hơn nhiều."}
+                  </p>
+                </Field>
               ) : (
               <Field label="Kiểu che chữ cũ / logo">
                 <Segmented size="sm" value={cfg.cover_style} onChange={(v) => set("cover_style", v)}

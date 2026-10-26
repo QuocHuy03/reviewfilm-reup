@@ -1,6 +1,9 @@
 export type JobKind = "review" | "reup" | "vietsub" | "srt" | "burn" | "download"
 export type JobStatus = "queued" | "running" | "waiting" | "done" | "error" | "cancelled"
 
+/** Dòng phụ đề của 1 câu Dịch phụ đề: [bắt đầu (s), kết thúc (s), lời gốc, bản dịch dòng đó?] */
+export type ScenePart = [number, number, string, string?]
+
 export type Scene = {
   voiceover: string
   subtitle?: string
@@ -11,6 +14,10 @@ export type Scene = {
   description?: string
   tts_path?: string
   tts_duration?: number
+  tts_text?: string             // đúng câu đã đọc lúc tạo giọng — khác lời hiện tại = sửa lời mà chưa tạo lại giọng
+  parts?: ScenePart[] | null    // Dịch phụ đề: các dòng phụ đề của câu [bắt đầu, kết thúc, lời gốc, bản dịch dòng đó?]
+  voice_start?: number          // Dịch phụ đề + lồng tiếng: khung đọc chỉnh tay trên timeline (mặc định = giờ câu)
+  voice_end?: number
   _tts_engine_used?: string
   excluded?: boolean
   [key: string]: unknown
@@ -28,6 +35,8 @@ export type JobResult = {
   items?: DownloadItem[]      // job tải video
   out_dir?: string
   cast?: CastMember[]         // lồng tiếng: nhân vật AI nhận ra + giọng đang đọc
+  /** Dịch phụ đề + lồng tiếng: câu đã lồng (giờ phụ đề, dòng gốc, khung đọc chỉnh tay) — để mở lại sửa trên timeline */
+  dub_units?: { start: number; end: number; text: string; orig?: string; parts?: [number, number, string, string?][] | null; voice_start?: number; voice_end?: number }[]
   dub_cast?: { labels: number[]; speakers: Record<string, { name?: string; gender?: string; count?: number }> }
 }
 
@@ -81,7 +90,13 @@ export type ProbeInfo = {
   /** Phim ngắn (DramaBox, ShortMax…): danh sách tập; `ep` = các tập đã chọn sẵn trong link (#ep=1-10) */
   episodes?: { num: number; title: string; locked: boolean }[]; ep?: string
 }
-export type DownloadItem = { url: string; platform: string; path?: string; size?: number; error?: string; subs?: string[] }
+export type DownloadItem = {
+  url: string; platform: string; path?: string; size?: number; error?: string; subs?: string[]
+  /** phim nhiều tập: link phim, tên phim, số tập */
+  drama?: string; series?: string; ep?: number
+  /** thư mục chứa file · ảnh poster đã lưu */
+  folder?: string; poster?: string
+}
 
 export type Preset = { name: string; mode: string; cfg: Record<string, unknown> }
 
@@ -148,6 +163,7 @@ export type Settings = {
   sub_style: string
   sub_layout: string
   sub_custom: Partial<SubStyle>
+  light_mode?: boolean
 }
 
 export type ApiKey = { name: string; label: string; set: boolean; masked: string }

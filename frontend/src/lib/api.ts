@@ -42,9 +42,12 @@ export const api = {
   addGlossary: (entries: GlossaryEntry[]) => request<{ entries: GlossaryEntry[] }>("POST", "/api/glossary", { entries }),
   detectSubBox: (body: { inp: string; target_resolution: string; crop_box: number[]; crop_fill: boolean }) =>
     request<{ box: number[] | null; found: boolean; seconds: number }>("POST", "/api/jobs/detect-sub-box", body),
-  redub: (id: string, body: { voice: string; voice_female: string; dub_by_gender: boolean; dub_orig_volume: number; char_voices?: Record<string, string> }) =>
+  redub: (id: string, body: { voice: string; voice_female: string; dub_by_gender: boolean; dub_orig_volume: number; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
     request<JobSummary>("POST", `/api/jobs/${id}/redub`, body),
-  resub: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/resub`),
+  resub: (id: string, body?: { scenes: Scene[]; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
+    request<JobSummary>("POST", `/api/jobs/${id}/resub`, body ? { confirmed: true, ...body } : undefined),
+  waveform: (id: string) => request<{ rate: number; n: number; peaks: string }>("GET", `/api/jobs/${id}/waveform`),
+  shots: (id: string) => request<{ cuts: number[] }>("GET", `/api/jobs/${id}/shots`),
   textScan: (id: string, interval: number, scenes: Scene[]) =>
     request<TextScanState>("POST", `/api/jobs/${id}/text-scan`, { interval, scenes: scenes.map((s) => ({ clip_start: s.clip_start, clip_end: s.clip_end, excluded: s.excluded, tts_duration: s.tts_duration })) }),
   textScanState: (id: string) => request<TextScanState>("GET", `/api/jobs/${id}/text-scan`),
@@ -53,15 +56,15 @@ export const api = {
   vieneuInstall: () => request<VieneuStatus>("POST", "/api/voices/vieneu/install"),
   vieneuCancel: () => request<VieneuStatus>("POST", "/api/voices/vieneu/cancel"),
   vieneuUninstall: () => request<VieneuStatus>("DELETE", "/api/voices/vieneu"),
-  testVoice: (voice: string, text?: string) =>
-    request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text }),
+  testVoice: (voice: string, text?: string, fx?: { vieneu_rate: number; vieneu_pitch: number }) =>
+    request<{ path: string; duration: number; engine: string; cached: boolean }>("POST", "/api/voices/test", { voice, text, ...fx }),
 
   jobs: () => request<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => request<JobDetail>("GET", `/api/jobs/${id}`),
   createVideoJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/video", cfg),
   createSrtJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/srt", cfg),
   createBurnJob: (cfg: Record<string, unknown>) => request<JobSummary>("POST", "/api/jobs/burn", cfg),
-  confirm: (id: string, body: { confirmed: boolean; scenes?: Scene[]; mixer?: Record<string, unknown>; char_voices?: Record<string, string> }) =>
+  confirm: (id: string, body: { confirmed: boolean; scenes?: Scene[]; mixer?: Record<string, unknown>; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
     request<{ ok: boolean }>("POST", `/api/jobs/${id}/confirm`, body),
   /** Tạo lại giọng 1 cảnh. Gửi kèm cảnh hiện tại ở client (đã có thể bị đổi thứ tự / cắt) → server không phụ thuộc số thứ tự cũ. */
   regenScene: (id: string, idx: number, text: string, scene?: Scene) =>
@@ -78,10 +81,12 @@ export const api = {
   presets: () => request<Preset[]>("GET", "/api/presets"),
   savePreset: (name: string, mode: string, cfg: Record<string, unknown>) => request<Preset[]>("PUT", "/api/presets", { name, mode, cfg }),
   deletePreset: (name: string) => request<Preset[]>("DELETE", `/api/presets/${encodeURIComponent(name)}`),
-  createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}, subs = "") =>
-    request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles, subs }),
+  createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}, subs = "", poster = true) =>
+    request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles, subs, poster }),
+  savePoster: (image: string, title: string, out_dir = "") => request<{ path: string }>("POST", "/api/download/poster", { image, title, out_dir }),
+  retryDownload: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/download-retry`),
   downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
-  thumbUrl: (url: string) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}`,
+  thumbUrl: (url: string, full = false) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}${full ? "&full=1" : ""}`,
   recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),
   reedit: (id: string, voice?: string) => request<JobSummary>("POST", `/api/jobs/${id}/reedit`, { voice }),
   retry: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/retry`),

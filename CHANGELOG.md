@@ -12,18 +12,84 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-26
+
 ### Added
+- **Dịch phụ đề — timeline chỉnh tay** ở bước Sửa bản dịch: 3 làn **Gốc** (dòng phụ đề gốc để so) · **Lồng tiếng** (khung đọc từng câu) · **Phụ đề** (từng dòng chữ Việt).
+  Kéo khối để dời, kéo mép để đổi lúc hiện / tắt (màn hình hiện đúng khung hình ở mép đang kéo); khối không đè khối kề, không ra ngoài video.
+  **Hít** (S) vào đầu phát / mép khối khác / mép dòng gốc, **Liên kết** (L) phụ đề ↔ giọng cùng câu, ← → dời 0.1s (Shift 1s), `[` `]` đặt đầu / cuối = đầu phát,
+  R về giờ gốc, Ctrl+Z / Ctrl+Y, zoom tại con trỏ, thanh tổng quan. Thanh trong khối giọng báo đọc vừa / nhanh / dài quá.
+  Giọng đọc đúng khung đã kéo, phụ đề hiện đúng giờ đã kéo khi xuất video.
+- Màn xem trước Dịch phụ đề hiện phụ đề **đúng từng dòng** như khi xuất (trước hiện cả câu).
+- Timeline phụ đề: **sóng âm** video gốc (canh lúc bắt đầu / ngừng nói), **vạch chuyển cảnh** (hít vào để phụ đề không vắt qua 2 cảnh),
+  **tách dòng** tại đầu phát (Ctrl+B) / **gộp dòng** (M), **cảnh báo tốc độ đọc** (ký tự/giây, viền vàng / đỏ) + nút **tự nới** các dòng gấp.
+  Sóng âm & điểm cảnh tính 1 lần rồi lưu cache theo video.
+- **Sửa phụ đề** ở job đã xong mở trình sửa ngay tại chỗ (không chạy lại pipeline); bấm **Dựng lại video** mới dựng. Bản đang sửa dở tự lưu — nút đổi thành "Sửa tiếp".
+
+- Tải video: nút **Poster** trên thẻ xem trước (lưu ảnh bìa bản nét nhất vào `Downloads/Poster`); công tắc **Lưu poster** khi tải.
+- Tải video: thư mục gọn kiểu Plex / Kodi — phim nhiều tập `Downloads/<Tên phim>/` (poster.jpg · Thông tin phim.txt · EP01.mp4…),
+  video lẻ `Downloads/<Nền tảng>/` (kèm `<tên>-poster.jpg`). Danh sách đã tải gom tập theo phim (poster, số tập, dung lượng, **Làm cả bộ**).
+- Tải video: **xem trước poster** (bấm ảnh bìa → phóng to bản nét, có nút Lưu poster), ô **Lưu vào** chọn thư mục ngay trên trang (nhớ lần trước),
+  nút **Tải lại N lỗi** (chỉ tải lại mục lỗi), **tìm** phim / video đã tải, **ẩn** job khỏi danh sách và **Dọn** job đã xong (file giữ nguyên).
+
+### Changed
+- Chữ trên giao diện sửa bản dịch / timeline gọn hơn; bảng phím tắt dạng danh sách.
+- Nút nhật ký ở Studio chuyển lên thanh tiêu đề (không còn nút tròn đè lên timeline).
+- Poster tự lấy bản gốc nét nhất (bỏ tham số thu nhỏ của CDN, YouTube lấy maxres).
+
+### Removed
+- Tab **Link (URL)** ở Video nguồn của Tạo video (không dùng được) — tải phim ở trang Tải video rồi bấm tạo từ đó.
+
+## [2.6.0] - 2026-10-24
+
+### Added
+- **Dịch phụ đề** có ở mọi lối vào tạo video: thẻ ở Trang chủ, nút "Dịch phụ đề" cạnh từng video đã tải (tự bật sẵn che phụ đề cũ).
+- Trang Tải video: nút **Làm hàng loạt (N)** — tải xong cả lô phim, 1 bấm đưa hết sang Tạo video → Nhiều video, chọn mẫu kênh rồi chạy tự động lần lượt.
+- Rate / pitch giọng VieNeu nhập được số trực tiếp (ô số cạnh thanh trượt, ↑ ↓ tăng giảm, Enter để áp).
+- Giọng VieNeu chỉnh được **rate (%)** và **pitch (Hz, như Edge TTS)** — app đo cao độ thật từng câu rồi dời đúng số Hz; có ở tab Lồng tiếng và bảng giọng từng nhân vật (Tạo thử áp luôn rate / pitch).
+- Ô **nhập câu thoại để nghe thử** cạnh nút "Tạo thử" ở mọi chỗ chọn giọng (Enter để đọc, nhớ câu đã gõ).
+- Nút **Chỉnh thông số** trên thanh Studio: mở lại trang Tạo video với đúng video & thông số của job để sửa rồi chạy lại (hỏi dừng job cũ nếu đang chạy).
+- Dịch phụ đề: 2 nút ngay ở phần Video nguồn — **Video gốc có phụ đề Trung** (có / không) và **Hiện phụ đề tiếng Việt trên video** (bật / tắt).
 - Sửa bản dịch chuyên nghiệp ngay trong app: thanh **Tìm & thay** cho cả bản dịch (sửa 1 tên / cụm sai ở mọi câu một lần, Enter / Shift+Enter nhảy tới câu có chữ đó).
 - **Từ điển dịch** của bạn (nút "Từ điển" ở bước sửa bản dịch): chữ gốc → AI luôn dịch đúng; cách dịch sai → tự thay sau khi dịch (cả Dịch phụ đề lẫn Dịch & Reup, cả dịch Google miễn phí). "Tìm & thay" tích "Lưu vào Từ điển" là lần sau tự sửa.
 - Nút **Sửa phụ đề** ở job Dịch phụ đề đã xong: mở lại bước sửa bản dịch (giữ nguyên cấu hình, giọng, vai từng câu) rồi dựng lại video theo bản đã sửa — không nhận dạng / dịch lại từ đầu.
 - Dịch phụ đề: phụ đề Việt hiện chồng lên video gốc theo đúng giây ở bước đang chạy và bước sửa bản dịch (sửa câu nào thấy ngay trên hình). Bản dịch hiện lên timeline ngay khi dịch xong — không phải chờ tới cuối job.
 
 ### Changed
+- **Chạy nhẹ máy như app dựng video chuyên nghiệp:** mọi việc nặng (ffmpeg, Whisper, VieNeu, tách giọng, xoá chữ) chạy ưu tiên thấp và chia chung một ngân sách CPU theo số lõi (chừa lõi cho hệ thống) — trong lúc dựng, máy vẫn mượt như lúc rảnh (đo: độ trễ app khác 7ms thay vì 33ms, tệ nhất 12ms thay vì 192ms), tổng CPU ít hơn ~37%, thời gian dựng gần như không đổi.
+- Cài đặt → **Chế độ nhẹ máy**: dùng khoảng nửa CPU, dựng 1 cảnh / lượt — khi cần dùng máy nặng song song.
+- "Phân tích chuyên sâu" dò cắt cảnh nhanh hơn ~4× (ffmpeg giải mã đa luồng + thu nhỏ hình), cùng các điểm cắt.
+- Cuối mỗi job ghi [HIỆU NĂNG]: thời gian, CPU máy trung bình / đỉnh — dễ biết job nào nặng.
+- Dịch phụ đề: che phụ đề cũ mặc định **Nhanh** — che đúng khung chữ Trung từng câu, CHỈ lúc câu đó hiện, ngay trong lượt dựng (không còn lượt xoá chữ từng khung hình, không che cả dải suốt đoạn dài). "Xoá sạch nét chữ" (đẹp, chậm) vẫn chọn được ở tab Phụ đề.
+- Che phụ đề cũ gom còn tối đa 4 vùng (trước tới 40 vùng, mỗi vùng thêm 1 lớp xử lý trên mọi khung hình) → dựng video nhanh hơn nhiều.
+- Nghe thử giọng chuyên nghiệp hơn: cả app chỉ 1 tiếng phát — bấm nghe giọng khác thì giọng đang phát tự tắt; nút đang phát đổi thành **Dừng**; rời trang tự tắt tiếng.
+- Lồng tiếng theo phụ đề cứng: các dòng liền nhau của cùng người nói được đọc liền 1 câu (tự nhiên, chia nhau thời gian) — phụ đề vẫn hiện đúng từng dòng.
+- Câu khó vừa khung được đọc nhanh tới 1.3× (trước 1.2×) → ít phải nhờ AI rút gọn câu hơn.
+- Tab Lồng tiếng gọn hơn: giọng nam / nữ đặt cạnh nhau, mô tả ngắn, tuỳ chọn ít dùng gom vào "Tuỳ chọn nâng cao".
 - Chọn giọng nào đọc đúng giọng đó: không còn tự đổi sang Edge / Google / VieNeu khi giọng đã chọn lỗi (CapCut, VieNeu, FPT.AI, lồng tiếng theo vai). Câu lỗi được đọc lại bằng chính giọng đó; vẫn lỗi thì báo rõ câu nào. Bỏ tuỳ chọn "Giữ đúng giọng đã chọn" (giờ luôn bật).
 
 - Dịch phụ đề: ô làm mờ chỗ phụ đề cũ / logo góc có mép mềm (mờ dần ra ngoài, vùng mờ nới rộng hơn vùng xoá chữ) — hết lộ ô chữ nhật cạnh sắc trên nền sáng.
 
 ### Fixed
+- **Dịch & Reup bám miệng nhân vật:** hình luôn chạy tốc độ thật (trước tua nhanh tới 2.5× / chậm), lời dài thì mượn khoảng lặng tới câu sau → giọng nhanh nhẹ ≤1.35× → hình chậm nhẹ ≤1.25×; không gộp thoại thành khối 12s; không nhét câu "hook" vào câu thoại đầu; dịch AI có giới hạn số từ mỗi câu; câu quá dài AI tự rút gọn.
+- Phụ đề SRT xuất kèm khớp video (đo độ dài clip thật, tính cả intro & tốc độ video); xem trước Hậu kỳ khớp video xuất (cùng cách chia đoạn phụ đề, cùng tốc độ hình / giọng).
+- Review: hình không lấn sang cảnh sau (hết lặp hình); Vision AI chỉ xem phần hình sẽ chiếu; AI thiếu nhãn [Cảnh N] không còn chia đều lời (lệch hình); mô tả tự sinh ("Phan 3 trong 60") không bao giờ bị đọc thành lời.
+- Mọi giọng đọc được cắt lặng đầu / cuối và cân âm lượng (≈ -17 LUFS) — lời vào đúng lúc, câu đọc lại không to nhỏ lệch nhau.
+- Đọc số đúng: 2024 → "hai nghìn không trăm hai mươi tư", 50% → "năm mươi phần trăm", 10:30 → "mười giờ ba mươi", số điện thoại đọc từng số; phụ đề vẫn giữ chữ số.
+- Sửa lời ở Hậu kỳ mà chưa tạo lại giọng → báo lỗi đỏ, xác nhận xuất thì tự đọc lại (không còn phụ đề mới – giọng cũ); "Tạo lại giọng" không gắn nhầm cảnh khi đổi thứ tự trong lúc chờ.
+- VieNeu không còn dùng nhầm file giọng cũ / treo giữ GPU; phân vai không mất lời khi ghép lỗi; Edge ghi đúng lý do lỗi từng câu.
+- Phụ đề không quá số dòng đã chọn; không hiện 2 đoạn cùng lúc ở khung ranh giới; SRT không còn mốc 00:00:60,000.
+- Tự sửa / QA tìm đúng cảnh theo mốc thật; hoàn tác khôi phục đủ video + .srt / .ass / .vi.srt; QA báo cảnh bị bỏ khỏi video; QA đọc đúng fps.
+- File TS/HLS tiếng bắt đầu muộn hơn hình: mốc câu nhận dạng không còn sớm hơn hình; Whisper dùng câu gợi ý đúng ngôn ngữ nguồn.
+- Tải video: không treo khi yt-dlp báo nhiều lỗi; tải trực tiếp giữ đúng đuôi file, 2 lượt cùng tên không ghi đè nhau. Lưu nháp đến muộn sau khi xác nhận không tạo lại bản nháp cũ.
+- Dịch phụ đề bằng Google (chưa đăng nhập AI): dịch đúng TỪNG DÒNG phụ đề gốc — câu Việt hiện đúng lúc câu Trung, không còn cắt ngang câu / lệch 1–2s; nhanh hơn ~10 lần.
+- Logo góc bị sót khi bước quét gộp logo với chữ khác gần đó: tự tìm đúng phần đứng yên (logo thật) rồi xoá.
+- Vùng che phụ đề cũ siết sát hàng chữ thật (đo trên video) — không còn vệt mờ lan lên người nhân vật.
+- "Lồng tiếng lại": không còn lấy giọng app từng tự gán ở lần trước; 1 giọng thì mọi nhân vật đúng giọng đó; rate / pitch giữ đúng như lúc setup (nghe thử & lồng tiếng đều áp).
+- Chọn 1 giọng thì mọi nhân vật đọc đúng giọng đó — không còn tự đổi nhân vật nam sang "Edge Nam Bắc" / nhân vật nữ sang "Edge Nữ Bắc". Chỉ chia giọng khi bật "Giọng riêng cho nhân vật nam / nữ" và chọn 2 giọng khác nhau.
+- Lời lồng tiếng khác phụ đề: câu AI rút gọn lúc tạo giọng giờ cập nhật luôn phụ đề — chữ trên hình khớp đúng lời đọc.
+- Giọng lồng tiếng bị mất âm cuối chữ khi tua nhanh / đổi cao độ (bộ co giãn nuốt phần cuối câu): đệm đuôi trước khi co giãn, giọng giữ trọn chữ và sạch, không rè.
+- Giọng VieNeu chỉnh rate cao cộng dồn với tốc độ tua lồng tiếng gây nuốt chữ: tổng tốc độ giới hạn 1.35×.
 - Bước sửa bản dịch / kịch bản giật lag với video dài (vài trăm câu): lúc chờ sửa, backend gửi lại toàn bộ danh sách câu mỗi 0.4 giây (đồng hồ job đổi → coi như "có thay đổi"), giờ chỉ gửi khi câu thật sự đổi. Gõ 1 câu / phát video không còn vẽ lại cả danh sách và cả nghìn khối trên timeline — chỉ dòng vừa sửa và đầu phát.
 - Edge TTS báo "No audio was received" / quá thời gian hàng loạt câu khi mạng chậm: chờ kết nối 40s (trước 10s).
 - Dựng video kẹt mãi ở 65% (Dịch phụ đề có nhiều vùng che phụ đề cũ / logo, Review có nhiều vùng chữ tự che): mỗi vùng 1 cặp split → overlay nối tiếp làm thời gian dựng tăng gấp đôi theo từng vùng (22 vùng đã không xong). Giờ tách luồng 1 lần cho mọi vùng, làm mờ chỉ lúc vùng cần che — 40 vùng dựng 10s video trong ~25s.
@@ -230,7 +296,9 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.7...v2.5.0
 [2.4.7]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.6...v2.4.7
 [2.4.6]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.5...v2.4.6

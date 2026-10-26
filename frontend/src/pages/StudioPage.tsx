@@ -1,4 +1,4 @@
-import { Clapperboard, Film, FolderOpen, Loader2, Maximize2, Minimize2, ScrollText, Square, X } from "lucide-react"
+import { Clapperboard, Film, FolderOpen, Loader2, Maximize2, Minimize2, ScrollText, SlidersHorizontal, Square } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
@@ -14,6 +14,7 @@ import { fmtRelative } from "@/lib/format"
 import type { JobSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/components/ConfirmHost"
+import { reopenJobInCreate } from "@/pages/CreatePage"
 
 export function StudioPage() {
   const { activeJobId, openJob, go } = useStore()
@@ -97,6 +98,12 @@ function JobView({ jobId }: { jobId: string }) {
         ),
         trail: (
           <div className="flex items-center gap-0.5">
+            {(job.kind === "review" || job.kind === "reup" || job.kind === "vietsub") && (
+              <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs" title="Mở lại trang Tạo video với video & thông số của job này — sửa rồi chạy lại"
+                onClick={() => { reopenJobInCreate(job); setFullscreen(false); go("create") }}>
+                <SlidersHorizontal /> Chỉnh thông số
+              </Button>
+            )}
             {(running || job.status === "waiting") && (
               <Button variant="ghost" size="icon-sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive" title="Dừng job"
                 onClick={async () => {
@@ -106,6 +113,11 @@ function JobView({ jobId }: { jobId: string }) {
                 }}><Square /></Button>
             )}
             {outPath && <Button variant="ghost" size="icon-sm" title="Mở thư mục kết quả" onClick={() => bridge.reveal(outPath)}><FolderOpen /></Button>}
+            <Button variant="ghost" size="icon-sm" title={logOpen ? "Đóng nhật ký" : "Nhật ký"} onClick={() => setLogOpen(!logOpen)}
+              className={cn("relative", logOpen && "bg-accent")}>
+              <ScrollText />
+              {logs.length > 0 && job.status === "error" && <span className="absolute top-1 right-1 size-1.5 animate-pulse rounded-full bg-destructive" />}
+            </Button>
             <Button variant="ghost" size="icon-sm" title={fullscreen ? "Thoát toàn màn hình (Esc)" : "Toàn màn hình (F)"} onClick={() => setFullscreen(!fullscreen)}>
               {fullscreen ? <Minimize2 /> : <Maximize2 />}
             </Button>
@@ -123,23 +135,12 @@ function JobView({ jobId }: { jobId: string }) {
       </div>
       </JobHeaderContext.Provider>
 
-      {/* Nhật ký: nút tròn góc dưới phải → bảng nổi */}
+      {/* Nhật ký: nút trên thanh tiêu đề → bảng nổi góc trên phải (không che timeline) */}
       {logOpen && (
-        <div className="fixed right-6 bottom-20 z-40 flex h-[min(60vh,560px)] w-[min(560px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl animate-in fade-in slide-in-from-bottom-2">
+        <div className="fixed top-16 right-6 z-40 flex h-[min(60vh,560px)] w-[min(560px,calc(100vw-48px))] flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl animate-in fade-in slide-in-from-bottom-2">
           <LogConsole logs={logs} className="min-h-0 flex-1 rounded-none border-0" />
         </div>
       )}
-      <button onClick={() => setLogOpen(!logOpen)} title={logOpen ? "Đóng nhật ký" : "Mở nhật ký"}
-        className={cn("fixed right-6 bottom-6 z-40 flex size-12 items-center justify-center rounded-full shadow-lg transition hover:scale-105 [&_svg]:size-5",
-          logOpen ? "bg-foreground text-background" : "bg-primary text-primary-foreground")}>
-        {logOpen ? <X /> : <ScrollText />}
-        {!logOpen && logs.length > 0 && (
-          <span className={cn("tabular absolute -top-1 -right-1 min-w-5 rounded-full px-1 text-[10px] leading-5 font-semibold text-white",
-            job.status === "error" ? "bg-destructive animate-pulse" : "bg-foreground/80")}>
-            {logs.length > 999 ? "999+" : logs.length}
-          </span>
-        )}
-      </button>
     </div>
   )
 }

@@ -50,7 +50,7 @@ def build_scene_plan(plot_beats, real_cuts, video_duration, target_minutes, log_
             scenes[-1]['clip_end'] = end
             continue
         desc = _describe_segment(start, end, beats)
-        scenes.append({'clip_start': start, 'clip_end': end, 'description': desc or f'''Canh {len(scenes) + 1}'''})
+        scenes.append({'clip_start': start, 'clip_end': end, 'description': desc or f'''Canh {len(scenes) + 1}''', '_placeholder': not desc})
     log_fn(f'''   [SceneV2] {len(cuts)} điểm cắt thật -> {len(scenes)} chương cảnh phủ kín toàn phim (mục tiêu {min_scenes}, trần {scene_cap}).''')
     return scenes
 def _thin_bounds(bounds, min_gap):
@@ -116,7 +116,8 @@ def analyze_scenes_with_vision(scenes_meta, video_path, openai_key, temp_dir, lo
     log_fn(f'''   [Map] Bắt đầu phân tích Vision AI riêng cho {n} chương cảnh (Map-Reduce)...''')
     for (i, scene) in enumerate(scenes_meta):
         cs = scene['clip_start']
-        ce = scene['clip_end']
+        # chỉ phần hình SẼ CHIẾU (từ đầu chương, dài ≈ lời đọc) — xem script_writer: '_shown_span'
+        ce = min(scene['clip_end'], cs + float(scene.get('_shown_span') or (scene['clip_end'] - cs)))
         dur = max(0.1, ce - cs)
         n_frames = 2 if dur <= 20 else 3 if dur <= 45 else 4
         frames = _extract_chapter_frames(video_path, frames_dir, cs, ce, n_frames, i, log_fn)

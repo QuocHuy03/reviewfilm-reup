@@ -77,6 +77,9 @@ def measure_wps(scenes):
     return round(min(5.5, max(2.5, rates[len(rates) // 2])), 2)
 
 
+_FAKE_DESC = re.compile(r'^\s*(?:ph[aầ]n\s+\d+\s+trong|ti[eế]p\s+di[eễ]n\s+c[aả]nh|c[aả]nh\s+\d+\s*$)', re.IGNORECASE)
+
+
 def _scene_rows(scenes, wps=None):
     rows = []
     for (i, s) in enumerate(scenes[:MAX_SCENES]):
@@ -88,6 +91,9 @@ def _scene_rows(scenes, wps=None):
         sub = (s.get('subtitle') or '').strip()
         if sub and sub != vo:
             row['subtitle'] = sub
+        desc = str(s.get('description') or '').strip()
+        if desc and not _FAKE_DESC.match(desc):
+            row['mo_ta_hinh'] = desc[:240]       # AI hậu kỳ thấy hình cảnh có gì → "thêm chi tiết" không phải bịa
         rows.append(row)
     return rows
 

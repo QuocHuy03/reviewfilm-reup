@@ -1,4 +1,5 @@
 import type { Scene } from "@/lib/types"
+import { reupFit } from "@/components/timeline/useTimelinePlayer"
 
 export type IssueLevel = "error" | "warn"
 export type Issue = { index: number; level: IssueLevel; code: string; message: string }
@@ -10,12 +11,10 @@ const JUNK = /:::|\[\s*Cảnh|\bid\s*=|```|\*\*|[{}<>]|^\s*#/i
 // Cùng ngưỡng với QA backend (jobs/qa.py) — preview báo gì thì video xuất ra kiểm tra y như vậy.
 const OVERLAP_S = 1.0
 const SHORT_RATIO = 0.5
-const SLOW_MAX = 1.35
-const FAST_MIN = 0.7
 const TEXT_OVERLAP = 0.2
 const TEXT_SHARED_MIN = 3
 
-/** Đoạn hình gốc cảnh thật sự chiếu: Review = từ clip_start dài bằng lời; Reup = clip_start → clip_end (kéo giãn). */
+/** Đoạn hình gốc cảnh thật sự chiếu: Review = từ clip_start dài bằng lời; Reup = clip_start → clip_end (tốc độ thật). */
 const usedSpan = (s: Scene, mode: "review" | "reup"): [number, number] =>
   mode === "reup" ? [s.clip_start, s.clip_end] : [s.clip_start, s.clip_start + (s.tts_duration || 0)]
 
@@ -36,6 +35,8 @@ export function checkScenes(scenes: Scene[], mode: "review" | "reup" = "review")
   const df = new Map<string, number>()
   grams.forEach(({ g }) => g.forEach((x) => df.set(x, (df.get(x) ?? 0) + 1)))
   const common = new Set([...df].filter(([, n]) => live.length >= 3 && n >= Math.max(3, live.length * 0.6)).map(([x]) => x))
+  const fit = mode === "reup" ? reupFit(scenes) : null
+  const norm = (t: string) => (t || "").replace(/\s+/g, " ").trim()
 
   live.forEach(({ s, i }, k) => {
     const text = (s.voiceover || "").trim()
@@ -46,13 +47,17 @@ export function checkScenes(scenes: Scene[], mode: "review" | "reup" = "review")
     if (!s.tts_path) out.push({ index: i, level: "error", code: "no-voice", message: "Chưa có giọng đọc — bấm “Tạo lại giọng”" })
     if (JUNK.test(text)) out.push({ index: i, level: "error", code: "junk", message: "Lời đọc còn ký hiệu / mã / dấu cảnh — sẽ bị đọc thành tiếng" })
     if (tts > 0 && tts < 0.8 && text) out.push({ index: i, level: "warn", code: "tiny", message: "Lời đọc quá ngắn (<0.8s)" })
+    if (s.tts_path && typeof s.tts_text === "string" && norm(s.tts_text) !== norm(text))
+      out.push({ index: i, level: "error", code: "stale-voice", message: "Đã sửa lời nhưng giọng vẫn đọc câu cũ — bấm “Tạo lại giọng” (xác nhận xuất sẽ tự đọc lại)" })
 
     // Lời vừa hình
     if (clip > 0.1 && tts > 0.1) {
       if (mode === "reup") {
-        const r = tts / clip
-        if (r > SLOW_MAX) out.push({ index: i, level: "warn", code: "long", message: `Hình bị kéo chậm ${r.toFixed(1)}× — rút gọn lời hoặc nới đoạn hình` })
-        else if (r < FAST_MIN) out.push({ index: i, level: "warn", code: "short", message: `Hình bị tua nhanh ${(1 / r).toFixed(1)}× — thêm lời hoặc cắt bớt hình` })
+        // giống video_editor.reup_fit: hình tốc độ thật, lời dài thì mượn khoảng lặng → giọng nhanh → hình chậm
+        const f = fit?.get(i)
+        if (f && f.pts > 1) out.push({ index: i, level: "warn", code: "long", message: `Lời quá dài so với khoảng tới câu sau — giọng nhanh ${f.voiceRate.toFixed(2)}× và hình chậm ${f.pts.toFixed(2)}×, nên rút gọn lời` })
+        else if (f && f.voiceRate > 1.2) out.push({ index: i, level: "warn", code: "long", message: `Lời dài — giọng phải đọc nhanh ${f.voiceRate.toFixed(2)}×, nên rút gọn lời` })
+        else if (clip > 3 && tts < clip * 0.35) out.push({ index: i, level: "warn", code: "short", message: `Lời ${tts.toFixed(1)}s / câu gốc ${clip.toFixed(1)}s — lặng ${(clip - tts).toFixed(1)}s` })
       } else {
         const later = starts.filter((x) => x > s.clip_start + 0.05)
         const nxt = later.length ? Math.min(...later) : null
@@ -105,8 +110,10 @@ export function issueLevels(issues: Issue[]): Record<number, IssueLevel> {
  * - Lời dài hơn hình quá nhiều → nới đuôi (dài ≈ lời / 1.2), không vượt quá cuối video.
  * Trả về kịch bản mới + danh sách cảnh đã chỉnh.
  */
-export function fixDurations(scenes: Scene[], videoDuration = Infinity): { scenes: Scene[]; changed: number[] } {
+export function fixDurations(scenes: Scene[], videoDuration = Infinity, mode: "review" | "reup" = "review"): { scenes: Scene[]; changed: number[] } {
   const changed: number[] = []
+  // Reup: mốc câu là mốc câu thoại GỐC — không căn hình theo lời (bước dựng tự mượn khoảng lặng / tăng tốc giọng)
+  if (mode === "reup") return { scenes, changed }
   const starts = scenes.filter((s) => !s.excluded).map((s) => s.clip_start)
   const out = scenes.map((s, i) => {
     if (s.excluded || !s.tts_duration) return s

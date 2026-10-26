@@ -3,7 +3,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { ToggleRow } from "@/components/common"
-import { VoiceSelect } from "@/components/VoiceSelect"
+import { VieneuFx, VoiceSelect, isVieneu } from "@/components/VoiceSelect"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Slider } from "@/components/ui/slider"
@@ -12,7 +12,7 @@ import type { JobDetail } from "@/lib/types"
 
 /** Dịch phụ đề đã xong → lồng tiếng Việt từ bản dịch có sẵn (không chạy lại Whisper / dịch). */
 export function RedubButton({ job }: { job: JobDetail }) {
-  const { openJob } = useStore()
+  const { openJob, voices } = useStore()
   const [open, setOpen] = useState(false)
   const [voice, setVoice] = useState(String(job.config.voice ?? ""))
   const [byGender, setByGender] = useState(!!job.config.dub_by_gender)
@@ -21,19 +21,21 @@ export function RedubButton({ job }: { job: JobDetail }) {
   const [busy, setBusy] = useState(false)
   const dubbed = !!job.config.dub_voice
   const cast = job.result.cast ?? []
-  // giọng từng nhân vật (lần lồng tiếng trước) — đổi được từng người
-  const [cv, setCv] = useState<Record<string, string>>(() => Object.fromEntries(cast.map((c) => [String(c.id), c.voice])))
-  // đổi giọng chính nam / nữ → nhân vật đang dùng giọng chính cũ đổi theo
-  const changeBase = (old: string, next: string, set: (v: string) => void) => {
-    set(next)
-    setCv((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v === old ? next : v])))
-  }
+  // giọng riêng từng nhân vật: CHỈ những nhân vật người dùng đã tự chọn (không lấy giọng app từng tự gán ở lần trước)
+  const [cv, setCv] = useState<Record<string, string>>(() => ({ ...((job.config.char_voices as Record<string, string>) ?? {}) }))
+  const twoVoices = byGender && !!female && female !== voice
+  const voiceOf = (c: { id: number; gender: string }) => cv[String(c.id)] || (twoVoices && c.gender === "female" ? female : voice)
+  const changeBase = (_old: string, next: string, set: (v: string) => void) => set(next)
+  // rate / pitch giọng VieNeu — lấy đúng như lúc setup job
+  const [fx, setFx] = useState({ vieneu_rate: Number(job.config.vieneu_rate ?? 0) || 0, vieneu_pitch: Number(job.config.vieneu_pitch ?? 0) || 0 })
+  const vn = (label: string) => isVieneu(voices.find((v) => v.label === label)?.id)
+  const anyVieneu = vn(voice) || (twoVoices && vn(female)) || cast.some((c) => vn(voiceOf(c)))
 
   const go = async () => {
     setBusy(true)
     try {
       const n = await api.redub(job.id, { voice, voice_female: byGender ? female : "", dub_by_gender: byGender && !!female, dub_orig_volume: level,
-        char_voices: byGender ? cv : {} })
+        char_voices: cv, ...fx })
       toast.success("Đang phân tích nhân vật — app sẽ dừng ở bước Duyệt kịch bản theo vai để bạn kiểm tra vai & giọng trước khi lồng tiếng", { description: n.title })
       setOpen(false)
       openJob(n.id)
@@ -57,21 +59,22 @@ export function RedubButton({ job }: { job: JobDetail }) {
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4">
-            <ToggleRow label="Giọng theo nhân vật nam / nữ" checked={byGender} onChange={setByGender}
-              desc="Nam 1 giọng, nữ 1 giọng — đổi riêng từng nhân vật được ở bước duyệt." />
+            <ToggleRow label="Giọng riêng cho nhân vật nam / nữ" checked={byGender} onChange={setByGender}
+              desc={byGender ? "Nhân vật nam đọc giọng nam, nữ đọc giọng nữ — đổi riêng từng nhân vật bên dưới." : "Tắt: 1 giọng cho mọi nhân vật, đúng giọng bạn chọn — đổi riêng từng nhân vật bên dưới."} />
             <div className={byGender ? "grid gap-4 sm:grid-cols-2" : "flex flex-col gap-2"}>
               <div className="flex flex-col gap-1.5">
                 <p className="text-xs font-medium text-muted-foreground">{byGender ? "Giọng cho nhân vật nam" : "Giọng đọc"}</p>
-                <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} />
+                <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} fx={fx} />
               </div>
               {byGender && (
                 <div className="flex flex-col gap-1.5">
                   <p className="text-xs font-medium text-muted-foreground">Giọng cho nhân vật nữ</p>
-                  <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} />
+                  <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} fx={fx} />
                 </div>
               )}
             </div>
-            {byGender && cast.length > 0 && (
+            {anyVieneu && <VieneuFx value={fx} onChange={(p) => setFx((f) => ({ ...f, ...p }))} />}
+            {cast.length > 0 && (
               <div className="flex flex-col gap-2 rounded-lg border p-3">
                 <div>
                   <p className="text-sm font-medium">Giọng từng nhân vật</p>
@@ -88,7 +91,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
                       <span className="text-xs text-muted-foreground">{c.count} câu</span>
                     </div>
                     {c.samples[0] && <p className="truncate text-xs italic text-muted-foreground" title={c.samples.join("\n")}>“{c.samples[0]}”</p>}
-                    <VoiceSelect value={cv[String(c.id)] ?? c.voice} onChange={(v) => setCv((m) => ({ ...m, [String(c.id)]: v }))} />
+                    <VoiceSelect value={voiceOf(c)} onChange={(v) => setCv((m) => ({ ...m, [String(c.id)]: v }))} fx={fx} />
                   </div>
                 ))}
                 </div>
@@ -101,7 +104,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>Thôi</Button>
-            <Button onClick={go} disabled={busy || !voice || (byGender && !female)}>{busy ? <Loader2 className="animate-spin" /> : <Mic2 />} Phân tích & duyệt vai</Button>
+            <Button onClick={go} disabled={busy || !voice}>{busy ? <Loader2 className="animate-spin" /> : <Mic2 />} Phân tích & duyệt vai</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

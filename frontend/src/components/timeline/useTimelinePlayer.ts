@@ -6,22 +6,54 @@ import type { Scene } from "@/lib/types"
 export type Clip = {
   index: number      // vị trí trong mảng scenes
   start: number      // giây trên timeline xuất ra
-  dur: number        // = thời lượng lời đọc (cảnh trong video xuất dài đúng bằng lời)
+  dur: number        // độ dài cảnh trong video xuất (Review: = lời đọc; Reup: xem reupFit)
   scene: Scene
+  pts?: number       // Reup: hình chậm lại bao nhiêu lần (1 = tốc độ thật)
+  voiceRate?: number // Reup: giọng đọc nhanh bao nhiêu lần (1 = tốc độ gốc)
 }
 
 export type TrackKey = "video" | "voice" | "music"
 
 const MIN_CLIP = 0.3
 
-/** Bố cục giống video xuất ra: các cảnh không bị bỏ nối tiếp nhau, mỗi cảnh dài bằng lời đọc. */
-export function layoutClips(scenes: Scene[]): { clips: Clip[]; total: number } {
+/** Reup — GIỐNG HỆT backend (video_editor.build_review_video): hình chạy tốc độ thật; lời dài hơn câu gốc thì mượn khoảng
+ *  lặng tới câu sau → giọng nhanh tối đa 1.35× → hình chậm tối đa 1.25× → giữ khung cuối. Không bao giờ tua nhanh hình. */
+export const REUP_MAX_VOICE = 1.35
+export const REUP_MAX_SLOW = 1.25
+export function reupFit(scenes: Scene[]): Map<number, { out: number; pts: number; voiceRate: number }> {
+  const order = scenes.map((s, i) => ({ s, i })).filter((x) => !x.s.excluded).sort((a, b) => a.s.clip_start - b.s.clip_start)
+  const fit = new Map<number, { out: number; pts: number; voiceRate: number }>()
+  order.forEach(({ s, i }, k) => {
+    const src = Math.max(0.05, s.clip_end - s.clip_start)
+    const tts = s.tts_duration && s.tts_duration > 0.05 ? s.tts_duration : src
+    const next = order[k + 1]?.s.clip_start ?? s.clip_start + Math.max(src, tts)
+    const room = Math.max(src, next - s.clip_start)
+    if (tts <= src) fit.set(i, { out: src, pts: 1, voiceRate: 1 })
+    else if (tts <= room) fit.set(i, { out: tts, pts: 1, voiceRate: 1 })
+    else {
+      const voiceRate = Math.min(REUP_MAX_VOICE, tts / room)
+      const voice = tts / voiceRate
+      if (voice <= room + 0.01) fit.set(i, { out: voice, pts: 1, voiceRate })
+      else {
+        const pts = Math.min(REUP_MAX_SLOW, voice / room)
+        fit.set(i, { out: Math.max(room * pts, voice), pts, voiceRate })
+      }
+    }
+  })
+  return fit
+}
+
+/** Bố cục giống video xuất ra: các cảnh không bị bỏ nối tiếp nhau. Review: mỗi cảnh dài bằng lời đọc.
+ *  Reup: dài theo reupFit (đoạn lặng giữa các câu — tiếng gốc — không hiện trên timeline sửa lời). */
+export function layoutClips(scenes: Scene[], mode: EditMode = "review"): { clips: Clip[]; total: number } {
   const clips: Clip[] = []
+  const fit = mode === "reup" ? reupFit(scenes) : null
   let t = 0
   scenes.forEach((scene, index) => {
     if (scene.excluded) return
-    const dur = Math.max(MIN_CLIP, scene.tts_duration || scene.clip_end - scene.clip_start || MIN_CLIP)
-    clips.push({ index, start: t, dur, scene })
+    const f = fit?.get(index)
+    const dur = Math.max(MIN_CLIP, f ? f.out : scene.tts_duration || scene.clip_end - scene.clip_start || MIN_CLIP)
+    clips.push({ index, start: t, dur, scene, pts: f?.pts, voiceRate: f?.voiceRate })
     t += dur
   })
   return { clips, total: t }
@@ -29,15 +61,14 @@ export function layoutClips(scenes: Scene[]): { clips: Clip[]; total: number } {
 
 export const clipAt = (clips: Clip[], t: number) => clips.find((c) => t >= c.start && t < c.start + c.dur) ?? null
 
-export type EditMode = "review" | "reup"
 
 /**
  * Tốc độ hình gốc trong cảnh — giống hệt video_editor:
  *   Review: chiếu hình gốc từ clip_start, tốc độ thường, dài đúng bằng lời (không kéo giãn).
- *   Reup:   kéo giãn đoạn clip_start → clip_end cho vừa lời (giới hạn 0.4 … 2.5×).
+ *   Reup:   tốc độ thật; chỉ chậm lại (≤ 1.25×) khi lời quá dài so với khoảng trống tới câu sau. Không tua nhanh.
  */
-export const sourceRate = (c: Clip, mode: EditMode) =>
-  mode === "review" ? 1 : Math.min(2.5, Math.max(0.4, (c.scene.clip_end - c.scene.clip_start) / c.dur))
+export const sourceRate = (c: Clip, mode: EditMode) => (mode === "review" ? 1 : 1 / (c.pts ?? 1))
+export type EditMode = "review" | "reup"
 
 type Options = { scenes: Scene[]; bgmPath: string; bgmVolume: number; originalVolume: number; mode?: EditMode }
 
@@ -50,7 +81,7 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
   // UI lấy chữ mới nhất qua scenes[clip.index].
   const layoutKey = scenes.map((s) => `${s.excluded ? 1 : 0}|${s.tts_path ?? ""}|${s.tts_duration ?? 0}|${s.clip_start}|${s.clip_end}`).join(";")
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const { clips, total } = useMemo(() => layoutClips(scenes), [layoutKey])
+  const { clips, total } = useMemo(() => layoutClips(scenes, mode), [layoutKey, mode])
   const timeRef = useRef(0)              // thời gian phát mới nhất cho callback ổn định (attachVideo)
   const [time, setTimeState] = useState(0)
   const setTime = useCallback((v: number | ((t: number) => number)) => {
@@ -69,6 +100,8 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
   const video = useRef<HTMLVideoElement | null>(null)
   const current = useRef<Clip | null>(null)
   const silentFrom = useRef(0)             // cảnh không có file giọng: chạy theo đồng hồ
+  const endedAt = useRef<number | null>(null)
+  const lastSync = useRef(0)   // lúc giọng của cảnh phát xong (cảnh còn tiếp → đếm theo đồng hồ)
   const raf = useRef(0)
   const playingRef = useRef(false)
   const clipsRef = useRef(clips)
@@ -120,11 +153,13 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
 
   const startClip = useCallback((c: Clip, offset: number) => {
     current.current = c
+    endedAt.current = null
     const a = voice.current!
     const url = c.scene.tts_path ? mediaUrl(c.scene.tts_path) : ""
     if (url) {
       if (!a.src.endsWith(encodeURIComponent(c.scene.tts_path!))) a.src = url
-      a.currentTime = offset
+      a.playbackRate = c.voiceRate ?? 1             // Reup: giọng nhanh nhẹ như video xuất (giữ cao độ)
+      a.currentTime = offset * (c.voiceRate ?? 1)
       a.play().catch(() => {})
     } else {
       a.pause()
@@ -137,18 +172,30 @@ export function useTimelinePlayer({ scenes, bgmPath, bgmVolume, originalVolume, 
     if (!playingRef.current) return
     const c = current.current
     if (c) {
-      const offset = c.scene.tts_path ? voice.current!.currentTime : (performance.now() - silentFrom.current) / 1000
-      if (offset >= c.dur - 0.02 || (c.scene.tts_path && voice.current!.ended)) {
+      // vị trí trong cảnh: theo giọng đang phát; giọng hết mà cảnh còn (Reup: lời ngắn hơn câu gốc → hình chạy tiếp, lặng)
+      // thì đếm tiếp theo đồng hồ — cảnh dài đúng như video xuất
+      let offset: number
+      const a = voice.current!
+      if (c.scene.tts_path) {
+        if (a.ended || a.error) {
+          if (endedAt.current === null) endedAt.current = performance.now()
+          offset = (Number.isFinite(a.duration) ? a.duration : 0) / (c.voiceRate ?? 1) + (performance.now() - endedAt.current) / 1000
+        } else offset = a.currentTime / (c.voiceRate ?? 1)
+      } else offset = (performance.now() - silentFrom.current) / 1000
+      if (offset >= c.dur - 0.02) {
         const next = clipsRef.current.find((x) => x.start > c.start)
         if (!next) { setTime(total); stopAll(); return }
         startClip(next, 0)
         setTime(next.start)
       } else {
         setTime(c.start + offset)
+        // giữa cảnh: chỉnh lại hình mỗi ~0.5s nếu lệch > 0.25s so với giọng (trước chỉ đồng bộ lúc bắt đầu cảnh → lệch dần)
+        const now = performance.now()
+        if (now - lastSync.current > 500) { lastSync.current = now; syncVideo(c, offset, true) }
       }
     }
     raf.current = requestAnimationFrame(tick)
-  }, [startClip, stopAll, total])
+  }, [startClip, stopAll, syncVideo, total])
 
   const play = useCallback((from?: number) => {
     let t = from ?? time

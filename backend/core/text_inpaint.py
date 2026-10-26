@@ -254,17 +254,21 @@ def clean_video(video, regions, out_path, log=print, progress=None, should_stop=
     def active_at(t, extra=0.0):
         return {i: it[2:] for (i, it) in enumerate(items) if it[0] - extra <= t <= it[1] + extra}
 
-    dec = subprocess.Popen([FFMPEG_EXE, '-v', 'error', '-i', video, '-vf', f'fps={fps:.6f}', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-'],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_HIDE)
-    enc = subprocess.Popen([FFMPEG_EXE, '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', f'{w}x{h}', '-r', f'{fps:.6f}',
-                            '-i', '-', '-i', video, '-map', '0:v', '-map', '1:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '15',
-                            '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-shortest', out_path],
-                           stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_HIDE)
+    from core.utils import _budgeted
+    from core import perf as _perf
+    with _perf.parallel(4):                      # giải mã + mã hoá chỉ cần ít luồng — phần lớn CPU cho các luồng xoá chữ
+        dec_cmd = _budgeted([FFMPEG_EXE, '-v', 'error', '-i', video, '-vf', f'fps={fps:.6f}', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-'])
+        enc_cmd = _budgeted([FFMPEG_EXE, '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', f'{w}x{h}', '-r', f'{fps:.6f}',
+                             '-i', '-', '-i', video, '-map', '0:v', '-map', '1:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '15',
+                             '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-shortest', out_path])
+    dec = subprocess.Popen(dec_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_HIDE)
+    enc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_HIDE)
     register_process(dec)
     register_process(enc)
     size = w * h * 3
     total = int(dur * fps) or 1
-    workers = max(2, min(20, (os.cpu_count() or 4) - 2))
+    from core import perf
+    workers = max(2, min(20, perf.budget()))     # ngân sách CPU chung (chế độ nhẹ máy → một nửa)
     try:                                         # máy thiếu RAM (app khác chiếm nhiều) → bớt luồng, khỏi sập app giữa chừng
         import psutil
         free_gb = psutil.virtual_memory().available / 1024 ** 3

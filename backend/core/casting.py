@@ -79,7 +79,9 @@ Chỉ liệt kê nhân vật thực sự có lời thoại.'''
             if not segs:
                 continue
             segs = [{'text': str(d.get('text') or ''), 'vai': str(d.get('vai') or 'ke').strip() or 'ke'} for d in segs if isinstance(d, dict) and str(d.get('text') or '').strip()]
-            if segs and _norm(''.join((x['text'] for x in segs))) == _norm(original):
+            # so sánh BỎ khoảng trắng: nối các đoạn bằng '' làm mất dấu cách giữa đoạn → trước gần như luôn "không khớp"
+            # và âm thầm quay về giọng kể
+            if segs and _norm(''.join((x['text'] for x in segs))).replace(' ', '') == _norm(original).replace(' ', ''):
                 if any((x['vai'] != 'ke' for x in segs)):
                     scenes[i]['segments'] = segs
                     n_cast_scenes += 1

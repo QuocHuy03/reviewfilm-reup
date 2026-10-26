@@ -70,7 +70,11 @@ export function PostEditor({ job }: { job: JobDetail }) {
   const [subVisible, setSubVisible] = useState(true)
   const { options, go } = useStore()
   const subLayout = options?.sub_layouts[String((job.config as Record<string, unknown>).sub_layout ?? "")]
-  const subChars = subLayout ? subLayout.sub_max_chars_per_chunk * Math.max(1, subLayout.sub_max_lines) : 80
+  // giống backend: mỗi đoạn phụ đề ≤ sub_max_chars_per_chunk ký tự (trước nhân thêm số dòng → đoạn dài gấp đôi video xuất)
+  const subChars = subLayout ? subLayout.sub_max_chars_per_chunk : 56
+  // nguồn chữ phụ đề y như lúc xuất (Cài đặt "Nguồn phụ đề"): theo lời đọc hay theo bản dịch gốc
+  const subFromSubtitle = String((job.config as Record<string, unknown>).sub_source ?? "").startsWith("Theo subtitle")
+  const subText = (s: Scene) => (subFromSubtitle ? s.subtitle || s.voiceover : s.voiceover || s.subtitle) || ""
   const [mixer, setMixer] = useState<Mixer>({ original_volume: 8, bgm_path: "", bgm_volume: 5, audio_ducking: true, ...(draft?.mixer as Partial<Mixer> | undefined) })
   // Che sub gốc: lấy từ cấu hình lúc tạo job, sửa ở tab "Che sub" (lưu cùng bản nháp mixer)
   const jcfg = job.config as Record<string, unknown>
@@ -155,13 +159,20 @@ export function PostEditor({ job }: { job: JobDetail }) {
   const regenerate = async (i: number, text = scenesRef.current[i].voiceover, preview = true): Promise<Scene | null> => {
     player.pause()
     setRegen(i)
+    // mã cố định của cảnh: trong lúc chờ giọng, người dùng vẫn kéo đổi thứ tự / hoàn tác / tự hậu kỳ chạy song song —
+    // ghép kết quả theo VỊ TRÍ thì giọng mới gắn nhầm cảnh khác. Ghép theo mã; cảnh không còn thì bỏ kết quả.
+    const uid = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    scenesRef.current = scenesRef.current.map((x, j) => (j === i ? { ...x, _regen_uid: uid } : x))
+    setScenes((prev) => prev.map((x, j) => (j === i ? { ...x, _regen_uid: uid } : x)))
     try {
       const updated = await api.regenScene(job.id, i, text, scenesRef.current[i])
-      const merged = (x: Scene) => ({ ...x, ...updated, voiceover: text, excluded: x.excluded, clip_start: x.clip_start, clip_end: x.clip_end })
-      scenesRef.current = scenesRef.current.map((x, j) => (j === i ? merged(x) : x))
-      setScenes((prev) => prev.map((x, j) => (j === i ? merged(x) : x)))
+      const merged = (x: Scene) => ({ ...x, ...updated, voiceover: text, excluded: x.excluded, clip_start: x.clip_start, clip_end: x.clip_end, _regen_uid: undefined })
+      const at = scenesRef.current.findIndex((x) => x._regen_uid === uid)
+      if (at < 0) { toast.info(`Cảnh #${i + 1} đã bị xoá / hoàn tác trong lúc tạo giọng — bỏ giọng vừa tạo`); return null }
+      scenesRef.current = scenesRef.current.map((x) => (x._regen_uid === uid ? merged(x) : x))
+      setScenes((prev) => prev.map((x) => (x._regen_uid === uid ? merged(x) : x)))
       if (preview) play(mediaUrl(updated.tts_path!))
-      return scenesRef.current[i]
+      return scenesRef.current[at]
     } catch (e) {
       toast.error(`Cảnh #${i + 1}: ${(e as Error).message}`)
       return null
@@ -239,7 +250,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
     setAuto({ ...run })
 
     set(0, { state: "running" })
-    const f1 = fixDurations(scenesRef.current, player.videoDuration)
+    const f1 = fixDurations(scenesRef.current, player.videoDuration, mode)
     commit(f1.scenes)
     set(0, { state: "done", detail: f1.changed.length ? `Đã chỉnh ${f1.changed.length} cảnh` : "Không cần chỉnh" })
 
@@ -284,7 +295,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
     if (voiceChanged.length) set(2, { state: ok === voiceChanged.length ? "done" : "error", detail: `${ok}/${voiceChanged.length} câu` })
 
     set(3, { state: "running" })
-    const f2 = fixDurations(scenesRef.current, player.videoDuration)
+    const f2 = fixDurations(scenesRef.current, player.videoDuration, mode)
     commit(f2.scenes)
     set(3, { state: "done", detail: f2.changed.length ? `Đã chỉnh ${f2.changed.length} cảnh` : "Đã khớp" })
 
@@ -367,7 +378,8 @@ export function PostEditor({ job }: { job: JobDetail }) {
           <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(360px,430px)]">
             <Monitor videoPath={job.result.video_path} attachVideo={player.attachVideo} time={player.time} total={player.total}
               subtitle={subVisible && cover.burn_subtitles && currentScene && current
-                ? subtitleChunk(currentScene.subtitle || currentScene.voiceover || "", player.time - current.start, current.dur, subChars)
+                ? subtitleChunk(subText(currentScene), player.time - current.start,
+                    mode === "reup" ? Math.min(current.dur, (currentScene.tts_duration || current.dur) / (current.voiceRate ?? 1)) : current.dur, subChars)
                 : ""}
               label={current ? `Cảnh ${player.clips.indexOf(current) + 1}/${player.clips.length}` : ""}
               aspect={rw && rh ? rw / rh : 16 / 9} subMarginPct={cover.sub_margin_pct}

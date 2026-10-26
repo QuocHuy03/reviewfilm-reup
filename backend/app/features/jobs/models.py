@@ -26,6 +26,8 @@ class VideoJobRequest(SubtitleOptions):
     mirror_video: bool = False
     voice: str = 'Edge TTS — Nữ Bắc (miễn phí)'
     strict_voice: bool = False
+    vieneu_rate: int = Field(0, ge=-30, le=50)                     # giọng VieNeu: tốc độ đọc ±% (giữ cao độ)
+    vieneu_pitch: float = Field(0, ge=-50, le=50)                  # giọng VieNeu: dời cao độ ± Hz (giữ tốc độ), như Edge TTS
     multi_voice: bool = False
     sub_source: str = 'Theo lời đọc AI (khớp voiceover)'
     burn_subtitles: bool = True
@@ -34,6 +36,8 @@ class VideoJobRequest(SubtitleOptions):
     sub_in_cover: bool = False                                     # phụ đề mới căn giữa vùng che phụ đề cũ
     cover_fit_text: bool = False                                   # Dịch phụ đề: khung mờ ngang vừa theo độ dài chữ từng câu
     cover_style: Literal['clean', 'erase', 'blur'] = 'erase'                # che chữ: xoá nhẹ (delogo, tự nhiên) | làm mờ
+    cover_quality: Literal['fast', 'clean'] = 'fast'               # Dịch phụ đề: 'fast' che đúng khung từng câu Trung lúc câu hiện
+                                                                   # (1 lượt dựng) | 'clean' xoá sạch nét chữ từng khung (đẹp, rất chậm)
     auto_sub_box: bool = True                                      # AI tự căn vùng che phụ đề theo chỗ phụ đề cũ thật
     dub_voice: bool = False                                        # Dịch phụ đề: lồng tiếng Việt đúng thời gian câu thoại
     dub_orig_volume: int = Field(20, ge=0, le=100)                 # % âm lượng tiếng gốc khi có lời Việt
@@ -93,6 +97,8 @@ class ConfirmRequest(BaseModel):
     scenes: Optional[list[dict[str, Any]]] = None
     mixer: Optional[dict[str, Any]] = None
     char_voices: Optional[dict[str, str]] = None   # Dịch phụ đề + lồng tiếng: giọng từng nhân vật chọn ở bước duyệt theo vai
+    vieneu_rate: Optional[int] = Field(None, ge=-30, le=50)        # rate / pitch chỉnh lại ở bước duyệt theo vai
+    vieneu_pitch: Optional[float] = Field(None, ge=-50, le=50)
 
 
 class RegenRequest(BaseModel):
@@ -106,6 +112,7 @@ class DownloadJobRequest(BaseModel):
     out_dir: str = ''
     titles: dict[str, str] = {}    # tiêu đề cho link video trực tiếp (để đặt tên file)
     subs: str = ''                 # tải xong tạo phụ đề bằng CapCut: '' = tắt, 'zh'/'en'/'ja'/'ko' = ngôn ngữ gốc (+ bản dịch Việt)
+    poster: bool = True            # lưu ảnh bìa: phim nhiều tập → <phim>/poster.jpg, video lẻ → <tên video>-poster.jpg
 
 
 class ReeditRequest(BaseModel):

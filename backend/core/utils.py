@@ -7,7 +7,8 @@ import shutil
 import subprocess
 import threading
 import time
-_HIDE = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+# ẩn cửa sổ console + ƯU TIÊN THẤP cho mọi tiến trình con (ffmpeg, worker…) — chạy nền như HandBrake, máy không đơ
+_HIDE = (subprocess.CREATE_NO_WINDOW | 0x00004000) if sys.platform == 'win32' else 0
 def _ffmpeg_base_dirs():
     dirs = []
     if getattr(sys, 'frozen', False):
@@ -61,8 +62,18 @@ def kill_all_active_processes():
                 p.kill()
             except Exception:
                 pass
+def _budgeted(cmd):
+    """ffmpeg → giới hạn luồng theo ngân sách CPU chung (core/perf.py); lệnh khác giữ nguyên."""
+    try:
+        from core import perf
+        return perf.ffmpeg_threads(list(cmd), perf.current_parallel()) if isinstance(cmd, (list, tuple)) else cmd
+    except Exception:
+        return cmd
+
+
 def run_subprocess(cmd, timeout=None, **kwargs):
     kwargs.setdefault('creationflags', _HIDE)
+    cmd = _budgeted(cmd)
     proc = None
     try:
         proc = subprocess.Popen(*(cmd,), **{k: v for (k, v) in kwargs.items() if k not in ('timeout',)})
@@ -78,6 +89,7 @@ def run_subprocess(cmd, timeout=None, **kwargs):
             unregister_process(proc)
 def run_subprocess_heartbeat(cmd, log_fn=print, label='', heartbeat_sec=8.0, timeout=None, **kwargs):
     kwargs.setdefault('creationflags', _HIDE)
+    cmd = _budgeted(cmd)
     kwargs.setdefault('stdout', subprocess.PIPE)
     kwargs.setdefault('stderr', subprocess.PIPE)
     proc = subprocess.Popen(*(cmd,), **kwargs)
@@ -131,3 +143,20 @@ def get_free_space_gb(path):
         return usage.free / 1073741824
     except Exception:
         return -1.0
+
+def audio_lead_filter(path):
+    """File TS / HLS hay có luồng TIẾNG bắt đầu muộn hơn hình. Trích âm thanh thì mất khoảng trễ đó → mọi mốc câu nhận
+    dạng giọng nói sớm hơn hình đúng bằng khoảng trễ. → ['-af', 'adelay=…'] chèn lặng đầu cho tiếng khớp hình, [] nếu không lệch."""
+    try:
+        r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-show_entries', 'stream=codec_type,start_time', '-show_entries', 'format=start_time',
+                            '-of', 'json', path], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20, creationflags=_HIDE)
+        import json as _j
+        d = _j.loads(r.stdout or '{}')
+        base = float((d.get('format') or {}).get('start_time') or 0)
+        a = [float(s['start_time']) for s in d.get('streams') or [] if s.get('codec_type') == 'audio' and s.get('start_time') not in (None, 'N/A')]
+        lead = (a[0] - base) if a else 0.0
+    except Exception:
+        return []
+    if 0.02 < lead < 30:
+        return ['-af', f'adelay={int(round(lead * 1000))}:all=1']
+    return []

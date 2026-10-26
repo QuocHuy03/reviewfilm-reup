@@ -57,7 +57,7 @@ def analyze_video(video_path, transcript, gemini_key, temp_dir, max_frames=16, l
         log_fn('   [LỖI] Không trích được khung hình chính')
         return
     log_fn(f'''   Đã có {len(frames)} khung hình chính. Gọi Vision AI để phân tích...''')
-    transcript_sample = _make_transcript_sample(transcript, max_chars=8000)
+    transcript_sample = _make_transcript_sample(transcript, max_chars=16000)
     film_context = ((film_context or '')).strip()
     _ctx_block = ''
     if film_context:
@@ -134,7 +134,7 @@ def _get_duration(video_path):
         return 0.0
 def _extract_keyframes(video_path, out_dir, duration, n_frames, log_fn):
     frames = []
-    start = duration * 0.05
+    start = min(duration * 0.01, 3.0)          # từ đầu phim (trước bỏ 5% đầu → đoạn mở đầu không bao giờ được kể)
     end = duration * 0.97
     if end - start < 5:
         start = 0
@@ -155,6 +155,11 @@ def _make_transcript_sample(transcript, max_chars=8000):
     full = '\n'.join(lines)
     if len(full) <= max_chars:
         return full
-    step = max(1, len(lines) // 200)
-    sampled = lines[slice(None, None, step)]
-    return '\n'.join(sampled)[slice(None, max_chars, None)]
+    # lấy mẫu ĐỀU cả phim cho vừa max_chars (trước lấy 1/200 rồi cắt cụt ở max_chars → mất hẳn thoại cuối phim)
+    step = max(1, -(-len(full) // max_chars))
+    while step < len(lines):
+        sampled = '\n'.join(lines[::step])
+        if len(sampled) <= max_chars:
+            return sampled
+        step += 1
+    return '\n'.join(lines[::max(1, len(lines) // 50)])[:max_chars]

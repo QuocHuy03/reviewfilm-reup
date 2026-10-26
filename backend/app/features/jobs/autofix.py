@@ -26,7 +26,17 @@ def _clip(s):
 
 
 def scene_at(t, scenes, cfg):
-    """Thời điểm t (giây, trên video xuất) thuộc cảnh nào. None nếu rơi vào intro/outro."""
+    """Thời điểm t (giây, trên video xuất) thuộc cảnh nào. None nếu rơi vào intro/outro.
+    Dùng mốc THẬT bước dựng ghi lại (out_start / out_end — đã tính intro, tốc độ, Reup có đoạn lặng giữa các câu);
+    thiếu mốc thì ước lượng bằng cộng dồn độ dài lời như cũ."""
+    if scenes and all('out_start' in s and 'out_end' in s for s in scenes):
+        order = sorted(range(len(scenes)), key=lambda k: float(scenes[k]['out_start']))
+        for (n, k) in enumerate(order):
+            a = float(scenes[k]['out_start'])
+            b = float(scenes[order[n + 1]]['out_start']) if n + 1 < len(order) else float(scenes[k]['out_end']) + 0.5
+            if a <= t < b:
+                return k
+        return None
     t = t * video_speed(cfg) - media_duration(cfg.get('intro_path'))
     acc = 0.0
     for (i, s) in enumerate(scenes):
@@ -183,12 +193,8 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
         problems = {i: pb for (i, pb) in p['scenes'].items() if i not in rewritten}
         for (i, pb) in sorted(p['scenes'].items()):
             log(f"   Cảnh #{i + 1}: {pb['why']}" + (' — đã viết lại 1 lần, bỏ qua' if i in rewritten else ''), 'info')
-        if problems and reup:
-            still = _refit_clips(scenes, problems, video_duration)
-            if len(still) < len(problems):
-                actions.append(f'căn lại hình {len(problems) - len(still)} cảnh')
-                touched |= set(problems) - set(still)
-            problems = still
+        # Reup: KHÔNG dời mốc câu thoại gốc (bước dựng tự mượn khoảng lặng / tăng tốc giọng — video_editor.reup_fit);
+        # cách sửa duy nhất là AI viết lời gọn lại cho vừa khoảng tới câu sau
         if problems:
             new_text = rewrite_to_length(scenes, problems, log)
             spoken = sum(_respeak(job, scenes, i, vo, synth, f'fix{rnd}_{i}') for (i, vo) in new_text.items())
@@ -196,9 +202,7 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
             if spoken:
                 actions.append(f'AI viết lại + đọc lại {spoken} cảnh')
                 touched |= set(new_text)
-                if reup:
-                    _refit_clips(scenes, {i: problems[i] for i in new_text}, video_duration)
-                else:            # Review: đoạn hình của cảnh = đúng phần hình trống AI đã viết cho vừa
+                if not reup:     # Review: đoạn hình của cảnh = đúng phần hình trống AI đã viết cho vừa
                     for i in new_text:
                         if problems[i].get('text_only'):
                             continue     # chỉ lặp lời (giữ độ dài) → không đổi đoạn hình
@@ -209,8 +213,22 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
 
         changed = scenes != job.scenes
         out = job.result['output_path']
-        backup = (out + '.bak', [dict(s) for s in job.scenes], qa)
-        shutil.copy2(out, backup[0])          # vòng này làm tệ hơn → khôi phục
+        # sao lưu video + MỌI file phụ đề đi kèm (<tên>.srt / .ass / .vi.srt) — khôi phục thì trả lại đủ bộ
+        stem = os.path.splitext(out)[0]
+        files = [f for f in (out, stem + '.srt', stem + '.ass', stem + '.vi.srt') if os.path.isfile(f)]
+        backup = ([(f, f + '.bak') for f in files], [dict(s) for s in job.scenes], qa)
+        for (f, b) in backup[0]:
+            shutil.copy2(f, b)                # vòng này làm tệ hơn → khôi phục
+
+        def _restore():
+            for (f, b) in backup[0]:
+                if os.path.isfile(b):
+                    os.replace(b, f)
+
+        def _drop_backup():
+            for (_, b) in backup[0]:
+                if os.path.isfile(b):
+                    os.remove(b)
         before = qa['score']
         try:                                   # lỗi giữa chừng → trả lại đúng bản trước, không để sót .bak (cỡ cả video)
             if changed or p['rerender']:
@@ -226,23 +244,22 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
             if actions:
                 qa = check_video(out, job.scenes, job.config, job.result.get('srt_path', ''))
         except BaseException:
-            os.replace(backup[0], out)
+            _restore()
             job.scenes = backup[1]
             raise
         if not actions:
-            os.remove(backup[0])
+            _drop_backup()
             log('   [Tự sửa] Không có thay đổi nào áp dụng được — dừng.', 'info')
             break
 
         if qa['score'] < before:
-            os.replace(backup[0], out)
+            _restore()                         # video + .srt / .ass / .vi.srt của bản trước
             job.scenes, qa = backup[1], backup[2]
-            write_srt()
             history.append({'round': rnd, 'actions': actions + ['điểm giảm → khôi phục bản trước'], 'before': before, 'after': before,
                             'scenes': [i + 1 for i in sorted(touched)]})
             log(f'   [Tự sửa] Vòng {rnd} làm điểm giảm — đã khôi phục bản trước, dừng.', 'warn')
             break
-        os.remove(backup[0])
+        _drop_backup()
         history.append({'round': rnd, 'actions': actions, 'before': before, 'after': qa['score'],
                         'scenes': [i + 1 for i in sorted(touched)]})
         log(f"   [Tự sửa] Vòng {rnd}: {', '.join(actions)} → điểm {before} → {qa['score']}", 'ok')

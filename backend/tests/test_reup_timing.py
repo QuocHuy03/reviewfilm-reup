@@ -40,3 +40,21 @@ def test_reup_srt_matches_rendered_clip_lengths(tmp):
     (h, m, s) = cue2_start.replace(',', '.').split(':')
     assert int(h) * 3600 + int(m) * 60 + float(s) == pytest.approx(total - 4.0, abs=0.08)
 
+
+
+def test_reup_fit_rules():
+    """Luật căn câu Reup: ngắn → giữ câu gốc; dài vừa → mượn khoảng lặng; quá dài → giọng nhanh ≤1.35× rồi hình chậm ≤1.25×."""
+    from core.video_editor import reup_fit
+    assert reup_fit(4.0, 6.0, 1.0) == (4.0, 4.0, 1.0, 1.0)                     # lời ngắn: hình 1x, không tua nhanh
+    assert reup_fit(2.0, 4.0, 3.0) == (3.0, 3.0, 1.0, 1.0)                     # mượn 1s khoảng lặng phía sau
+    (span, out, pts, at) = reup_fit(2.0, 2.5, 3.0)                             # 3s lời / 2.5s chỗ → giọng 1.2×, hình 1x
+    assert pts == 1.0 and at == pytest.approx(1.2) and out == pytest.approx(2.5)
+    (span, out, pts, at) = reup_fit(2.0, 2.0, 4.0)                             # 4s lời / 2s chỗ → giọng 1.35×, hình chậm 1.25×, giữ khung
+    assert at == pytest.approx(1.35) and pts == pytest.approx(1.25) and out == pytest.approx(4.0 / 1.35)
+
+
+def test_reup_borrowed_silence_keeps_total_length(tmp):
+    """Lời dài hơn câu gốc nhưng vừa khoảng lặng phía sau → mượn khoảng lặng: tổng video vẫn bằng video gốc, hình không chậm."""
+    src = make_pattern_video(os.path.join(tmp, 'src.mp4'), [], dur=8.0)
+    out = _build(tmp, src, [_scene(tmp, 0, 1.0, 3.0, 3.5), _scene(tmp, 1, 5.0, 6.0, 1.0)], is_reup=True)
+    assert duration(out) == pytest.approx(8.0, abs=0.15)

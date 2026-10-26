@@ -26,93 +26,110 @@ def _get_fallback_edge_voice(voice):
     return 'vi-VN-NamMinhNeural'
 VIENEU_VOICES = {'binh-an': 'Nam - Bình An (VieNeu điềm đạm)', 'xuan-vinh': 'Xuân Vĩnh (Nam · miền Bắc · tự nhiên)', 'ngoc-lan': 'Nữ - Ngọc Lan (VieNeu dịu dàng)', 'my-duyen': 'Mỹ Duyên (Nữ · miền Nam · kể chuyện)', 'truc-ly': 'Trúc Ly (Nữ · miền Bắc · tự nhiên)', 'ngoc-linh': 'Ngọc Linh (Nữ · miền Bắc · kể chuyện)', 'gia-bao': 'Nam - Gia Bảo (VieNeu mượt mà)', 'thai-son': 'Thái Sơn (Nam · miền Nam · kể chuyện)', 'duc-tri': 'Đức Trí (Nam · miền Nam · kể chuyện)', 'trong-huu': 'Nam - Trọng Hữu (VieNeu uyên bác)', 'clone': 'Nhân bản giọng riêng (VieNeu - cần 3-5s audio mẫu)', 'vieneu3-chien-thang': 'VieNeu3 - Chiến Thắng', 'vieneu3-hung-ba': 'VieNeu3 - Hùng Bá', 'vieneu3-lam-le': 'VieNeu3 - Lâm Lê', 'vieneu3-ly-long-tieng': 'VieNeu3 - Lý Long Tiếng', 'vieneu3-phat-phap': 'VieNeu3 - Pháp Phật', 'vieneu3-review-toptop': 'VieNeu3 - Review Toptop', 'vieneu3-trinh-le': 'VieNeu3 - Trịnh Lê', 'vieneu3-trung-dung': 'VieNeu3 - Trung Dũng', 'vieneu3-yen-tin-tuc': 'VieNeu3 - Yến Tin Tức', 'vieneu3-ban-mai': 'VieNeu3 - Ban Mai', 'vieneu3-bac-quynh-anh': 'VieNeu3 - Quỳnh Anh (Giọng Bắc)', 'vieneu3-bac-thao-chi': 'VieNeu3 - Thảo Chi (Giọng Bắc)', 'vieneu3-bac-thanh-tung': 'VieNeu3 - Thanh Tùng (Giọng Bắc)', 'vieneu3-bac-nam-khanh': 'VieNeu3 - Nam Khánh (Giọng Bắc)', 'vieneu3-quang-cao': 'VieNeu3 - Quảng Cáo Nội Lực', 'vieneu3-he-thong': 'VieNeu3 - Hệ Thống', 'vieneu3-lena': 'VieNeu3 - Lena', 'vieneu3-mc-truyen-hinh': 'VieNeu3 - MC Truyền Hình', 'vieneu3-mia': 'VieNeu3 - Mia', 'vieneu3-minh-quang': 'VieNeu3 - Minh Quang', 'vieneu3-nam': 'VieNeu3 - Nam', 'vieneu3-nguyen': 'VieNeu3 - Nguyên', 'vieneu3-thu-minh': 'VieNeu3 - Thu Minh', 'vieneu3-nam-tram-am': 'VieNeu3 - Nam Trầm Ấm', 'vieneu3-nam-cham-rai': 'VieNeu3 - Nam Chậm Rãi', 'vieneu3-nam-nhanh-nhen': 'VieNeu3 - Nam Nhanh Nhẹn', 'vieneu3-nam-truyen-cam': 'VieNeu3 - Nam Truyền Cảm', 'vieneu3-nu-diem-dam': 'VieNeu3 - Nữ Điềm Đạm', 'vieneu3-nu-cham-rai': 'VieNeu3 - Nữ Chậm Rãi', 'vieneu3-nu-luu-loat': 'VieNeu3 - Nữ Lưu Loát', 'vieneu3-nu-nhan-nha': 'VieNeu3 - Nữ Nhàn Nhã', 'vieneu3-nu-nhe-nhang': 'VieNeu3 - Nữ Nhẹ Nhàng', 'adam-bua': 'Adam bựa (Nam · miền Bắc · tự nhiên)', 'thien-minh': 'Thiện Minh (Nam · miền Bắc · kể chuyện)', 'mai-anh': 'Mai Anh (Nữ · miền Bắc · tin tức)', 'hai-dang': 'Hải Đăng (Nam · miền Bắc · tự nhiên)', 'thuy-dung': 'Thùy Dung (Nữ · miền Nam · tin tức)', 'thien-tam-duc': 'Thiền Tâm Đức (Nam · miền Bắc · kể chuyện)', 'ngoc-huyen': 'Ngọc Huyền (Nữ · miền Bắc · tự nhiên)', 'quang-son': 'Quang Sơn (Nam · miền Trung · tự nhiên)', 'ngoc-tran': 'Ngọc Trân (Nữ · miền Trung · tự nhiên)', 'minh-duc': 'Minh Đức (Nam · miền Bắc · tin tức)', 'pham-tuyen': 'Phạm Tuyên (Nam · miền Bắc · tự nhiên)', 'thanh-binh': 'Thanh Bình (Nam · miền Bắc · kể chuyện)', 'doan-trang': 'Đoan Trang (Nữ · miền Bắc · tự nhiên)', 'thuc-doan': 'Thục Đoan (Nữ · miền Nam · kể chuyện)', 'minh-triet': 'Minh Triết (Nam · miền Nam · tin tức)', 'quynh-anh': 'Quỳnh Anh (Nữ · miền Bắc · kể chuyện)', 'kim-thanh': 'Kim Thanh (Nữ · miền Nam · kể chuyện)', 'adam': 'Adam (Nam · miền Nam · tự nhiên)', 'quoc-tuan': 'Quốc Tuấn (Nam · miền Bắc · tự nhiên)'}
 _VIENEU3_BUILTIN_REF = {'vieneu3-chien-thang': 'chien-thang.wav', 'vieneu3-hung-ba': 'hung-ba.wav', 'vieneu3-lam-le': 'lam-le.wav', 'vieneu3-ly-long-tieng': 'ly-long-tieng.wav', 'vieneu3-phat-phap': 'phat-phap.wav', 'vieneu3-review-toptop': 'review-toptop.wav', 'vieneu3-trinh-le': 'trinh-le.wav', 'vieneu3-trung-dung': 'trung-dung.wav', 'vieneu3-yen-tin-tuc': 'yen-tin-tuc.wav', 'vieneu3-ban-mai': 'ban-mai.wav', 'vieneu3-bac-quynh-anh': 'bac-quynh-anh.wav', 'vieneu3-bac-thao-chi': 'bac-thao-chi.wav', 'vieneu3-bac-thanh-tung': 'bac-thanh-tung.wav', 'vieneu3-bac-nam-khanh': 'bac-nam-khanh.wav', 'vieneu3-quang-cao': 'quang-cao.wav', 'vieneu3-he-thong': 'he-thong.wav', 'vieneu3-lena': 'lena.wav', 'vieneu3-mc-truyen-hinh': 'mc-truyen-hinh.wav', 'vieneu3-mia': 'mia.wav', 'vieneu3-minh-quang': 'minh-quang.wav', 'vieneu3-nam': 'nam.wav', 'vieneu3-nguyen': 'nguyen.wav', 'vieneu3-thu-minh': 'thu-minh.wav', 'vieneu3-nam-tram-am': 'nam-tram-am.wav', 'vieneu3-nam-cham-rai': 'nam-cham-rai.wav', 'vieneu3-nam-nhanh-nhen': 'nam-nhanh-nhen.wav', 'vieneu3-nam-truyen-cam': 'nam-truyen-cam.wav', 'vieneu3-nu-diem-dam': 'nu-diem-dam.wav', 'vieneu3-nu-cham-rai': 'nu-cham-rai.wav', 'vieneu3-nu-luu-loat': 'nu-luu-loat.wav', 'vieneu3-nu-nhan-nha': 'nu-nhan-nha.wav', 'vieneu3-nu-nhe-nhang': 'nu-nhe-nhang.wav'}
+_VI_ONES = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín']
+
+
+def _vi_lt1000(x, full=False):
+    """0–999 → chữ. full=True: nhóm đứng sau nhóm lớn hơn (vd 1.005.000) → đọc đủ "không trăm lẻ năm"."""
+    (h, r) = divmod(x, 100)
+    (t, u) = divmod(r, 10)
+    out = []
+    if h or full:
+        out.append(_VI_ONES[h] + ' trăm')
+    if t == 0:
+        if u:
+            out.append(('lẻ ' if out else '') + _VI_ONES[u])
+    elif t == 1:
+        out.append('mười' + ('' if u == 0 else ' lăm' if u == 5 else ' ' + _VI_ONES[u]))
+    else:
+        tail = {0: '', 1: ' mốt', 4: ' tư', 5: ' lăm'}.get(u, ' ' + _VI_ONES[u])
+        out.append(_VI_ONES[t] + ' mươi' + tail)
+    return ' '.join(out)
+
+
 def _vi_number_to_words(n):
+    """Số nguyên → chữ đúng cách đọc: 2024 → hai nghìn không trăm hai mươi tư; 1005000 → một triệu không trăm lẻ năm nghìn."""
+    n = int(n)
     if n == 0:
         return 'không'
     if n < 0:
         return 'âm ' + _vi_number_to_words(-n)
-    _ones = ['', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín']
-    _tens = ['', '', 'hai mươi', 'ba mươi', 'bốn mươi', 'năm mươi', 'sáu mươi', 'bảy mươi', 'tám mươi', 'chín mươi']
-    def _lt100(x):
-        if x == 0:
-            return ''
-        if x < 10:
-            return _ones[x]
-        if x == 10:
-            return 'mười'
-        if x < 20:
-            return 'mười ' + ('lăm' if x == 15 else _ones[x % 10])
-        (t, u) = divmod(x, 10)
-        if u == 0:
-            return _tens[t]
-        if u == 1:
-            return _tens[t] + ' mốt'
-        if u == 5:
-            return _tens[t] + ' lăm'
-        return _tens[t] + ' ' + _ones[u]
-    def _lt1000(x):
-        if x == 0:
-            return ''
-        (h, r) = divmod(x, 100)
-        if h == 0:
-            return _lt100(r)
-        base = _ones[h] + ' trăm'
-        if r == 0:
-            return base
-        if r < 10:
-            return base + ' lẻ ' + _ones[r]
-        return base + ' ' + _lt100(r)
-    result = []
-    for (div, unit) in ((1000000000, 'tỷ'), (1000000, 'triệu'), (1000, 'nghìn')):
+    if n >= 10 ** 12:
+        return ' '.join(_VI_ONES[int(d)] for d in str(n))
+    groups = []
+    for (div, unit) in ((10 ** 9, 'tỷ'), (10 ** 6, 'triệu'), (1000, 'nghìn'), (1, '')):
         (q, n) = divmod(n, div)
-        if q:
-            result.append(_lt1000(q) + ' ' + unit)
-    if n:
-        s = _lt1000(n)
-        if result and n < 100:
-            s = ('lẻ ' if n < 10 else '') + s
-        result.append(s)
-    return ' '.join(result)
+        groups.append((q, unit))
+    out = []
+    for (q, unit) in groups:
+        if q == 0:
+            continue
+        out.append((_vi_lt1000(q, full=bool(out)) + (' ' + unit if unit else '')).strip())
+    return ' '.join(out)
+
+
+def _vi_digits(s):
+    return ' '.join(_VI_ONES[int(d)] for d in s if d.isdigit())
+
+
+def _vi_decimal(int_part, frac):
+    """2,5 → hai phẩy năm · 3,14 → ba phẩy mười bốn · 3,05 → ba phẩy không năm · 2,500 → hai phẩy năm."""
+    frac = frac.rstrip('0')
+    words = _vi_number_to_words(int(int_part or '0'))
+    if not frac:
+        return words
+    if len(frac) <= 2 and not frac.startswith('0'):
+        return words + ' phẩy ' + _vi_number_to_words(int(frac))
+    return words + ' phẩy ' + _vi_digits(frac)
+
+
 def replace_numbers_with_words(text):
+    """Đổi số trong câu sang chữ để giọng đọc đúng (phụ đề giữ nguyên chữ số — chỉ dùng cho lời đọc).
+    0912345678 → đọc từng số · 1,2,3 → một, hai, ba · 2,5 / 2,500 → hai phẩy năm (dấu phẩy thập phân kiểu Việt)
+    1.005.000 → một triệu không trăm lẻ năm nghìn · 2024 → hai nghìn không trăm hai mươi tư
+    50% → năm mươi phần trăm · 10:30 → mười giờ ba mươi."""
     if not text:
         return ''
     import re
-    def _replacer(m):
-        raw = m.group(0)
-        has_dot = '.' in raw
-        has_comma = ',' in raw
-        int_str = raw
-        frac_str = ''
-        if has_dot and has_comma:
-            int_str = raw.split(',')[0].replace('.', '')
-            frac_str = raw.split(',')[1]
-        elif has_dot:
-            parts = raw.split('.')
-            if len(parts) >= 2 and all((len(p) == 3 for p in parts[1:])):
-                int_str = raw.replace('.', '')
-            elif len(parts) == 2:
-                int_str = parts[0]
-                frac_str = parts[1]
-            else:
-                int_str = raw.replace('.', '')
-        elif has_comma:
+
+    def time_(m):
+        (h, mi) = (int(m.group(1)), int(m.group(2)))
+        if h > 24 or mi > 59:
+            return m.group(0)
+        sec = m.group(3)
+        out = _vi_number_to_words(h) + ' giờ' + ('' if mi == 0 and not sec else ' ' + _vi_number_to_words(mi) + (' phút' if sec else ''))
+        if sec:
+            out += ' ' + _vi_number_to_words(int(sec)) + ' giây'
+        return out
+    text = re.sub(r'(?<![\d.,:])(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])', time_, text)
+
+    def num(raw):
+        if re.fullmatch(r'0\d{2,}', raw) or re.fullmatch(r'\d{9,}', raw):        # số điện thoại / mã số → đọc từng số
+            return _vi_digits(raw)
+        if '.' in raw and ',' in raw:                                            # 1.234,5 (kiểu Việt)
+            (a, b) = raw.rsplit(',', 1)
+            return _vi_decimal(a.replace('.', ''), b) if all(len(p) == 3 for p in a.split('.')[1:]) else _vi_digits(raw)
+        if ',' in raw:
             parts = raw.split(',')
-            if len(parts) >= 2 and all((len(p) == 3 for p in parts[1:])):
-                int_str = raw.replace(',', '')
-            elif len(parts) == 2:
-                int_str = parts[0]
-                frac_str = parts[1]
-            else:
-                int_str = raw.replace(',', '')
+            if len(parts) == 2:
+                return _vi_decimal(parts[0], parts[1])                           # dấu phẩy = thập phân
+            return ', '.join(_vi_number_to_words(int(p)) for p in parts)         # 1,2,3 → liệt kê
+        if '.' in raw:
+            parts = raw.split('.')
+            if all(len(p) == 3 for p in parts[1:]):
+                return _vi_number_to_words(int(raw.replace('.', '')))            # 1.005.000 → hàng nghìn
+            if len(parts) == 2:
+                return _vi_decimal(parts[0], parts[1])                           # 1.5 → một phẩy năm
+            return ', '.join(_vi_number_to_words(int(p)) for p in parts)         # 1.2.3 (mục lục) → liệt kê
+        return _vi_number_to_words(int(raw))
+
+    def repl(m):
         try:
-            words = _vi_number_to_words(int(int_str))
-            if frac_str:
-                frac_words = ' '.join((_vi_number_to_words(int(d)) for d in frac_str))
-                return words + ' phẩy ' + frac_words
-            return words
+            words = num(m.group(1))
         except Exception:
-            return raw
-    return re.sub('\\d+(?:[.,]\\d+)*', _replacer, text)
+            return m.group(0)
+        return words + (' phần trăm' if m.group(2) else '')
+    return re.sub(r'(\d+(?:[.,]\d+)*)(\s*%)?', repl, text)
 def _acquire_gpu_lock(log_fn, gpu_timeout, wait_msg):
     """Lay _LOCAL_GPU_LOCK. Tra ve False neu het gpu_timeout ma GPU van ban."""
     if _LOCAL_GPU_LOCK.acquire(blocking=False):
@@ -125,10 +142,84 @@ def _acquire_gpu_lock(log_fn, gpu_timeout, wait_msg):
         return True
     _LOCAL_GPU_LOCK.acquire()
     return True
-def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **_unused):
+POLISH_RATE = 48000
+POLISH_TARGET_DB = -16.5          # độ to trung bình phần có tiếng (RMS) → ≈ -17…-18 LUFS cho giọng nói
+POLISH_PEAK = 0.89                # đỉnh tối đa -1 dBFS
+
+
+def polish_tts(scenes, log_fn=print):
+    """Chuẩn hoá MỌI file giọng (Edge, CapCut, FPT, VieNeu, gTTS…) trước khi dùng:
+    - cắt khoảng lặng đầu / cuối (chừa 30ms đầu, 100ms cuối): engine hay chèn 0.1–0.8s lặng → lời vào trễ so với miệng,
+      độ dài giả kéo giãn hình / tua nhanh giọng không cần thiết, phụ đề chia sai;
+    - cân độ to về cùng một mức (giới hạn đỉnh -1 dBFS): câu đọc lại bằng engine / giọng khác không to nhỏ lệch câu bên cạnh.
+    Ghi <tên>_n.wav (48kHz mono), cập nhật tts_path / tts_duration. File lỗi → giữ nguyên. → scenes (sửa tại chỗ)."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    import wave as _wave
+
+    def one(sc):
+        src = sc.get('tts_path')
+        if not src or not os.path.isfile(src) or src.endswith('_n.wav'):
+            return False
+        r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', src, '-ac', '1', '-ar', str(POLISH_RATE), '-f', 's16le', '-'],
+                           capture_output=True, creationflags=_HIDE)
+        x = np.frombuffer(r.stdout, '<i2').astype(np.float32) / 32768.0 if r.returncode == 0 else np.zeros(0, np.float32)
+        hop = POLISH_RATE // 100                 # khung 10ms
+        if len(x) < hop * 5:
+            return False
+        fr = x[:len(x) // hop * hop].reshape(-1, hop)
+        db = 20 * np.log10(np.sqrt((fr ** 2).mean(1)) + 1e-9)
+        act = np.where(db > max(-50.0, db.max() - 45.0))[0]
+        if not len(act):
+            return False
+        a = max(0, act[0] * hop - int(0.03 * POLISH_RATE))
+        b = min(len(x), (act[-1] + 1) * hop + int(0.10 * POLISH_RATE))
+        y = x[a:b]
+        rms = np.sqrt((fr[act] ** 2).mean()) + 1e-9
+        gain = 10 ** ((POLISH_TARGET_DB - 20 * np.log10(rms)) / 20)
+        gain = float(min(max(gain, 10 ** (-12 / 20)), 10 ** (15 / 20)))
+        peak = float(np.abs(y).max()) + 1e-9
+        gain = min(gain, POLISH_PEAK / peak)
+        y = np.clip(y * gain, -1.0, 1.0)
+        out = os.path.splitext(src)[0] + '_n.wav'
+        with _wave.open(out, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(POLISH_RATE)
+            w.writeframes((y * 32767).astype('<i2').tobytes())
+        sc['tts_path'] = out
+        sc['tts_duration'] = len(y) / POLISH_RATE
+        return True
+    todo = [sc for sc in scenes or [] if sc.get('tts_path')]
+    if not todo:
+        return scenes
+    with ThreadPoolExecutor(min(6, len(todo))) as ex:
+        ok = sum(1 for r in ex.map(lambda sc: _safe(one, sc), todo) if r)
+    if ok:
+        log_fn(f'   Chuẩn hoá giọng: cắt lặng đầu / cuối + cân âm lượng {ok}/{len(todo)} câu')
+    return scenes
+
+
+def _safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception:
+        return False
+
+
+def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **kw):
+    """Tạo giọng từng câu (mọi engine) rồi chuẩn hoá (cắt lặng + cân âm lượng) — xem polish_tts."""
+    out = _generate_tts_raw(scenes, voice, temp_dir, rate, log_fn, fptai_key, ref_audio_path, strict_voice, gpu_timeout, **kw)
+    for o in out or []:
+        o['tts_text'] = o.get('voiceover', '')    # đúng câu đã đọc — sửa lời sau đó mà chưa tạo lại giọng thì biết là lệch
+    return polish_tts(out, log_fn) if out else out
+
+
+def _generate_tts_raw(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **_unused):
     os.makedirs(temp_dir, exist_ok=True)
     for (idx, s) in enumerate(scenes):
-        s['_original_index'] = idx
+        # người gọi đã ghi chỉ số cảnh (vd tự hậu kỳ gửi lô cảnh [3, 7]) → giữ nguyên, ghi đè thì giọng gắn nhầm cảnh
+        s.setdefault('_original_index', idx)
         if 'voiceover' in s:
             clean_text = (s['voiceover'] or '').replace('||', ' ')
             clean_text = re.sub('\\s+', ' ', clean_text).strip()
@@ -142,7 +233,7 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
         cookie = os.getenv('CAPCUT_COOKIE', '').strip()      # tuỳ chọn — không có vẫn chạy
         from core.capcut_tts import VOICES as CC_VOICES
         log_fn(f'''   TTS Engine: CapCut | Giọng: {CC_VOICES.get(cc_voice, (cc_voice,))[0]}{'' if cookie else ' (không cookie)'}''')
-        out = _render_capcut_parallel(scenes, cc_voice, cookie, log_fn, temp_dir)
+        out = _render_capcut_parallel(scenes, cc_voice, cookie, log_fn, temp_dir, rate=rate)
         if out and len(out) == len(nonempty):
             log_fn(f'''   Hoàn tất TTS (CapCut): {len(out)}/{len(nonempty)} cảnh''')
             return out
@@ -183,6 +274,17 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
     out = _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir)
     log_fn(f'''   Hoàn tất TTS (Edge): {len(out)}/{len(nonempty)} cảnh''')
     return out
+def _clear_outputs(paths):
+    """Xoá file giọng cũ trùng tên trước khi tạo (vo_0000…): tên file cố định theo số thứ tự câu — chạy lại / "Tiếp tục"
+    sau khi sửa, đổi thứ tự kịch bản mà câu nào tạo lỗi thì không được nhặt nhầm file giọng CŨ (lời cũ, có khi của câu khác)."""
+    for p in paths:
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
 def _run_coro(make_coro):
     """Chay coroutine (tao boi make_coro) ke ca khi da co event loop dang chay."""
     try:
@@ -210,7 +312,10 @@ def _build_out_scenes(indexed, result_map, engine, log_fn, fail_msg, short_msg):
             continue
         dur = _audio_duration(result_map[i])
         if dur < 0.1:
-            log_fn(short_msg.format(n=i + 1, dur=dur))
+            if dur <= 0 and result_map[i] in _PROBE_ERR:     # file hỏng / không đọc được → báo đúng lỗi, không ghi "quá ngắn"
+                log_fn(f'   [WARN] Cảnh {i + 1}: {_short_reason(result_map[i], dur)} — bỏ qua')
+            else:
+                log_fn(short_msg.format(n=i + 1, dur=dur))
             continue
         scene2 = dict(scene)
         scene2['tts_path'] = result_map[i]
@@ -234,7 +339,10 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
     os.makedirs(temp_dir, exist_ok=True)
     indexed = [(s.get('_original_index', i), s) for (i, s) in enumerate(scenes) if (s.get('voiceover') or '').strip()]
     total = len(indexed)
+    _clear_outputs([os.path.join(temp_dir, f'vo_{i:04d}.mp3') for (i, _) in indexed])
     log_fn(f'''   Đang tạo giọng {total} cảnh (chunk {_EDGE_CHUNK}/batch, thử lại {retries}x)...''')
+    edge_errs = {}
+
     async def _one(i, text):
         out_path = os.path.join(temp_dir, f'''vo_{i:04d}.mp3''')
         last_err = None
@@ -255,8 +363,8 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
             if attempt < retries:
                 import random
                 await asyncio.sleep(2.0 ** (attempt + 1) + random.uniform(0, 1.5))   # chờ tăng dần 2 → 4 → 8 → 16s cho Edge hồi
-        if last_err and i == 0:
-            log_fn(f'''   [WARN] Edge TTS lỗi (cảnh đầu): {last_err}''')
+        if last_err:
+            edge_errs[i] = str(last_err)[:160]  # lý do lỗi THẬT của từng cảnh (trước chỉ ghi của cảnh đầu)
         return (i, out_path, False)
     result_map = {}
     chunks = [indexed[k:k + _EDGE_CHUNK] for k in range(0, len(indexed), _EDGE_CHUNK)]
@@ -272,11 +380,11 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
     out_scenes = []
     for (i, scene) in indexed:
         if i not in result_map:
-            log_fn(f'''   [WARN] Cảnh {i + 1}: Edge TTS thất bại, bỏ qua''')
+            log_fn(f'''   [WARN] Cảnh {i + 1}: Edge TTS thất bại — {edge_errs.get(i, 'không có âm thanh trả về')}''')
             continue
         dur = _audio_duration(result_map[i])
         if dur < 0.1:
-            log_fn(f'''   [WARN] Cảnh {i + 1}: audio quá ngắn ({dur:.2f}s), bỏ qua''')
+            log_fn(f'''   [WARN] Cảnh {i + 1}: {_short_reason(result_map[i], dur)} — bỏ qua''')
             continue
         scene2 = dict(scene)
         scene2['tts_path'] = result_map[i]
@@ -308,7 +416,7 @@ def _render_fptai_sequential(scenes, voice, fptai_key, log_fn, temp_dir):
             _enhance_fptai_audio(mp3_path, log_fn)
         dur = _audio_duration(mp3_path)
         if dur < 0.1:
-            log_fn(f'''   [WARN] Cảnh {idx + 1}: audio quá ngắn, bỏ qua''')
+            log_fn(f'''   [WARN] Cảnh {idx + 1}: {_short_reason(mp3_path, dur)} — bỏ qua''')
             continue
         scene2 = dict(scene)
         scene2['tts_path'] = mp3_path
@@ -382,12 +490,25 @@ def _capcut_batches(items):
     return batches
 
 
-def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir):
+def _rate_to_speed(rate):
+    """'+10%' / '-5%' (kiểu Edge) → hệ số tốc độ 1.10 / 0.95. Mặc định '+5%' của Edge KHÔNG áp cho engine khác (giữ nguyên
+    tốc độ quen thuộc của CapCut) — chỉ khi người gọi chỉ định tốc độ khác."""
+    try:
+        r = str(rate or '').strip()
+        if not r or r == '+5%':
+            return 1.0
+        return max(0.5, min(2.0, 1.0 + float(r.rstrip('%')) / 100.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir, rate=''):
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from core.capcut_tts import CapcutBatchTooBig, CapcutError, synthesize_batch
     indexed = [(s.get('_original_index', i), s) for (i, s) in enumerate(scenes) if (s.get('voiceover') or '').strip()]
     items = [(i, s.get('voiceover_for_tts', s['voiceover']).strip(), os.path.join(temp_dir, f'vo_{i:04d}.mp3')) for (i, s) in indexed]
+    _clear_outputs([p for (_, _, p) in items])
     batches = _capcut_batches(items)
     log_fn(f'   Đang tạo giọng CapCut {len(items)} cảnh ({len(batches)} gói, song song {_CAPCUT_MAX_CONCURRENCY} luồng)...')
     (ok, errors, lock, done) = (set(), [], threading.Lock(), [0])
@@ -395,7 +516,7 @@ def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir):
     def _send(batch):
         """Gửi 1 gói; bị cắt vì quá dài thì chia đôi gửi lại. → chỉ số các cảnh thành công."""
         try:
-            res = synthesize_batch([(t, p) for (_, t, p) in batch], voice, cookie)
+            res = synthesize_batch([(t, p) for (_, t, p) in batch], voice, cookie, speed=_rate_to_speed(rate))
         except CapcutBatchTooBig as e:
             if len(batch) == 1:
                 errors.append(str(e))
@@ -588,8 +709,8 @@ def generate_vieneu_cast(scenes, temp_dir, log_fn=print, gpu_timeout=600):
     if not _acquire_gpu_lock(log_fn, gpu_timeout, '   [GPU] Đang chờ GPU giải phóng (tiến trình khác đang xử lý)...'):
         return []
     try:
-        return _render_vieneu_sequential(scenes, scenes[0]['_vn_voice'], '', log_fn, temp_dir, allow_fallback=False,
-                                         _display_override=f'{n_voice} giọng nhân vật') or []
+        return polish_tts(_render_vieneu_sequential(scenes, scenes[0]['_vn_voice'], '', log_fn, temp_dir, allow_fallback=False,
+                                                    _display_override=f'{n_voice} giọng nhân vật') or [], log_fn)
     finally:
         _LOCAL_GPU_LOCK.release()
 
@@ -640,6 +761,7 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
     os.makedirs(temp_dir, exist_ok=True)
     batch = [{'text': s.get('voiceover_for_tts', s['voiceover']).strip(), 'out': os.path.join(temp_dir, f'''vo_{i:04d}.wav'''), **_vn_item(s)}
              for (i, s) in indexed]
+    _clear_outputs([b['out'] for b in batch])
     batch_file = os.path.join(temp_dir, '_vieneu_batch.json')
     import json as _json_vn
     with open(batch_file, 'w', encoding='utf-8') as bf:
@@ -651,6 +773,12 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
     timeout_secs = max(360, 90 + total * 30)
     env = os.environ.copy()
     env['PYTHONWARNINGS'] = 'ignore'
+    try:                                          # ngân sách CPU chung: mặc định torch / onnx lấy hết lõi → máy đơ
+        from core import perf
+        for k in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'ORT_NUM_THREADS'):
+            env[k] = str(perf.threads_for(1))
+    except Exception:
+        pass
     from . import vieneu_setup
     if base_cmd[0] == vieneu_setup.PY:
         env = vieneu_setup.hf_env(offline=True)   # model đã tải đủ lúc cài → không gọi mạng
@@ -658,16 +786,42 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, env=env)
         register_process(proc)
         deadline = time.time() + timeout_secs
+        # đọc output ở luồng riêng: worker treo IM LẶNG (không in dòng nào) thì vòng đọc cũ chờ mãi, giữ khoá GPU → mọi job
+        # sau kẹt theo. Luồng chính canh cả hạn tổng lẫn "quá IDLE_SECS không có tiến triển" rồi kill.
+        import queue as _q
+        lines = _q.Queue()
+
+        def _pump():
+            try:
+                for ln in proc.stdout:
+                    lines.put(ln)
+            finally:
+                lines.put(None)
+        threading.Thread(target=_pump, daemon=True).start()
+        IDLE_SECS = 300                          # 1 câu (kể cả nạp model lần đầu) không bao giờ lâu tới vậy
+        last = time.time()
         try:
-            for line in proc.stdout:
-                if time.time() > deadline:
-                    proc.kill()
-                    log_fn('   [WARN] VieNeu TTS quá thời gian — giải phóng tiến trình')
+            while True:
+                try:
+                    line = lines.get(timeout=2)
+                except _q.Empty:
+                    now = time.time()
+                    if now > deadline or now - last > IDLE_SECS:
+                        proc.kill()
+                        log_fn('   [WARN] VieNeu TTS ' + ('quá thời gian' if now > deadline else f'không phản hồi {IDLE_SECS}s')
+                               + ' — dừng tiến trình, giải phóng GPU')
+                        break
+                    continue
+                if line is None:
                     break
+                last = time.time()
                 line = line.rstrip()
                 if line and '[VIENEU_WORKER]' in line:
                     log_fn(f'''   {line.replace('[VIENEU_WORKER] ', '')}''')
-            proc.wait()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         finally:
             unregister_process(proc)
     except Exception as e:
@@ -769,7 +923,8 @@ def _concat_audio_files(paths, out_path, log_fn=print):
     for p in paths:
         cmd += ['-i', p]
     n = len(paths)
-    filt = ''.join((f'''[{k}:a]aresample=48000,aformat=sample_fmts=s16:channel_layouts=mono[a{k}];''' for k in range(n))) + ''.join((f'''[a{k}]''' for k in range(n))) + f'''concat=n={n}:v=0:a=1[out]'''
+    # nghỉ 0.12s giữa 2 lượt lời (đoạn giọng đã cắt lặng 2 đầu → ghép thẳng thì các vai nói dính liền nhau)
+    filt = ''.join((f'''[{k}:a]aresample=48000,aformat=sample_fmts=s16:channel_layouts=mono{',apad=pad_dur=0.12' if k < n - 1 else ''}[a{k}];''' for k in range(n))) + ''.join((f'''[a{k}]''' for k in range(n))) + f'''concat=n={n}:v=0:a=1[out]'''
     cmd += ['-filter_complex', filt, '-map', '[out]', out_path]
     try:
         r = run_subprocess(cmd, timeout=120, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
@@ -804,38 +959,187 @@ def generate_tts_multi_voice(scenes, voice_map, narrator_voice, temp_dir, log_fn
             if k and p and os.path.exists(p):
                 path_map[tuple(k)] = p
     out_scenes = []
+    redo = []                                    # câu thiếu đoạn / ghép lỗi → đọc lại CẢ câu bằng giọng người kể (đủ lời)
     for (i, s) in enumerate(scenes):
         segs = seg_lists[i]
         if not segs:
             continue
         paths = [path_map.get((i, gi)) for gi in range(len(segs))]
-        paths = [p for p in paths if p]
-        if not paths:
-            log_fn(f'''   [WARN] Cảnh {i + 1}: không tạo được giọng đoạn nào — bỏ cảnh.''')
+        if not all(paths):
+            log_fn(f'''   [WARN] Cảnh {i + 1}: thiếu {sum(1 for p in paths if not p)}/{len(segs)} đoạn giọng — đọc lại cả câu bằng giọng người kể (không để mất lời).''')
+            redo.append(i)
             continue
-        if len(paths) < len(segs):
-            log_fn(f'''   [WARN] Cảnh {i + 1}: thiếu {len(segs) - len(paths)} đoạn giọng — ghép phần có được.''')
         if len(paths) == 1:
             final = paths[0]
         else:
             final = _concat_audio_files(paths, os.path.join(temp_dir, f'''mv_{i:04d}.wav'''), log_fn)
             if not final:
-                final = paths[0]
+                log_fn(f'''   [WARN] Cảnh {i + 1}: ghép giọng các vai lỗi — đọc lại cả câu bằng giọng người kể (không để mất lời).''')
+                redo.append(i)
+                continue
         dur = _audio_duration(final)
         if dur < 0.1:
+            redo.append(i)
             continue
         s2 = dict(s)
+        s2['_original_index'] = s.get('_original_index', i)   # thiếu chỉ số → bước đọc bù tưởng mọi cảnh thiếu giọng, đọc lại & nhân đôi video
         s2['tts_path'] = final
         s2['tts_duration'] = dur
         s2['_tts_engine_used'] = 'vieneu'
         s2['_cast_voices'] = len({_voice_for(seg) for seg in segs})
+        s2['tts_text'] = s.get('voiceover', '')
         out_scenes.append(s2)
+    if redo:
+        plist = [{**scenes[i], 'segments': None, '_mv_redo': i} for i in redo]
+        for o in generate_tts_per_scene(plist, narrator_voice, os.path.join(temp_dir, 'mv_redo'), log_fn=log_fn, **kw) or []:
+            i = o.get('_mv_redo')
+            if i is None or not o.get('tts_path'):
+                continue
+            s2 = {k: v for (k, v) in o.items() if k != '_mv_redo'}
+            s2['_original_index'] = scenes[i].get('_original_index', i)
+            out_scenes.append(s2)
+        out_scenes.sort(key=lambda x: x.get('_original_index', 0))
     log_fn(f'''   [PHÂN VAI] Hoàn tất: {len(out_scenes)}/{len(scenes)} câu, {len(by_voice)} giọng khác nhau.''')
     return out_scenes
+_PROBE_ERR = {}          # đường dẫn → lý do không đo được độ dài (báo đúng lỗi thay vì "audio quá ngắn")
+
+
 def _audio_duration(path):
+    """Độ dài file âm thanh (giây). ffprobe lỗi → đo lại bằng cách giải mã; vẫn lỗi → 0.0 và ghi lý do vào _PROBE_ERR."""
+    from .utils import run_subprocess
+    err = ''
+    if not path or not os.path.isfile(path):
+        _PROBE_ERR[path] = 'không thấy file'
+        return 0.0
     try:
-        from .utils import run_subprocess
         r = run_subprocess([FFPROBE_EXE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         return float(r.stdout.strip())
-    except Exception:
+    except Exception as e:
+        err = f'ffprobe: {e}'
+    try:                                         # dự phòng: giải mã cả file, đếm mẫu
+        r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', path, '-ac', '1', '-ar', '16000', '-f', 's16le', '-'],
+                           capture_output=True, timeout=60, creationflags=_HIDE)
+        if r.returncode == 0 and r.stdout:
+            return len(r.stdout) / 2 / 16000
+        err += f' · giải mã: {(r.stderr or b"").decode("utf-8", "replace").strip()[-120:] or "không có âm thanh"}'
+    except Exception as e:
+        err += f' · giải mã: {e}'
+    _PROBE_ERR[path] = err.strip(' ·') or 'không đọc được'
+    return 0.0
+
+
+def _short_reason(path, dur):
+    """Lý do bỏ 1 câu: file hỏng / không đọc được (kèm lỗi) hay thật sự quá ngắn."""
+    return f'không đọc được file ({_PROBE_ERR.get(path)})' if dur <= 0 and path in _PROBE_ERR else f'audio quá ngắn ({dur:.2f}s)'
+
+
+# Đệm im lặng sau câu TRƯỚC khi co giãn: bộ co giãn nuốt mất phần cuối file → mất âm cuối chữ.
+STRETCH_PAD = 0.4
+
+
+def stretch_filter(tempo=1.0, pitch=1.0, sr=48000):
+    """Chuỗi lọc ffmpeg: nhanh / chậm theo tempo (giữ cao độ) + đổi cao độ theo hệ số pitch (giữ tốc độ).
+    Có đệm đuôi chống mất chữ (đuôi im lặng thừa — người gọi tự cắt). Không đổi gì → ''."""
+    (tempo, pitch) = (float(tempo or 1.0), float(pitch or 1.0))
+    if abs(tempo - 1.0) < 0.002 and abs(pitch - 1.0) < 0.002:
+        return ''
+    # KHÔNG dùng rubberband: bản trong ffmpeg (engine R2) làm nhoè hài âm giọng nói → nghe rè / pha (đã so phổ âm).
+    # atempo (WSOLA) + asetrate giữ giọng sạch; đệm đuôi để không nuốt âm cuối.
+    parts = [f'apad=pad_dur={STRETCH_PAD}']
+    if abs(pitch - 1.0) >= 0.002:
+        parts += [f'asetrate={int(sr * pitch)}', f'aresample={sr}']
+    t = tempo / pitch                             # asetrate làm nhanh theo pitch → bù lại
+    while t > 2.0:                                # atempo chỉ nhận 0.5–2.0 mỗi lần
+        parts.append('atempo=2.0')
+        t /= 2.0
+    while t < 0.5:
+        parts.append('atempo=0.5')
+        t /= 0.5
+    if abs(t - 1.0) >= 0.002:
+        parts.append(f'atempo={t:.4f}')
+    return ','.join(parts)
+
+
+# cắt im lặng thừa ở đuôi (do đệm) — ngưỡng thấp, chừa 0.12s để không lẹm âm cuối nhỏ dần
+TAIL_TRIM = 'areverse,silenceremove=start_periods=1:start_threshold=-60dB:start_silence=0.12,areverse'
+
+
+def voice_fx_filter(rate=1.0, pitch=1.0, sr=48000):
+    """Bộ lọc ffmpeg đổi tốc độ (giữ cao độ) + cao độ theo hệ số pitch (giữ tốc độ), cắt lại đuôi im lặng. Không đổi gì → ''."""
+    (rate, pitch) = (float(rate or 1.0), float(pitch or 1.0))
+    if abs(rate - 1.0) < 0.005 and abs(pitch - 1.0) < 0.0005:
+        return ''
+    return f'{stretch_filter(rate, pitch, sr)},{TAIL_TRIM}'
+
+
+def median_f0(path, sr=16000):
+    """Cao độ trung vị (Hz) của giọng trong file — tự tương quan từng khung 40ms, chỉ khung đủ to & có chu kỳ rõ.
+    Nội suy đỉnh để đo mịn (±0.5Hz). Không đo được → 0."""
+    import numpy as np
+    r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', path, '-ac', '1', '-ar', str(sr), '-af', 'highpass=f=70,lowpass=f=1000',
+                        '-f', 's16le', '-'], capture_output=True, creationflags=_HIDE)
+    x = np.frombuffer(r.stdout, '<i2').astype(np.float32) if r.returncode == 0 else np.zeros(0, np.float32)
+    (n, hop, lo, hi) = (int(0.04 * sr), int(0.02 * sr), int(sr / 500), int(sr / 70))
+    if len(x) < n:
         return 0.0
+    rms_all = np.sqrt(np.mean(x ** 2)) + 1e-9
+    f0 = []
+    for i in range(0, len(x) - n, hop):
+        fr = x[i:i + n] - x[i:i + n].mean()
+        if np.sqrt(np.mean(fr ** 2)) < 0.6 * rms_all:
+            continue
+        ac = np.correlate(fr, fr, 'full')[n - 1:]
+        if ac[0] <= 0:
+            continue
+        k = lo + int(np.argmax(ac[lo:hi]))
+        if ac[k] / ac[0] <= 0.45 or k <= lo or k >= hi - 1:
+            continue
+        (a, b, c) = (ac[k - 1], ac[k], ac[k + 1])
+        d = 0.5 * (a - c) / (a - 2 * b + c) if (a - 2 * b + c) else 0.0
+        f0.append(sr / (k + d))
+    return float(np.median(f0)) if len(f0) >= 5 else 0.0
+
+
+def _sample_rate(path):
+    try:
+        import wave
+        with wave.open(path, 'rb') as w:
+            return w.getframerate()
+    except Exception:
+        try:
+            r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate',
+                                '-of', 'default=noprint_wrappers=1:nokey=1', path], capture_output=True, text=True, creationflags=_HIDE, timeout=15)
+            return int(r.stdout.strip() or 0) or 48000
+        except Exception:
+            return 48000
+
+
+def apply_voice_fx(scenes, rate=1.0, pitch_hz=0.0, log_fn=print, engines=('vieneu',)):
+    """Đổi tốc độ (rate, hệ số) / cao độ (pitch_hz: dời cao độ giọng ± bao nhiêu Hz, như Edge TTS) các câu tạo bằng VieNeu
+    (model không có sẵn 2 tuỳ chọn này) → ghi file mới cạnh file cũ, cập nhật tts_path / tts_duration.
+    Đo cao độ thật từng câu rồi dời đúng số Hz. Câu lỗi giữ nguyên file gốc. → scenes (sửa tại chỗ)."""
+    (rate, pitch_hz) = (float(rate or 1.0), float(pitch_hz or 0.0))
+    if abs(rate - 1.0) < 0.005 and abs(pitch_hz) < 0.05:
+        return scenes
+    todo = [s for s in scenes or [] if s.get('tts_path') and os.path.isfile(s['tts_path'])
+            and (s.get('_tts_engine_used') in engines)]
+    done = 0
+    for s in todo:
+        src = s['tts_path']
+        ratio = 1.0
+        if abs(pitch_hz) >= 0.05:
+            f0 = median_f0(src) or 180.0              # không đo được (câu quá ngắn) → lấy mức giọng nói trung bình
+            ratio = max(0.5, min(2.0, (f0 + pitch_hz) / f0))
+        af = voice_fx_filter(rate, ratio, _sample_rate(src))
+        if not af:
+            continue
+        out = os.path.splitext(src)[0] + '_fx.wav'
+        r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-y', '-i', src, '-af', af, '-c:a', 'pcm_s16le', out],
+                           capture_output=True, creationflags=_HIDE)
+        if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 1000:
+            s['tts_path'] = out
+            s['tts_duration'] = _audio_duration(out) or s.get('tts_duration', 0)
+            done += 1
+    if todo:
+        log_fn(f'   Giọng VieNeu: rate {(rate - 1) * 100:+.0f}% · pitch {pitch_hz:+g}Hz — áp cho {done}/{len(todo)} câu')
+    return scenes

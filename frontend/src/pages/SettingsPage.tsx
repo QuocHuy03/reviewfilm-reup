@@ -5,7 +5,7 @@ import { useStore } from "@/app/store"
 import { AiAccounts } from "@/components/AiAccounts"
 import { AboutPanel } from "@/components/ReleaseNotes"
 import { UpdatePanel } from "@/components/UpdatePanel"
-import { Field, PathInput, Section, Segmented } from "@/components/common"
+import { Field, ToggleRow, PathInput, Section, Segmented } from "@/components/common"
 import { ACCENTS, UI_SCALES, useAppearance, type AccentKey } from "@/app/appearance"
 import { useTheme } from "next-themes"
 import { cn } from "@/lib/utils"
@@ -121,6 +121,10 @@ export function SettingsPage() {
             <Field label="Bố cục dòng"><SimpleSelect value={form.sub_layout} onChange={(v) => setForm({ ...form, sub_layout: v })} items={Object.keys(options.sub_layouts)} /></Field>
           </div>
           <Field label="Giọng đọc mặc định"><VoiceSelect value={form.voice} onChange={(v) => setForm({ ...form, voice: v })} /></Field>
+          <ToggleRow label="Chế độ nhẹ máy" checked={!!form.light_mode} onChange={(v) => setForm({ ...form, light_mode: v })}
+            desc={form.light_mode
+              ? "Đang bật: tool chỉ dùng khoảng một nửa CPU, dựng 1 cảnh mỗi lượt — chậm hơn nhưng vừa chạy vừa làm việc khác thoải mái."
+              : "Tắt (khuyên dùng): tool vẫn chạy ưu tiên thấp và chừa lõi cho máy — máy không đơ. Bật khi cần dùng máy nặng song song (chơi game, dựng video khác…)."} />
         </Section>
       </TabsContent>
 
