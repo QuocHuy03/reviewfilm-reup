@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("rf", {
   usage: () => ipcRenderer.invoke("sys:usage"),
   setTheme: (theme: "dark" | "light") => ipcRenderer.invoke("rf:setTheme", theme),
   setFullScreen: (on: boolean) => ipcRenderer.invoke("rf:setFullScreen", on),
+  focusWindow: () => ipcRenderer.invoke("rf:focusWindow"),
   app: {
     info: () => ipcRenderer.invoke("app:info"),
     releaseNotes: () => ipcRenderer.invoke("app:releaseNotes"),

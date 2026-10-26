@@ -37,6 +37,10 @@ export type JobResult = {
   cast?: CastMember[]         // lồng tiếng: nhân vật AI nhận ra + giọng đang đọc
   /** Dịch phụ đề + lồng tiếng: câu đã lồng (giờ phụ đề, dòng gốc, khung đọc chỉnh tay) — để mở lại sửa trên timeline */
   dub_units?: { start: number; end: number; text: string; orig?: string; parts?: [number, number, string, string?][] | null; voice_start?: number; voice_end?: number }[]
+  /** Dịch phụ đề: bản khung khác dựng cùng lượt (dọc 9:16 / ngang 16:9) */
+  output_variants?: string[]
+  /** phụ đề đã xuất thêm theo định dạng: srt | vtt | ass | bilingual → đường dẫn */
+  sub_exports?: Record<string, string>
   dub_cast?: { labels: number[]; speakers: Record<string, { name?: string; gender?: string; count?: number }> }
 }
 

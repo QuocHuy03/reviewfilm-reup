@@ -125,6 +125,7 @@ export function SettingsPage() {
             desc={form.light_mode
               ? "Đang bật: tool chỉ dùng khoảng một nửa CPU, dựng 1 cảnh mỗi lượt — chậm hơn nhưng vừa chạy vừa làm việc khác thoải mái."
               : "Tắt (khuyên dùng): tool vẫn chạy ưu tiên thấp và chừa lõi cho máy — máy không đơ. Bật khi cần dùng máy nặng song song (chơi game, dựng video khác…)."} />
+          <NotifyToggle />
         </Section>
       </TabsContent>
 
@@ -188,5 +189,15 @@ function Row({ label, value, ok }: { label: string; value?: string; ok?: boolean
         {value ?? (ok ? <CheckCircle2 className="size-4 text-success" /> : <XCircle className="size-4 text-destructive" />)}
       </dd>
     </div>
+  )
+}
+
+/** Thông báo Windows khi job xong / lỗi / chờ duyệt (lưu trên máy, áp dụng ngay). */
+function NotifyToggle() {
+  const [on, setOn] = useState(() => { try { return localStorage.getItem("rf.notify") !== "0" } catch { return true } })
+  return (
+    <ToggleRow label="Thông báo khi job xong" checked={on}
+      onChange={(v) => { setOn(v); try { localStorage.setItem("rf.notify", v ? "1" : "0") } catch { /* bỏ qua */ } }}
+      desc={on ? "Hiện thông báo Windows khi job xong, lỗi hoặc chờ bạn duyệt (lúc đang làm việc khác). Bấm thông báo để mở job." : "Chỉ báo trong app."} />
   )
 }

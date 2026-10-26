@@ -12,6 +12,41 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-10-26
+
+### Added
+- Timeline phụ đề: **số đếm nhanh** dưới tên mỗi làn (Gốc: dòng · cảnh; Giọng: câu · câu dài; Phụ đề: dòng · dòng gấp) và **thu gọn / mở rộng làn**
+  khi bấm tên làn (nhớ lựa chọn).
+
+## [2.8.2] - 2026-10-26
+
+### Added
+- Timeline phụ đề — nút ở đầu làn (icon thật, không emoji): **khoá làn** Giọng / Phụ đề (không kéo, cắt, sửa nhầm; vẫn bấm chọn & tua được),
+  **loa** ở làn Gốc (tắt / bật tiếng gốc khi xem trước), **Kiểu chữ** ở làn Phụ đề (cỡ chữ, in hoa, song ngữ — xem trước ngay trên video,
+  áp vào video khi Xác nhận / Dựng lại).
+
+### Changed
+- Trợ lý AI không dùng emoji (lời chào và câu trả lời đều chữ thuần, chuyên nghiệp).
+
+## [2.8.1] - 2026-10-26
+
+### Added
+- Timeline phụ đề: **nút con mắt** ở làn Phụ đề (phím H) — ẩn phụ đề trên màn xem trước và khi dựng video thì **không ghép chữ Việt
+  nhưng vẫn che phụ đề cũ** (file .srt vẫn xuất). Bật lại là có phụ đề như thường.
+
+## [2.8.0] - 2026-10-26
+
+### Added
+- **Trợ lý AI** (khung chat nổi góc dưới phải + nút trên thanh tiêu đề): hỏi cách dùng app, nhờ giải thích lỗi job đang mở —
+  trả lời từng bước, đúng tên nút. Gửi kèm **ảnh chụp màn hình** (Gemini đọc ảnh; dán bằng Ctrl+V / kéo thả) và **file chữ** (.srt, .log, .txt…).
+  Dùng tài khoản ChatGPT / Gemini đã đăng nhập.
+- **Thông báo khi job xong / lỗi / chờ duyệt**: thông báo trong app + thông báo Windows khi đang làm việc khác, bấm để mở job (tắt được trong Cài đặt).
+- Dịch phụ đề: **phụ đề song ngữ** (dòng Việt + lời gốc nhỏ bên dưới, font chữ Trung / Hàn / Nhật đúng) và **xuất thêm bản dọc 9:16 / ngang 16:9
+  cùng 1 lượt dựng** (nền mờ, video giữa, phụ đề to dưới video).
+- Job Dịch phụ đề đã xong: menu **Xuất phụ đề** — song ngữ (.srt), WebVTT (.vtt), ASS (giữ kiểu chữ) — không dựng lại video.
+- Timeline phụ đề đợt 2: **nghe thử giọng từng câu** ngay trên khối (V, ghi lại thời lượng đọc thật), **chọn nhiều khối** (Ctrl/Shift + bấm, Ctrl+A)
+  để dời cả nhóm, **bấm đúp sửa chữ** trên khối, **phát lặp** khối đang chọn (P).
+
 ## [2.7.0] - 2026-10-26
 
 ### Added
@@ -296,7 +331,11 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.3...HEAD
+[2.8.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.2...v2.8.3
+[2.8.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.1...v2.8.2
+[2.8.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.7.0...v2.8.0
 [2.7.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.4.7...v2.5.0

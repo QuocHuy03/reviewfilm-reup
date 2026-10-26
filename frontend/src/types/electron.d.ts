@@ -76,6 +76,7 @@ export interface ReviewFilmBridge {
   usage: () => Promise<Usage>
   setTheme: (theme: "dark" | "light") => Promise<void>
   setFullScreen: (on: boolean) => Promise<boolean>
+  focusWindow?: () => Promise<void>
   app: {
     info: () => Promise<AppInfo>
     releaseNotes: () => Promise<ReleaseNote[]>

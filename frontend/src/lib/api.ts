@@ -44,7 +44,7 @@ export const api = {
     request<{ box: number[] | null; found: boolean; seconds: number }>("POST", "/api/jobs/detect-sub-box", body),
   redub: (id: string, body: { voice: string; voice_female: string; dub_by_gender: boolean; dub_orig_volume: number; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
     request<JobSummary>("POST", `/api/jobs/${id}/redub`, body),
-  resub: (id: string, body?: { scenes: Scene[]; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
+  resub: (id: string, body?: { scenes: Scene[]; burn_subtitles?: boolean; sub_custom?: Record<string, unknown>; bilingual?: boolean; char_voices?: Record<string, string>; vieneu_rate?: number; vieneu_pitch?: number }) =>
     request<JobSummary>("POST", `/api/jobs/${id}/resub`, body ? { confirmed: true, ...body } : undefined),
   waveform: (id: string) => request<{ rate: number; n: number; peaks: string }>("GET", `/api/jobs/${id}/waveform`),
   shots: (id: string) => request<{ cuts: number[] }>("GET", `/api/jobs/${id}/shots`),
@@ -84,6 +84,7 @@ export const api = {
   createDownload: (urls: string[], quality: string, out_dir = "", titles: Record<string, string> = {}, subs = "", poster = true) =>
     request<JobSummary>("POST", "/api/jobs/download", { urls, quality, out_dir, titles, subs, poster }),
   savePoster: (image: string, title: string, out_dir = "") => request<{ path: string }>("POST", "/api/download/poster", { image, title, out_dir }),
+  exportSubs: (id: string, fmt: "srt" | "vtt" | "ass" | "bilingual") => request<{ path: string }>("POST", `/api/jobs/${id}/export-subs`, { fmt }),
   retryDownload: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/download-retry`),
   downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
   thumbUrl: (url: string, full = false) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}${full ? "&full=1" : ""}`,
@@ -97,6 +98,12 @@ export const api = {
 
   readSrt: (path: string) => request<{ path: string; cues: { start: number; end: number; text: string }[] }>("GET", `/api/srt?path=${encodeURIComponent(path)}`),
   saveSrt: (path: string, cues: { start: number; end: number; text: string }[]) => request<{ ok: boolean }>("PUT", "/api/srt", { path, cues }),
+
+  /** Trợ lý AI (dùng tài khoản ChatGPT / Gemini web đã đăng nhập) */
+  assistantStatus: () => request<{ ready: boolean; chatgpt: boolean; gemini: boolean }>("GET", "/api/assistant/status"),
+  assistantAsk: (messages: { role: "user" | "assistant"; content: string }[], job_id?: string | null, page?: string, images: string[] = []) =>
+    request<{ answer: string }>("POST", "/api/assistant/ask", { messages, job_id: job_id || undefined, page, images }),
+  assistantUpload: (name: string, data: string) => request<{ path: string }>("POST", "/api/assistant/upload", { name, data }),
 }
 
 export const bridge = {

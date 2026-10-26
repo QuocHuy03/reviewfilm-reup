@@ -13,11 +13,13 @@ import { RedubButton } from "./RedubButton"
 import { ResubButton } from "./ResubButton"
 import { FindReplaceBar } from "./GlossaryTools"
 import { VieneuFx, VoiceSelect, isVieneu } from "@/components/VoiceSelect"
+import { stopAllAudio, useAudio } from "@/hooks/useAudio"
 import { SaveBadge } from "./SaveBadge"
 import { StageHeader } from "./StageHeader"
 import { draftFor, useDraftAutosave } from "@/hooks/useDraft"
 import { layoutClips } from "@/components/timeline/useTimelinePlayer"
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { api, bridge, mediaUrl } from "@/lib/api"
@@ -48,10 +50,14 @@ export function StageShell({ title, meta, dot, actions, monitor, side, timeline 
 }
 
 /** Màn hình phát một file video (gốc hoặc đã xuất). */
-function VideoMonitor({ path, videoRef, placeholder, subs }: {
+type SubLook = { size: number; upper: boolean; bilingual: boolean }
+
+function VideoMonitor({ path, videoRef, placeholder, subs, subLook }: {
   path?: string; videoRef?: (el: HTMLVideoElement | null) => void; placeholder: ReactNode
   /** Phụ đề Việt hiện chồng lên video gốc theo đúng giây (Dịch phụ đề) */
   subs?: Scene[]
+  /** kiểu chữ đang chỉnh nhanh (cỡ, in hoa, song ngữ) */
+  subLook?: SubLook
 }) {
   const [el, setEl] = useState<HTMLVideoElement | null>(null)
   // videoRef của trang là hàm mới mỗi lần render → giữ qua ref, để ref của <video> cố định (không gắn lại mỗi khung hình)
@@ -61,12 +67,12 @@ function VideoMonitor({ path, videoRef, placeholder, subs }: {
   if (!path) return <div className="flex flex-col items-center gap-2 text-xs text-white/45">{placeholder}</div>
   return <>
     <video ref={ref} src={mediaUrl(path)} controls preload="metadata" className="max-h-full max-w-full" />
-    {subs && subs.length > 0 && <SubOverlay video={el} scenes={subs} />}
+    {subs && subs.length > 0 && <SubOverlay video={el} scenes={subs} look={subLook} />}
   </>
 }
 
 /** Câu phụ đề tại giây đang phát. Tự nghe video (không qua state của trang) và chỉ vẽ lại khi sang câu khác → không giật. */
-function SubOverlay({ video, scenes }: { video: HTMLVideoElement | null; scenes: Scene[] }) {
+function SubOverlay({ video, scenes, look }: { video: HTMLVideoElement | null; scenes: Scene[]; look?: SubLook }) {
   const [idx, setIdx] = useState(-1)
   const cues = useMemo(() => allCues(scenes), [scenes])
   const list = useRef<SubCue[]>(cues)
@@ -97,12 +103,17 @@ function SubOverlay({ video, scenes }: { video: HTMLVideoElement | null; scenes:
       video.removeEventListener("timeupdate", find)
     }
   }, [video])
-  const text = (idx >= 0 ? cues[idx]?.text : "") || ""
-  if (!text) return null
+  const cue = idx >= 0 ? cues[idx] : undefined
+  const raw = cue?.text || ""
+  if (!raw) return null
+  const text = look?.upper ? raw.toUpperCase() : raw
+  const k = look?.size ?? 1
   return (
     <div className="pointer-events-none absolute inset-x-6 bottom-14 flex justify-center">
-      <span className="max-w-[90%] rounded-md bg-black/65 px-3 py-1 text-center text-[15px] leading-snug font-semibold whitespace-pre-line text-white [text-shadow:0_1px_2px_#000]">
+      <span className="flex max-w-[90%] flex-col items-center rounded-md bg-black/65 px-3 py-1 text-center leading-snug font-semibold whitespace-pre-line text-white [text-shadow:0_1px_2px_#000]"
+        style={{ fontSize: 15 * k }}>
         {text}
+        {look?.bilingual && cue?.orig && <span className="font-medium text-[#f2e8c8]" style={{ fontSize: 15 * k * 0.62 }}>{cue.orig}</span>}
       </span>
     </div>
   )
@@ -296,6 +307,25 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
   const [initial] = useState(scenes)
   const dirty = scenes !== initial || !!saved
   const media = useTimelineMedia(job.id, vietsub)
+  // con mắt ở làn Phụ đề: ẩn → xem trước không có chữ + video xuất không ghép phụ đề Việt (vẫn che phụ đề cũ)
+  const [showSubs, setShowSubs] = useState(job.config.burn_subtitles !== false)
+  const [origMuted, setOrigMuted] = useState(false)
+  useEffect(() => { if (video.current) video.current.muted = origMuted }, [origMuted])
+  // kiểu chữ chỉnh nhanh ở làn Phụ đề → xem trước ngay + gửi kèm khi dựng
+  const { options } = useStore()
+  const custom0 = (job.config.sub_custom ?? {}) as Record<string, unknown>
+  const preset0 = options?.sub_styles?.[String(job.config.sub_style ?? "")]
+  const [subLook, setSubLook] = useState(() => ({
+    size: Number(custom0.sub_font_size_factor ?? preset0?.sub_font_size_factor ?? 1) || 1,
+    upper: (custom0.sub_text_transform ?? preset0?.sub_text_transform) === "uppercase",
+    bilingual: !!job.config.bilingual,
+  }))
+  const lookPayload = { sub_custom: { ...custom0, sub_font_size_factor: subLook.size, sub_text_transform: subLook.upper ? "uppercase" : "none" }, bilingual: subLook.bilingual }
+  const toggleSubs = () => setShowSubs((v) => {
+    toast.info(v ? "Đã ẩn phụ đề" : "Đã hiện phụ đề", {
+      id: "subs-eye", description: v ? "Video xuất ra không ghép chữ Việt — phụ đề cũ vẫn được che. File .srt vẫn có." : "Video xuất ra có ghép phụ đề Việt." })
+    return !v
+  })
   const saveState = useDraftAutosave(job.id, scenes, undefined, !reedit)
   const [busy, setBusy] = useState(false)
   const tl = useStaticTimeline(scenes, job.kind === "vietsub")
@@ -335,6 +365,30 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
   const leave = () => { exiting.current = true; clearResubDraft(job.id); onExit?.() }
   const { voices: allVoices } = useStore()
   const anyVieneu = cast.some((c) => isVieneu(allVoices.find((v) => v.label === voiceOf(c))?.id))
+  // nghe thử giọng 1 câu ngay trên timeline: đúng giọng nhân vật của câu (+ rate / pitch VieNeu) → thời lượng đọc thật
+  const { play, playing: playingUrl } = useAudio()
+  const [voiceBusy, setVoiceBusy] = useState<number | null>(null)
+  const voiceUrls = useRef<Record<number, string>>({})
+  const voicePlaying = playingUrl ? Number(Object.keys(voiceUrls.current).find((k) => voiceUrls.current[Number(k)] === playingUrl) ?? NaN) : NaN
+  const previewVoice = async (i: number) => {
+    if (voicePlaying === i) { stopAllAudio(); return }
+    const s = scenes[i]
+    const text = (s?.voiceover || "").trim()
+    if (!text || voiceBusy !== null) return
+    const c = cast.find((x) => x.id === s.speaker_id)
+    const voice = c ? voiceOf(c) : mainVoice
+    const vn = isVieneu(allVoices.find((v) => v.label === voice)?.id)
+    stopAllAudio()
+    setVoiceBusy(i)
+    try {
+      const r = await api.testVoice(voice, text, vn ? fx : undefined)
+      const url = mediaUrl(r.path)
+      voiceUrls.current[i] = url
+      play(url)
+      return r.duration
+    } catch (e) { toast.error("Không tạo được giọng nghe thử", { description: (e as Error).message }) }
+    finally { setVoiceBusy(null) }
+  }
   const lineCount = useMemo(() => {
     const n: Record<number, number> = {}
     for (const s of scenes) if (s.speaker_id !== undefined) n[s.speaker_id] = (n[s.speaker_id] ?? 0) + 1
@@ -363,7 +417,7 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
       if (!confirmed) { leave(); return }
       setBusy(true)
       try {
-        const n = await api.resub(job.id, { scenes: stripOrig(scenes), ...(byRole ? { char_voices: Object.fromEntries(cast.map((c) => [String(c.id), voiceOf(c)])), ...fx } : {}) })
+        const n = await api.resub(job.id, { scenes: stripOrig(scenes), burn_subtitles: showSubs, ...lookPayload, ...(byRole ? { char_voices: Object.fromEntries(cast.map((c) => [String(c.id), voiceOf(c)])), ...fx } : {}) })
         exiting.current = true
         clearResubDraft(job.id)
         toast.success("Đang dựng lại video", { description: dub ? "Chỉ lồng tiếng lại câu đổi lời · video cũ giữ nguyên" : "Video cũ giữ nguyên" })
@@ -374,7 +428,7 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
     setBusy(true)
     try {
       await api.confirm(job.id, confirmed
-        ? { confirmed, scenes: vietsub ? stripOrig(scenes) : scenes, ...(byRole ? { char_voices: Object.fromEntries(cast.map((c) => [String(c.id), voiceOf(c)])), ...fx } : {}) }
+        ? { confirmed, scenes: vietsub ? stripOrig(scenes) : scenes, ...(vietsub ? { burn_subtitles: showSubs, ...lookPayload } : {}), ...(byRole ? { char_voices: Object.fromEntries(cast.map((c) => [String(c.id), voiceOf(c)])), ...fx } : {}) }
         : { confirmed })
       toast.success(confirmed ? (job.kind === "vietsub" && !dub ? "Đang ghép phụ đề" : "Đang lồng tiếng") : "Đã huỷ job")
     } catch (e) { toast.error((e as Error).message); setBusy(false) }   // thành công: giữ khoá nút tới khi chuyển bước
@@ -404,7 +458,7 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
           {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />} {job.kind === "vietsub" && !dub ? "Xác nhận & ghép phụ đề" : "Xác nhận & lồng tiếng"}
         </Button>
       </>}
-      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} subs={job.kind === "vietsub" ? scenes : undefined}
+      monitor={<VideoMonitor path={job.result.video_path} videoRef={tl.bindVideo(video)} subs={vietsub && showSubs ? scenes : undefined} subLook={vietsub ? subLook : undefined}
         placeholder={<><Film className="size-6" /> Không có video gốc</>} />}
       side={<>
         <FindReplaceBar scenes={scenes} onChange={setScenes} onPick={pick} />
@@ -437,6 +491,10 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
       timeline={vietsub
         ? <SubtitleTimeline scenes={scenes} onChange={setScenes} dub={dub} time={tl.time} playing={tl.playing} selected={tl.selected} duration={tl.duration}
             peaks={media.peaks} shots={media.shots}
+            subtitleVisible={showSubs} onToggleSubtitle={toggleSubs}
+            origMuted={origMuted} onToggleOrigMute={() => setOrigMuted((v) => !v)}
+            subStyleMenu={<SubLookMenu value={subLook} onChange={setSubLook} />}
+            onPreviewVoice={dub ? previewVoice : undefined} voiceBusy={voiceBusy} voicePlaying={Number.isNaN(voicePlaying) ? null : voicePlaying}
             onSeek={tl.seek} onToggle={() => { const v = video.current; if (v) (v.paused ? v.play() : v.pause()) }}
             onSelect={(i) => { tl.setSelected(i); items.current[i]?.scrollIntoView({ block: "nearest", behavior: "smooth" }) }} />
         : <Timeline scenes={scenes} clips={tl.clips} total={tl.total} time={tl.time} playing={tl.playing} selected={tl.selected}
@@ -449,6 +507,53 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
 }
 
 type CastItem = { id: number; name: string; female: boolean }
+
+/** Bảng "Kiểu chữ" ở làn Phụ đề: cỡ chữ, in hoa, song ngữ — xem trước ngay trên video, áp khi dựng. */
+function SubLookMenu({ value, onChange }: { value: SubLook; onChange: (v: SubLook) => void }) {
+  return (
+    <div className="flex flex-col gap-3 text-[12px]">
+      <p className="text-[11px] font-semibold tracking-wider text-white/50 uppercase">Kiểu chữ phụ đề</p>
+      <label className="flex flex-col gap-1.5">
+        <span className="flex justify-between"><span>Cỡ chữ</span><b className="tabular font-mono">{Math.round(value.size * 100)}%</b></span>
+        <input type="range" min={0.7} max={1.6} step={0.05} value={value.size} onChange={(e) => onChange({ ...value, size: Number(e.target.value) })}
+          className="accent-[var(--color-primary)]" />
+      </label>
+      <label className="flex cursor-pointer items-center justify-between">Chữ in hoa
+        <input type="checkbox" checked={value.upper} onChange={(e) => onChange({ ...value, upper: e.target.checked })} className="size-4 accent-[var(--color-primary)]" />
+      </label>
+      <label className="flex cursor-pointer items-center justify-between">Song ngữ (kèm lời gốc)
+        <input type="checkbox" checked={value.bilingual} onChange={(e) => onChange({ ...value, bilingual: e.target.checked })} className="size-4 accent-[var(--color-primary)]" />
+      </label>
+      <p className="text-[10.5px] leading-snug text-white/45">Xem trước ngay trên video. Áp vào video khi bấm Xác nhận / Dựng lại.</p>
+    </div>
+  )
+}
+
+/** Xuất phụ đề theo định dạng (không dựng lại video): SRT · VTT (web / YouTube) · ASS (giữ kiểu chữ) · song ngữ. */
+function ExportSubsMenu({ job }: { job: JobDetail }) {
+  const [busy, setBusy] = useState(false)
+  const run = async (fmt: "srt" | "vtt" | "ass" | "bilingual", label: string) => {
+    setBusy(true)
+    try {
+      const r = await api.exportSubs(job.id, fmt)
+      toast.success(`Đã xuất ${label}`, { description: basename(r.path), action: { label: "Mở thư mục", onClick: () => bridge.reveal(r.path) } })
+    } catch (e) { toast.error("Không xuất được", { description: (e as Error).message }) }
+    finally { setBusy(false) }
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className="ml-auto flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-muted-foreground outline-none hover:bg-muted hover:text-foreground disabled:opacity-50" disabled={busy}>
+        {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Captions className="size-3.5" />} Xuất phụ đề
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onSelect={() => run("bilingual", "phụ đề song ngữ")}>Song ngữ (.srt) <span className="ml-auto text-[10.5px] text-muted-foreground">Việt + gốc</span></DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => run("vtt", "phụ đề VTT")}>WebVTT (.vtt) <span className="ml-auto text-[10.5px] text-muted-foreground">web / YouTube</span></DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => run("ass", "phụ đề ASS")}>ASS (.ass) <span className="ml-auto text-[10.5px] text-muted-foreground">giữ kiểu chữ</span></DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => { const p = job.result.vi_srt!; bridge.reveal(p) }}>SRT (.srt) <span className="ml-auto text-[10.5px] text-muted-foreground">đã có sẵn</span></DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 type Fit = ReturnType<typeof readFit>
 
 /**
@@ -551,9 +656,14 @@ function DoneView({ job, onEdit }: { job: JobDetail; onEdit: () => void }) {
       })}
     </div>
   ), [tl.clips, tl.selected, job.scenes, seek])
+  const exp = job.result.sub_exports ?? {}
   const files = ([
     ["Video", job.result.output_path, Film, "bg-sky-500/15 text-sky-500"],
+    ...(job.result.output_variants ?? []).map((p) => [/_doc_9x16/.test(p) ? "Video dọc 9:16" : "Video ngang 16:9", p, Film, "bg-sky-500/15 text-sky-500"]),
     ["Phụ đề tiếng Việt", job.result.srt_path || job.result.vi_srt, Captions, "bg-violet-500/15 text-violet-500"],
+    ["Phụ đề song ngữ", exp.bilingual, Captions, "bg-violet-500/15 text-violet-500"],
+    ["Phụ đề VTT", exp.vtt, Captions, "bg-violet-500/15 text-violet-500"],
+    ["Phụ đề ASS (giữ kiểu chữ)", exp.ass, Captions, "bg-violet-500/15 text-violet-500"],
     ["Phụ đề gốc", job.result.original_srt, Languages, "bg-muted text-muted-foreground"],
   ].filter(([, p]) => p) as [string, string, typeof Film, string][])
 
@@ -569,7 +679,10 @@ function DoneView({ job, onEdit }: { job: JobDetail; onEdit: () => void }) {
       side={
         <div className="flex flex-col gap-5 p-4">
           <section>
-            <h4 className="mb-2 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">Tệp xuất</h4>
+            <div className="mb-2 flex items-center">
+              <h4 className="text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">Tệp xuất</h4>
+              {job.kind === "vietsub" && job.result.vi_srt && <ExportSubsMenu job={job} />}
+            </div>
             <div className="flex flex-col gap-1.5">
               {files.map(([label, p, Icon, tone]) => (
                 <div key={label} className="group flex items-center gap-3 rounded-lg border border-border bg-background/40 px-2.5 py-2 hover:border-primary/40">

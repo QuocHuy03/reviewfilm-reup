@@ -98,6 +98,28 @@ def create_download(req: DownloadJobRequest):
     return manager.start('download', cfg, pipelines.run_download_pipeline, title).summary()
 
 
+class ExportSubsRequest(BaseModel):
+    fmt: str = 'srt'               # srt | vtt | ass | bilingual
+
+
+@router.post('/{job_id}/export-subs')
+def export_subs(job_id: str, req: ExportSubsRequest):
+    """Dịch phụ đề đã xong → xuất phụ đề SRT / VTT / ASS / song ngữ (cạnh file .srt), không dựng lại video."""
+    try:
+        job = manager.get(job_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    if job.kind != 'vietsub':
+        raise HTTPException(409, 'Chỉ dùng cho job Dịch phụ đề.')
+    try:
+        path = vietsub.export_subs(job, req.fmt)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    job.result.setdefault('sub_exports', {})[req.fmt] = path
+    job.save()
+    return {'path': path}
+
+
 @router.post('/{job_id}/download-retry')
 def retry_download_failed(job_id: str):
     """Job tải video: tải lại ĐÚNG các mục lỗi (tập phim gom theo phim: 'link#ep=3,7'), giữ cấu hình cũ. Tập đã có tự bỏ qua."""
@@ -401,9 +423,11 @@ def resub_job(job_id: str, req: ConfirmRequest | None = None):
         cfg['preset_scenes'] = req.scenes
         if req.char_voices:
             cfg['char_voices'] = {str(k): str(v) for (k, v) in req.char_voices.items() if v}
-        for k in ('vieneu_rate', 'vieneu_pitch'):
+        for k in ('vieneu_rate', 'vieneu_pitch', 'burn_subtitles', 'bilingual'):
             if getattr(req, k) is not None:
                 cfg[k] = getattr(req, k)
+        if req.sub_custom:
+            cfg['sub_custom'] = {**(cfg.get('sub_custom') or {}), **{k: v for (k, v) in req.sub_custom.items() if str(k).startswith('sub_')}}
     if cfg.get('dub_voice') and old.result.get('dub_units'):
         # giữ câu lồng tiếng + vai từng câu đã duyệt lần trước (không phân tích nhân vật lại)
         cfg['dub_plan_reuse'] = {'units': old.result['dub_units'], 'res': old.result.get('dub_cast')}

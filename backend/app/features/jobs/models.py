@@ -41,6 +41,8 @@ class VideoJobRequest(SubtitleOptions):
     auto_sub_box: bool = True                                      # AI tự căn vùng che phụ đề theo chỗ phụ đề cũ thật
     dub_voice: bool = False                                        # Dịch phụ đề: lồng tiếng Việt đúng thời gian câu thoại
     dub_orig_volume: int = Field(20, ge=0, le=100)                 # % âm lượng tiếng gốc khi có lời Việt
+    bilingual: bool = False                                         # Dịch phụ đề: thêm lời gốc nhỏ dưới dòng Việt (song ngữ)
+    extra_aspect: str = ''                                          # Dịch phụ đề: xuất thêm bản '9:16' (video ngang) / '16:9' (video dọc) cùng lượt dựng
     hardsub_source: bool = True                                    # Dịch phụ đề: video có phụ đề cứng → đọc phụ đề trên hình làm lời gốc (thay Whisper)
     dub_only_subbed: bool = True                                   # lồng tiếng: chỉ câu có phụ đề Trung trên hình (lời nhân vật)
     dub_separate: bool = True                                      # lồng tiếng: tách giọng gốc khỏi nhạc nền (bỏ hẳn giọng Trung, giữ nhạc)
@@ -99,6 +101,9 @@ class ConfirmRequest(BaseModel):
     char_voices: Optional[dict[str, str]] = None   # Dịch phụ đề + lồng tiếng: giọng từng nhân vật chọn ở bước duyệt theo vai
     vieneu_rate: Optional[int] = Field(None, ge=-30, le=50)        # rate / pitch chỉnh lại ở bước duyệt theo vai
     vieneu_pitch: Optional[float] = Field(None, ge=-50, le=50)
+    sub_custom: Optional[dict[str, Any]] = None   # Dịch phụ đề: kiểu chữ chỉnh nhanh ở timeline (cỡ chữ, in hoa)
+    bilingual: Optional[bool] = None              # Dịch phụ đề: song ngữ bật / tắt ở timeline
+    burn_subtitles: Optional[bool] = None  # Dịch phụ đề: con mắt ở timeline — False = không ghép phụ đề Việt (vẫn che phụ đề cũ)
 
 
 class RegenRequest(BaseModel):

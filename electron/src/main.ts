@@ -128,6 +128,13 @@ ipcMain.handle("rf:setTheme", (_e, theme: "dark" | "light") => {
   win?.setBackgroundColor(OVERLAY[theme].color)
 })
 ipcMain.handle("sys:usage", () => usage())
+// bấm thông báo "job xong" → đưa cửa sổ app lên trước
+ipcMain.handle("rf:focusWindow", () => {
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
 ipcMain.handle("rf:setFullScreen", (_e, on: boolean) => { win?.setFullScreen(!!on); return win?.isFullScreen() ?? false })
 ipcMain.handle("py:status", () => pyStatus)
 // Lỗi chuẩn bị Python (mất mạng khi tải…) → bấm "Thử lại" trên màn chờ, không phải mở lại app
@@ -187,6 +194,9 @@ if (!app.requestSingleInstanceLock()) {
     win.focus()
   })
 }
+
+// Windows: thông báo hệ thống hiện đúng tên / biểu tượng app (khớp appId của bộ cài)
+if (process.platform === "win32") app.setAppUserModelId("com.taothaoai.reviewfilm")
 
 app.whenReady().then(async () => {
   trackVersion()

@@ -1,6 +1,6 @@
 import {
-  ArrowLeftToLine, ArrowRightToLine, AudioWaveform, Captions, CircleHelp, Combine, Crosshair, Link2, Link2Off, Magnet, Maximize2, Mic, Pause, Play,
-  Redo2, RotateCcw, Scissors, SkipBack, SkipForward, Undo2, Wand2, ZoomIn, ZoomOut,
+  ArrowLeftToLine, ArrowRightToLine, AudioWaveform, Captions, ChevronRight, CircleHelp, Combine, Crosshair, Eye, EyeOff, Lock, LockOpen, Type, VolumeX, Link2, Link2Off, Magnet, Maximize2, Mic, Pause, Play,
+  Loader2, Redo2, Repeat, RotateCcw, Scissors, SkipBack, SkipForward, Square, Undo2, Volume2, Wand2, ZoomIn, ZoomOut,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPE, type ReactNode } from "react"
 import { toast } from "sonner"
@@ -45,7 +45,7 @@ export function useTimelineMedia(jobId: string, enabled: boolean) {
  * Mọi thay đổi chỉ ghi lúc thả chuột → 1 lần Hoàn tác cho 1 lượt kéo, timeline không vẽ lại mỗi pixel ở trang cha.
  */
 
-const HEADER_W = 84
+const HEADER_W = 196
 const RULER_H = 22
 const MIN_PPS = 4
 const MAX_PPS = 400
@@ -62,6 +62,10 @@ const HELP: [string, string][] = [
   ["R", "về giờ gốc"],
   ["↑ ↓ · Space", "dòng trước / sau · phát"],
   ["Ctrl+Z / Y", "hoàn tác / làm lại"],
+  ["Ctrl/Shift + bấm", "chọn nhiều khối · Ctrl+A: chọn hết"],
+  ["Bấm đúp", "sửa chữ ngay trên khối phụ đề"],
+  ["V · P", "nghe thử giọng câu · phát lặp khối"],
+  ["H", "ẩn / hiện phụ đề (video xuất vẫn che chữ cũ)"],
   ["Ctrl + lăn", "zoom"],
 ]
 const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
@@ -92,6 +96,19 @@ type Props = {
   duration?: number
   onSeek: (t: number) => void
   onSelect: (sceneIndex: number) => void
+  /** nghe thử giọng câu (tạo bằng đúng giọng / rate / pitch đã chọn) → thời lượng đọc thật (giây) */
+  onPreviewVoice?: (sceneIndex: number) => Promise<number | void>
+  /** câu đang tạo / đang phát giọng nghe thử */
+  voiceBusy?: number | null
+  voicePlaying?: number | null
+  /** con mắt ở làn Phụ đề: ẩn = không ghép phụ đề Việt (xem trước + video xuất), vẫn che phụ đề cũ */
+  subtitleVisible?: boolean
+  onToggleSubtitle?: () => void
+  /** loa ở làn Gốc: tắt / bật tiếng video gốc khi xem trước */
+  origMuted?: boolean
+  onToggleOrigMute?: () => void
+  /** nút "Kiểu chữ" ở làn Phụ đề: nội dung bảng chỉnh nhanh (do trang cha dựng) */
+  subStyleMenu?: ReactNode
   onToggle: () => void
   /** sóng âm video gốc (useTimelineMedia) */
   peaks?: Peaks | null
@@ -99,7 +116,22 @@ type Props = {
   shots?: number[]
 }
 
-export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selected, duration, onSeek, onSelect, onToggle, peaks, shots = [] }: Props) {
+export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selected, duration, onSeek, onSelect, onToggle, peaks, shots = [],
+  onPreviewVoice, voiceBusy = null, voicePlaying = null, subtitleVisible = true, onToggleSubtitle, origMuted = false, onToggleOrigMute, subStyleMenu }: Props) {
+  // khoá làn: không kéo / cắt / dời / sửa nhầm khối của làn đó (vẫn bấm chọn & tua được)
+  const [locked, setLocked] = useState<Record<LaneKey, boolean>>({ voice: false, sub: false })
+  const [styleOpen, setStyleOpen] = useState(false)
+  // thu gọn làn (bấm tên làn): làn còn 1 dải mỏng, nhớ lựa chọn
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try { return JSON.parse(localStorage.getItem("rf.tl.collapsed") || "{}") } catch { return {} }
+  })
+  const toggleCollapse = (k: string) => setCollapsed((m) => {
+    const n = { ...m, [k]: !m[k] }
+    try { localStorage.setItem("rf.tl.collapsed", JSON.stringify(n)) } catch { /* bỏ qua */ }
+    return n
+  })
+  const laneH = (k: keyof typeof LANES) => (collapsed[k] ? 18 : LANES[k].h)
+  const lockedNote = () => toast.info("Làn đang khoá", { id: "tl-lock", description: "Bấm biểu tượng ổ khoá ở đầu làn để mở." })
   const latest = useRef({ scenes, onChange, onSeek, onSelect, time })
   latest.current = { scenes, onChange, onSeek, onSelect, time }
 
@@ -129,9 +161,24 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
 
   // ── Chọn ──
   const byKey = useMemo(() => new Map(items.map((x) => [x.key, x])), [items])
-  const [selKey, setSelKey] = useState<string | null>(null)
+  const [selKey, setSelKeyRaw] = useState<string | null>(null)
+  /** chọn nhiều (Ctrl / Shift + bấm): dời / dịch cả nhóm cùng lúc */
+  const [multi, setMulti] = useState<Set<string>>(new Set())
+  const setSelKey = (k: string | null) => { setSelKeyRaw(k); setMulti(new Set()) }
+  const toggleMulti = (k: string) => {
+    const n = new Set(multi.size ? multi : selKey ? [selKey] : [])
+    if (n.has(k)) n.delete(k)
+    else n.add(k)
+    setMulti(n)
+    setSelKeyRaw(n.size ? [...n][n.size - 1] : null)
+  }
   const selItem = selKey ? byKey.get(selKey) : undefined
-  useEffect(() => { if (selItem && selItem.scene !== selected) setSelKey(null) }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selSet = multi.size ? multi : selKey ? new Set([selKey]) : new Set<string>()
+  // thời lượng đọc thật của câu đã nghe thử (giây) — thanh "đọc kịp" dùng số thật thay số ước lượng
+  const [realDur, setRealDur] = useState<Record<number, number>>({})
+  // phát lặp khối đang chọn
+  const [loop, setLoop] = useState(false)
+  useEffect(() => { if (selItem && selItem.scene !== selected && multi.size < 2) setSelKey(null) }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Tuỳ chọn ──
   const [snapOn, setSnapOn] = useState(true)
@@ -209,7 +256,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     for (let k = j + 1; k < L.length; k++) if (!keys.has(L[k].key)) { next = L[k]; break }
     return { prev, next }
   }
-  const groupOf = (it: Item, withLink: boolean) => (withLink ? items.filter((x) => x.scene === it.scene) : [it])
+  const groupOf = (it: Item, withLink: boolean) => (withLink ? items.filter((x) => x.scene === it.scene && (x.key === it.key || !locked[x.lane])) : [it])
   const snapPoints = (keys: Set<string>) => {
     const pts = [latest.current.time]
     for (const x of items) if (!keys.has(x.key)) pts.push(x.start, x.end)
@@ -328,11 +375,19 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     e.stopPropagation()
     if (e.button !== 0) return
     e.preventDefault()
+    if (locked[it.lane]) {                     // làn khoá: chỉ chọn + tua tới khối
+      setSelKey(it.key)
+      latest.current.onSelect(it.scene)
+      latest.current.onSeek(it.start)
+      return
+    }
     const el = scroller.current!
     const x0 = e.clientX
     const scroll0 = el.scrollLeft
     // Alt khi bắt đầu kéo = tạm đảo Liên kết; Shift = tạm tắt hít
-    const members = mode === "move" ? groupOf(it, link !== e.altKey) : [it]
+    const additive = e.ctrlKey || e.metaKey || e.shiftKey
+    const base = mode === "move" && selSet.size > 1 && selSet.has(it.key) ? [...selSet].map((k) => byKey.get(k)).filter((x): x is Item => !!x) : [it]
+    const members = mode === "move" ? [...new Map(base.flatMap((b) => groupOf(b, link !== e.altKey)).map((x) => [x.key, x])).values()] : [it]
     const keys = new Set(members.map((m) => m.key))
     const pts = snapOn ? snapPoints(keys) : null
     let moved = false
@@ -383,7 +438,8 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
       if (raf) { cancelAnimationFrame(raf); if (ok) compute() }
       setDragKeys(null)
       setGhost(null)
-      setSelKey(it.key)
+      if (!moved && additive) { toggleMulti(it.key); return }
+      if (!(moved && selSet.size > 1 && selSet.has(it.key))) setSelKey(it.key)
       latest.current.onSelect(it.scene)
       if (!ok) return
       if (!moved) { latest.current.onSeek(it.start); return }
@@ -406,11 +462,14 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   // ── Thao tác trên khối đang chọn (nút + phím tắt) ──
   const nudge = (dt: number) => {
     if (!selItem) return
-    const m = planMove(groupOf(selItem, link), dt, null, 0)
+    if (locked[selItem.lane]) return lockedNote()
+    const base = selSet.size > 1 ? [...selSet].map((k) => byKey.get(k)).filter((x): x is Item => !!x) : [selItem]
+    const m = planMove([...new Map(base.flatMap((b) => groupOf(b, link)).map((x) => [x.key, x])).values()], dt, null, 0)
     if (m.dt !== 0) commit(apply(m.spans))
   }
   const edgeToPlayhead = (edge: "l" | "r") => {
     if (!selItem) return
+    if (locked[selItem.lane]) return lockedNote()
     const t = planTrim(selItem, edge, latest.current.time, null, 0)
     commit(apply(t.spans))
   }
@@ -430,6 +489,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   // Có lồng tiếng: câu (1 lần đọc) giữ nguyên, chỉ chia / nối các DÒNG chữ trong câu (parts). Không lồng tiếng: mỗi dòng là 1 câu.
   const subAt = (t: number) => lanes.sub.find((x) => t > x.start && t < x.end)
   const splitLine = () => {
+    if (locked.sub) return lockedNote()
     const t = latest.current.time
     const it = selItem?.lane === "sub" && t > selItem.start && t < selItem.end ? selItem : subAt(t)
     if (!it) return void toast.info("Đặt đầu phát vào giữa dòng cần tách", { id: "tl-edit" })
@@ -459,6 +519,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     }
   }
   const mergeLine = () => {
+    if (locked.sub) return lockedNote()
     const t = latest.current.time
     const it = selItem?.lane === "sub" ? selItem : lanes.sub.find((x) => t >= x.start && t < x.end)
     if (!it) return void toast.info("Chọn dòng cần gộp với dòng sau", { id: "tl-edit" })
@@ -500,11 +561,44 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     setSelKey(null)
   }
 
+  // ── Sửa chữ ngay trên khối phụ đề (bấm đúp) ──
+  const [editing, setEditing] = useState<{ key: string; text: string } | null>(null)
+  const saveText = (key: string, text: string) => {
+    const it = byKey.get(key)
+    setEditing(null)
+    if (!it || it.lane !== "sub") return
+    const t = text.replace(/\s+/g, " ").trim()
+    if (!t || t === it.text) return
+    const cur = latest.current.scenes
+    const s = cur[it.scene]
+    let next: Scene
+    if (it.part >= 0 && s.parts?.length) {
+      const parts = partsWithText(s)
+      parts[it.part] = [parts[it.part][0], parts[it.part][1], parts[it.part][2], t]
+      const all = parts.map((p) => String(p[3] ?? "").trim()).filter(Boolean).join(" ")
+      next = { ...s, parts, voiceover: all, subtitle: all }
+    } else next = { ...s, voiceover: t, subtitle: t }
+    commit(cur.map((x, i) => (i === it.scene ? next : x)), true)
+  }
+
+  // ── Phát lặp khối đang chọn ──
+  useEffect(() => {
+    if (!loop || !playing || !selItem) return
+    if (time >= selItem.end - 0.02 || time < selItem.start - 0.4) latest.current.onSeek(selItem.start)
+  }, [loop, playing, time, selItem])
+
+  const previewVoice = async (i: number) => {
+    if (!onPreviewVoice) return
+    const d = await onPreviewVoice(i)
+    if (typeof d === "number" && d > 0) setRealDur((m) => ({ ...m, [i]: d }))
+  }
+
   // ── Tốc độ đọc phụ đề ──
   const speeds = useMemo(() => new Map(lanes.sub.map((x) => [x.key, readSpeed(x.text, x.end - x.start)])), [lanes.sub])
   const hurried = useMemo(() => lanes.sub.filter((x) => speeds.get(x.key)!.level !== "ok"), [lanes.sub, speeds])
   /** Tự nới các dòng đọc gấp: kéo dài mép cuối vào khoảng trống phía sau, thiếu nữa thì lùi mép đầu — không đè dòng kề, không vượt chuyển cảnh gần. */
   const fixSpeed = () => {
+    if (locked.sub) return lockedNote()
     const L = lanes.sub
     const cur = L.map((x) => ({ start: x.start, end: x.end }))
     const spans = new Map<string, Span>()
@@ -546,7 +640,8 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     if (!hot.current || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (e.target as HTMLElement)?.isContentEditable) return
     const k = e.key.toLowerCase()
     const ctrl = e.ctrlKey || e.metaKey
-    if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); undo() }
+    if (ctrl && k === "a") { e.preventDefault(); setMulti(new Set(lanes.sub.map((x) => x.key))); setSelKeyRaw(lanes.sub[0]?.key ?? null) }
+    else if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); undo() }
     else if (ctrl && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); redo() }
     else if (ctrl && k === "b") { e.preventDefault(); splitLine() }
     else if (ctrl || e.altKey) return
@@ -559,7 +654,11 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     else if (k === "r" && selItem) { e.preventDefault(); resetScene(selItem.scene) }
     else if (k === "s") { e.preventDefault(); setSnapOn((v) => !v) }
     else if (k === "l") { e.preventDefault(); setLink((v) => !v) }
-    else if (k === "escape") setSelKey(null)
+    else if (k === "escape") { setSelKey(null); setEditing(null) }
+    else if (k === "v") { const i = selItem?.scene ?? selected; if (dub && i !== null && i !== undefined) { e.preventDefault(); previewVoice(i) } }
+    else if (k === "p") { e.preventDefault(); setLoop((v) => !v) }
+    else if (k === "h" && onToggleSubtitle) { e.preventDefault(); onToggleSubtitle() }
+    else if (e.key === "Enter" && selItem?.lane === "sub") { e.preventDefault(); setEditing({ key: selItem.key, text: selItem.text }) }
   }
   useEffect(() => {
     const on = (e: KeyboardEvent) => keyRef.current(e)
@@ -584,7 +683,8 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   /** Thân 1 khối (dùng cho làn và cho bản đang kéo). */
   const voiceInfo = (x: Item, sp: Span) => {
     const slot = Math.max(0.1, sp.end - sp.start)
-    const need = x.text.replace(/\s+/g, " ").length / DUB_CPS
+    const real = realDur[x.scene]
+    const need = real ?? x.text.replace(/\s+/g, " ").length / DUB_CPS
     const ratio = need / slot
     return { slot, need, ratio, level: ratio > 1.35 ? "long" : ratio > 1 ? "fast" : "ok" }
   }
@@ -612,7 +712,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
     return (
       <div className={cn("pointer-events-none relative flex h-full flex-col px-1.5 py-[4px]", showText ? "justify-between" : "justify-end")}>
         {showText && (
-          <span className="flex items-center gap-1 truncate text-[10.5px] leading-tight font-medium text-white/95">
+          <span className={cn("flex items-center gap-1 truncate text-[10.5px] leading-tight font-medium text-white/95", onPreviewVoice && "pl-4")}>
             {x.manual && <span className="size-1.5 shrink-0 rounded-full bg-amber-200" />}
             {x.text}
           </span>
@@ -631,32 +731,45 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
         (rs.level === "bad" ? ` · quá gấp, nên ~${rs.need.toFixed(1)}s` : rs.level === "warn" ? ` · hơi gấp, nên ~${rs.need.toFixed(1)}s` : "") + `\n${x.text}`
     }
     const v = voiceInfo(x, x)
-    return `Câu ${x.scene + 1} · khung đọc ${fmtClock(x.start)} → ${fmtClock(x.end)} (${v.slot.toFixed(1)}s) · cần ~${v.need.toFixed(1)}s` +
+    return `Câu ${x.scene + 1} · khung đọc ${fmtClock(x.start)} → ${fmtClock(x.end)} (${v.slot.toFixed(1)}s) · ${realDur[x.scene] ? "đọc thật " : "cần ~"}${v.need.toFixed(1)}s` +
       (v.level === "long" ? " · dài quá, AI sẽ rút gọn (hoặc nới khung)" : v.level === "fast" ? " · đọc hơi nhanh" : "") + (x.manual ? " · đã chỉnh tay" : "")
   }
 
   const laneEls = useMemo(() => {
     const box = (x: Item) => {
-      const isSel = selKey === x.key
+      const isSel = selSet.has(x.key)
       const lifted = dragKeys?.has(x.key)
+      const busy = voiceBusy === x.scene, on = voicePlaying === x.scene
       return (
         <div key={x.key} onPointerDown={(e) => startDrag(e, x, "move")} title={itemTitle(x)}
-          className={cn("group absolute inset-y-1 cursor-grab overflow-hidden rounded-md border active:cursor-grabbing hover:brightness-110", itemCls(x),
+          onDoubleClick={x.lane === "sub" ? () => (locked.sub ? lockedNote() : setEditing({ key: x.key, text: x.text })) : undefined}
+          className={cn("group absolute inset-y-1 overflow-hidden rounded-md border hover:brightness-110", itemCls(x),
+            locked[x.lane] ? "cursor-pointer saturate-50" : "cursor-grab active:cursor-grabbing",
             selected === x.scene && !isSel && "ring-1 ring-white/35", isSel && "z-10 border-white ring-2 ring-white",
             lifted && "border-dashed opacity-30 ring-0")}
           style={{ left: x.start * pps, width: Math.max(4, (x.end - x.start) * pps) }}>
-          {itemBody(x, x)}
-          <span onPointerDown={(e) => startDrag(e, x, "l")}
-            className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-1.5 after:left-0.5 after:w-[3px] after:rounded-full after:bg-white/0 group-hover:after:bg-white/60 hover:after:bg-white" />
-          <span onPointerDown={(e) => startDrag(e, x, "r")}
-            className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-1.5 after:right-0.5 after:w-[3px] after:rounded-full after:bg-white/0 group-hover:after:bg-white/60 hover:after:bg-white" />
+          {!collapsed[x.lane] && itemBody(x, x)}
+          {x.lane === "voice" && onPreviewVoice && !collapsed.voice && (x.end - x.start) * pps >= 22 && (
+            <button title={on ? "Dừng (V)" : "Nghe thử giọng câu này (V)"} onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); previewVoice(x.scene) }}
+              className={cn("absolute top-[3px] left-1.5 z-20 flex size-4 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/70 [&_svg]:size-2.5",
+                !busy && !on && "opacity-0 group-hover:opacity-100")}>
+              {busy ? <Loader2 className="animate-spin" /> : on ? <Square className="fill-current" /> : <Volume2 />}
+            </button>
+          )}
+          {(x.end - x.start) * pps >= 16 && !locked[x.lane] && <>{/* khối quá hẹp: không tay nắm mép (bấm vào là chọn / kéo cả khối) */}
+            <span onPointerDown={(e) => startDrag(e, x, "l")}
+              className="absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-1.5 after:left-0.5 after:w-[3px] after:rounded-full after:bg-white/0 group-hover:after:bg-white/60 hover:after:bg-white" />
+            <span onPointerDown={(e) => startDrag(e, x, "r")}
+              className="absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize after:absolute after:inset-y-1.5 after:right-0.5 after:w-[3px] after:rounded-full after:bg-white/0 group-hover:after:bg-white/60 hover:after:bg-white" />
+          </>}
         </div>
       )
     }
     return (<>
-      <Lane h={LANES.orig.h} onScrub={startScrub}>
-        {peaks && <Wave peaks={peaks} pps={pps} from={Math.max(0, winFrom)} to={Math.min(total, winTo)} h={LANES.orig.h} />}
-        {origs.map((o, k) => inWin(o) && (
+      <Lane h={laneH("orig")} onScrub={startScrub}>
+        {peaks && <Wave peaks={peaks} pps={pps} from={Math.max(0, winFrom)} to={Math.min(total, winTo)} h={laneH("orig")} />}
+        {!collapsed.orig && origs.map((o, k) => inWin(o) && (
           <div key={k} title={`Gốc ${fmtClock(o.start)} → ${fmtClock(o.end)}\n${o.text}`}
             onPointerDown={(e) => { e.stopPropagation(); latest.current.onSeek(o.start); latest.current.onSelect(o.scene) }}
             className={cn("absolute top-[3px] h-[15px] cursor-pointer overflow-hidden rounded-[3px] border border-dashed border-slate-300/40 bg-slate-600/45 hover:bg-slate-500/60",
@@ -666,10 +779,10 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
           </div>
         ))}
       </Lane>
-      {dub && <Lane h={LANES.voice.h} onScrub={startScrub}>{lanes.voice.filter(inWin).map(box)}</Lane>}
-      <Lane h={LANES.sub.h} onScrub={startScrub}>{lanes.sub.filter(inWin).map(box)}</Lane>
+      {dub && <Lane h={laneH("voice")} onScrub={startScrub}>{lanes.voice.filter(inWin).map(box)}</Lane>}
+      <Lane h={laneH("sub")} onScrub={startScrub}><div className={cn("contents", !subtitleVisible && "[&>div]:opacity-35")}>{lanes.sub.filter(inWin).map(box)}</div></Lane>
     </>)
-  }, [lanes, origs, pps, dragKeys, selKey, selected, dub, link, snapOn, byKey, winFrom, winTo, peaks, speeds, shots, total]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lanes, origs, pps, dragKeys, selKey, multi, selected, subtitleVisible, locked, collapsed, dub, link, snapOn, byKey, winFrom, winTo, peaks, speeds, shots, total, realDur, voiceBusy, voicePlaying]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // vạch chuyển cảnh (chỉ trong vùng đang nhìn)
   // thu nhỏ quá (vạch cách nhau < 14px) → ẩn cho đỡ rối, vẫn hít vào được
@@ -680,13 +793,13 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   )), [shots, pps, winFrom, winTo, total])
 
   // bản đang kéo: lớp nổi trên các làn
-  const laneTop = (lane: LaneKey) => RULER_H + LANES.orig.h + (lane === "sub" && dub ? LANES.voice.h : 0)
+  const laneTop = (lane: LaneKey) => RULER_H + laneH("orig") + (lane === "sub" && dub ? laneH("voice") : 0)
   const ghostEls = ghost && [...ghost.spans].map(([k, sp]) => {
     const x = byKey.get(k)
     if (!x) return null
     return (
       <div key={k} className={cn("pointer-events-none absolute z-30 overflow-hidden rounded-md border shadow-lg ring-2 shadow-black/60 ring-amber-300", itemCls(x))}
-        style={{ left: sp.start * pps, width: Math.max(4, (sp.end - sp.start) * pps), top: laneTop(x.lane) + 4, height: LANES[x.lane].h - 8 }}>
+        style={{ left: sp.start * pps, width: Math.max(4, (sp.end - sp.start) * pps), top: laneTop(x.lane) + 4, height: laneH(x.lane) - 8 }}>
         {itemBody(x, sp)}
       </div>
     )
@@ -716,6 +829,12 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   const empty = items.length === 0
   const selSpan = selItem ? ghost?.spans.get(selItem.key) ?? selItem : undefined
   const laneKeys = (dub ? ["orig", "voice", "sub"] : ["orig", "sub"]) as (keyof typeof LANES)[]
+  const longVoice = lanes.voice.filter((x) => voiceInfo(x, x).level === "long").length
+  const laneStat: Record<keyof typeof LANES, ReactNode> = {
+    orig: <>{origs.length} dòng{shots.length > 0 && ` · ${shots.length} cảnh`}</>,
+    voice: <>{lanes.voice.length} câu{longVoice > 0 && <b className="font-medium text-red-300"> · {longVoice} dài</b>}</>,
+    sub: <>{lanes.sub.length} dòng{hurried.length > 0 && <b className="font-medium text-amber-200"> · {hurried.length} gấp</b>}</>,
+  }
 
   return (
     <div ref={root} onPointerEnter={() => { hot.current = true }}
@@ -734,6 +853,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
           )}
           <IconBtn title="Tách dòng tại đầu phát (Ctrl+B)" onClick={splitLine}><Scissors /></IconBtn>
           <IconBtn title="Gộp với dòng sau (M)" onClick={mergeLine}><Combine /></IconBtn>
+          <IconBtn title={loop ? "Phát lặp khối đang chọn: bật (P)" : "Phát lặp khối đang chọn (P)"} active={loop} onClick={() => setLoop(!loop)}><Repeat /></IconBtn>
           {hurried.length > 0 && (
             <button onClick={fixSpeed} title="Dòng hiện quá nhanh so với số chữ — bấm để tự nới vào khoảng trống"
               className="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-amber-400/15 px-2 text-[11px] font-medium whitespace-nowrap text-amber-200 ring-1 ring-amber-300/30 hover:bg-amber-400/25 [&_svg]:size-3.5">
@@ -741,7 +861,9 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             </button>
           )}
           <Sep />
-          {selItem && selSpan ? <>
+          {multi.size > 1 ? (
+            <span className="shrink-0 text-[11px] whitespace-nowrap text-white/60"><b className="text-white">{multi.size}</b> khối · kéo hoặc ← → để dời cả nhóm · Esc bỏ chọn</span>
+          ) : selItem && selSpan ? <>
             <span className="tabular mr-0.5 shrink-0 text-[11px] whitespace-nowrap text-white/60" title={`${fmtClock(selSpan.start)} → ${fmtClock(selSpan.end)}`}>
               <b className={cn("font-semibold", selItem.lane === "voice" ? "text-orange-300" : "text-violet-300")}>
                 {selItem.lane === "voice" ? "Giọng" : "Phụ đề"} #{selItem.scene + 1}{selItem.part >= 0 && (lanes.sub.filter((x) => x.scene === selItem.scene).length > 1) ? `.${selItem.part + 1}` : ""}
@@ -807,10 +929,46 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             const t = LANES[k]
             const Icon = t.icon
             return (
-              <div key={k} className="relative flex items-center gap-1.5 border-b border-white/10 pr-1.5 pl-3" style={{ height: t.h }} title={`${t.label} — ${t.sub}`}>
-                <span className={cn("absolute inset-y-1.5 left-0 w-[3px] rounded-r", t.accent)} />
-                <span className={cn("flex size-5 shrink-0 items-center justify-center rounded bg-white/5 [&_svg]:size-3.5", t.text)}><Icon /></span>
-                <span className="text-[11px] whitespace-nowrap text-white/60">{t.label}</span>
+              <div key={k} className="relative flex items-center gap-1.5 overflow-hidden border-b border-white/10 pr-1.5 pl-3" style={{ height: laneH(k) }}>
+                <span className={cn("absolute left-0 w-[3px] rounded-r", collapsed[k] ? "inset-y-1" : "inset-y-1.5", t.accent)} />
+                <button onClick={() => toggleCollapse(k)} title={`${t.label} — ${t.sub} · bấm để ${collapsed[k] ? "mở rộng" : "thu gọn"} làn`}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left hover:bg-white/5">
+                  {collapsed[k]
+                    ? <ChevronRight className={cn("size-3 shrink-0", t.text)} />
+                    : <span className={cn("flex size-5 shrink-0 items-center justify-center rounded bg-white/5 [&_svg]:size-3.5", t.text)}><Icon /></span>}
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <span className={cn("truncate text-[11px] whitespace-nowrap", k === "sub" && !subtitleVisible ? "text-white/30 line-through" : "text-white/70")}>{t.label}</span>
+                    {!collapsed[k] && <span className="tabular truncate text-[9.5px] whitespace-nowrap text-white/40">{laneStat[k]}</span>}
+                  </span>
+                </button>
+                <div className={cn("ml-auto flex shrink-0 items-center gap-0.5", collapsed[k] && "hidden")}>
+                  {k === "orig" && onToggleOrigMute && (
+                    <LaneBtn title={origMuted ? "Bật tiếng gốc khi xem trước" : "Tắt tiếng gốc khi xem trước"} on={origMuted} danger onClick={onToggleOrigMute}>
+                      {origMuted ? <VolumeX /> : <Volume2 />}
+                    </LaneBtn>
+                  )}
+                  {k === "sub" && subStyleMenu && (
+                    <div className="relative">
+                      <LaneBtn title="Kiểu chữ phụ đề (cỡ chữ, in hoa, song ngữ)" on={styleOpen} onClick={() => setStyleOpen(!styleOpen)}><Type /></LaneBtn>
+                      {styleOpen && <>
+                        <div className="fixed inset-0 z-40" onClick={() => setStyleOpen(false)} />
+                        <div className="absolute bottom-0 left-full z-50 ml-2 w-64 rounded-lg border border-white/15 bg-[#1f1f23] p-3 text-white/90 shadow-2xl">{subStyleMenu}</div>
+                      </>}
+                    </div>
+                  )}
+                  {k === "sub" && onToggleSubtitle && (
+                    <LaneBtn title={subtitleVisible ? "Ẩn phụ đề (H) — video xuất không ghép chữ Việt, vẫn che phụ đề cũ" : "Hiện phụ đề (H)"}
+                      on={!subtitleVisible} danger onClick={onToggleSubtitle}>
+                      {subtitleVisible ? <Eye /> : <EyeOff />}
+                    </LaneBtn>
+                  )}
+                  {(k === "sub" || k === "voice") && (
+                    <LaneBtn title={locked[k] ? "Mở khoá làn" : "Khoá làn — không kéo / sửa nhầm"} on={locked[k]}
+                      onClick={() => setLocked((m) => ({ ...m, [k]: !m[k as LaneKey] }))}>
+                      {locked[k] ? <Lock /> : <LockOpen />}
+                    </LaneBtn>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -834,6 +992,23 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             )}
             {/* vạch hít + nhãn thời gian khi đang kéo */}
             {ghostEls}
+            {editing && (() => {
+              const x = byKey.get(editing.key)
+              if (!x) return null
+              return (
+                <textarea autoFocus value={editing.text} rows={2}
+                  onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveText(x.key, editing.text) }
+                    else if (e.key === "Escape") setEditing(null)
+                  }}
+                  onBlur={() => saveText(x.key, editing.text)}
+                  onFocus={(e) => e.currentTarget.select()}
+                  className="absolute z-50 resize-none rounded-md border border-violet-300 bg-[#1f1b2e] px-2 py-1 text-[12px] leading-snug text-white shadow-xl ring-2 ring-violet-400/40 outline-none"
+                  style={{ left: Math.max(0, x.start * pps), top: laneTop("sub") - 14, width: Math.max(260, (x.end - x.start) * pps) }} />
+              )
+            })()}
             {ghost?.snapAt !== undefined && (
               <div className="pointer-events-none absolute bottom-0 z-40 w-px bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,.9)]" style={{ left: ghost.snapAt * pps, top: RULER_H }} />
             )}
@@ -890,6 +1065,17 @@ function fmtTick(t: number) {
   const m = Math.floor(t / 60)
   const s = t % 60
   return `${String(m).padStart(2, "0")}:${(Number.isInteger(s) ? String(s) : s.toFixed(1)).padStart(2, "0")}`
+}
+
+function LaneBtn({ title, on, danger, onClick, children }: { title: string; on?: boolean; danger?: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button title={title} aria-pressed={on} onClick={onClick}
+      className={cn("flex size-6 shrink-0 items-center justify-center rounded-md [&_svg]:size-3.5",
+        on ? (danger ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-amber-400/20 text-amber-200 hover:bg-amber-400/30")
+          : "text-white/45 hover:bg-white/10 hover:text-white")}>
+      {children}
+    </button>
+  )
 }
 
 const Sep = () => <span className="mx-1 h-4 w-px shrink-0 bg-white/10" />

@@ -1,8 +1,9 @@
-import { Loader2, PauseCircle, Unplug } from "lucide-react"
+import { Loader2, PauseCircle, Sparkles, Unplug } from "lucide-react"
 import { useStore, type Page } from "@/app/store"
 import { ThemeToggle } from "@/app/theme"
 import type { JobSummary } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { toggleAssistant } from "@/components/AssistantPanel"
 import { LicenseMenu } from "./LicenseMenu"
 import { LogoWordmark } from "./Logo"
 import { SystemMeters } from "./SystemMeters"
@@ -51,6 +52,10 @@ export function AppHeader({ activeJob }: { activeJob: JobSummary | null }) {
       )}
 
       <SystemMeters />
+      <button onClick={toggleAssistant} title="Trợ lý AI" aria-label="Trợ lý AI"
+        className="no-drag flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
+        <Sparkles className="size-3.5" /> <span className="hidden lg:inline">Trợ lý AI</span>
+      </button>
       {window.rf && <LicenseMenu />}
       <ThemeToggle />
     </header>

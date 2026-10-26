@@ -257,13 +257,77 @@ def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
     return _boxes_chain(cur, [(box, style, spans)], w, h, tag)
 
 
-def _write_ass(path, cues, style, w, h, center_y=None):
+def _cjk_font(text):
+    """Font Windows có sẵn cho chữ Hàn / Nhật / Trung (dòng gốc của phụ đề song ngữ)."""
+    if re.search(r'[\uac00-\ud7af]', text):
+        return 'Malgun Gothic'
+    if re.search(r'[\u3040-\u30ff]', text):
+        return 'Yu Gothic UI'
+    if re.search(r'[\u4e00-\u9fff]', text):
+        return 'Microsoft YaHei'
+    return ''
+
+
+def _read_srt(path):
+    from app.srt_utils import parse_srt
+    if not path or not os.path.isfile(path):
+        return []
+    with open(path, encoding='utf-8-sig', errors='replace') as f:
+        return parse_srt(f.read())
+
+
+def _attach_orig(cues, orig_cues):
+    """Song ngữ: mỗi dòng Việt kèm lời gốc cùng lúc (dòng gốc nằm ≥ 50% trong dòng Việt; không có thì dòng trùng nhiều nhất)."""
+    out = []
+    for c in cues:
+        ov = lambda o: min(c['end'], o['end']) - max(c['start'], o['start'])
+        hits = [o for o in orig_cues if ov(o) >= 0.5 * max(0.05, o['end'] - o['start'])]
+        if not hits and orig_cues:
+            best = max(orig_cues, key=ov)
+            hits = [best] if ov(best) > 0 else []
+        out.append({**c, 'orig': ' '.join(str(o['text']).replace('\n', ' ').strip() for o in hits).strip()})
+    return out
+
+
+def _variant_size(cfg, w, h):
+    """Xuất thêm 1 khung hình trong cùng lượt dựng: video ngang → thêm bản dọc 9:16; video dọc → thêm bản ngang 16:9."""
+    if not cfg.get('extra_aspect'):
+        return None
+    if w > h:
+        return (1080, 1920)
+    if h > w:
+        return (1920, 1080)
+    return None
+
+
+def _variant_chain(src, w, h, vw, vh):
+    """Bản khung khác: nền = chính video phóng đầy + làm mờ, video gốc nằm giữa (kiểu CapCut / TikTok). → nhãn [vc]."""
+    if vh > vw:
+        fh = max(2, round(vw * h / w / 2) * 2)
+        (fg, pos) = (f'scale={vw}:{fh}', f'0:{(vh - fh) // 2}')
+    else:
+        fw = max(2, round(vh * w / h / 2) * 2)
+        (fg, pos) = (f'scale={fw}:{vh}', f'{(vw - fw) // 2}:0')
+    return (f'[{src}]split[{src}b][{src}f];[{src}b]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh},'
+            f'scale={vw // 8}:{vh // 8},gblur=sigma=5,scale={vw}:{vh},eq=brightness=-0.1:saturation=0.85[{src}bg];'
+            f'[{src}f]{fg},setsar=1[{src}fg];[{src}bg][{src}fg]overlay={pos},setsar=1[vc]')
+
+
+def _variant_center(w, h, vw, vh):
+    """Bản dọc: phụ đề nằm ngay dưới video (trên nền mờ, chữ to dễ đọc). Bản ngang: đáy như thường."""
+    if vh > vw:
+        fh = vw * h / w
+        return min(0.9, ((vh + fh) / 2 + vh * 0.075) / vh)
+    return None
+
+
+def _write_ass(path, cues, style, w, h, center_y=None, scale=1.0):
     """File ASS có PlayRes = đúng khung video → toạ độ / cỡ chữ chính xác (SRT qua ffmpeg dùng lưới 384x288, lệch dọc ~2%).
     center_y (0-1): tâm phụ đề đặt đúng chỗ (giữa vùng che); không có → đáy giữa, cách đáy theo kiểu phụ đề."""
     kv = dict(p.split('=', 1) for p in _force_style(style).split(','))
     # kiểu chữ của app tính theo lưới 288 dòng; khung dọc (9:16) tính theo bề ngang — chữ vừa video ngang nằm giữa, không
     # to gấp đôi tràn 3 dòng (16:9 giữ nguyên: min(1080, 1440) = 1080)
-    k = min(h, w * 0.75) / 288.0
+    k = min(h, w * 0.75) / 288.0 * scale
     fields = ['Default', kv['FontName'], str(round(float(kv['FontSize']) * k)), kv['PrimaryColour'], kv['PrimaryColour'],
               kv['OutlineColour'], kv['BackColour'], '-1', '0', '0', '0', '100', '100', '0', '0', kv['BorderStyle'],
               str(round(float(kv['Outline']) * k, 1)), '0', '2', str(round(w * 0.06)), str(round(w * 0.06)),
@@ -274,8 +338,14 @@ def _write_ass(path, cues, style, w, h, center_y=None):
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, '
              'StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
              'Style: ' + ','.join(fields), '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
+    main_size = round(float(kv['FontSize']) * k)
     for c in cues:
         text = str(c['text']).replace('\r', '').replace('{', '(').replace('}', ')').replace('\n', '\\N')
+        orig = str(c.get('orig') or '').replace('\r', '').replace('\n', ' ').replace('{', '(').replace('}', ')').strip()
+        if orig:
+            # song ngữ: lời gốc nhỏ (~62%), màu ngà, font có chữ Trung / Hàn / Nhật (font phụ đề Việt thường thiếu → ô vuông)
+            fn = _cjk_font(orig)
+            text += '\\N{\\fs%d\\c&H00C8E8F2&%s}%s' % (max(8, round(main_size * 0.62)), ('\\fn' + fn) if fn else '', orig)
         lines.append(f"Dialogue: 0,{_ass_time(c['start'])},{_ass_time(c['end'])},Default,,0,0,0,,{pos}{text}")
     with open(path, 'w', encoding='utf-8-sig') as f:
         f.write('\n'.join(lines) + '\n')
@@ -1406,9 +1476,11 @@ def run_vietsub_pipeline(job):
                 reply = job.wait_for('script', 'Chờ sửa bản dịch')
             if reply.get('char_voices'):            # giọng từng nhân vật người dùng chọn ở bước duyệt theo vai
                 cfg['char_voices'] = {str(k): str(v) for (k, v) in reply['char_voices'].items() if v}
-            for k in ('vieneu_rate', 'vieneu_pitch'):  # rate / pitch chỉnh lại ở bước duyệt → dùng cho cả lần lồng tiếng này
+            for k in ('vieneu_rate', 'vieneu_pitch', 'burn_subtitles', 'bilingual'):  # chỉnh ở bước duyệt → dùng cho lần dựng này
                 if reply.get(k) is not None:
                     cfg[k] = reply[k]
+            if isinstance(reply.get('sub_custom'), dict):          # kiểu chữ chỉnh nhanh ở timeline (cỡ chữ, in hoa)
+                cfg['sub_custom'] = {**(cfg.get('sub_custom') or {}), **{k: v for (k, v) in reply['sub_custom'].items() if str(k).startswith('sub_')}}
             if reply.get('scenes') is not None:
                 job.scenes = [s for s in reply['scenes'] if (s.get('subtitle') or s.get('voiceover') or '').strip()]
             if dub_plan and dub_plan.get('units') and all('speaker_id' in s for s in job.scenes):
@@ -1535,8 +1607,21 @@ def run_vietsub_pipeline(job):
             # đã làm mờ dải phụ đề cũ → phụ đề Việt chỉ chữ trắng viền đen, KHÔNG ô nền (ô đen chồng lên dải mờ nhìn xám xịt)
             style = {**style, 'sub_box_enabled': False, 'sub_border_width': max(3, int(style.get('sub_border_width', 3) or 3))}
         upper = style.get('sub_text_transform') == 'uppercase'
-        sub_cues = [{**c, 'text': c['text'].upper() if upper else c['text']} for c in cues]
-        _write_ass(os.path.join(temp_dir, 'subs.ass'), sub_cues, style, w, h, sub_cover_center(cfg))
+        orig_cues = _read_srt(job.result.get('original_srt')) if cfg.get('bilingual') else []
+        if cfg.get('bilingual') and not orig_cues:
+            job.log('   [WARN] Không có phụ đề gốc — bỏ qua song ngữ', 'warn')
+        variant = _variant_size(cfg, w, h)
+
+        def write_subs(cues_):
+            sc = [{**c, 'text': c['text'].upper() if upper else c['text']} for c in cues_]
+            if orig_cues:
+                sc = _attach_orig(sc, orig_cues)          # song ngữ: lời gốc nhỏ dưới dòng Việt
+            _write_ass(os.path.join(temp_dir, 'subs.ass'), sc, style, w, h, sub_cover_center(cfg))
+            if variant:
+                _write_ass(os.path.join(temp_dir, 'subs_v.ass'), sc, style, variant[0], variant[1], _variant_center(w, h, *variant),
+                           scale=1.45 if variant[1] > variant[0] else 1.0)     # bản dọc xem trên điện thoại → chữ to hơn
+            return sc
+        sub_cues = write_subs(cues)
         from core.fonts import render_font_files
         fonts_tmp = os.path.join(temp_dir, 'fonts')
         os.makedirs(fonts_tmp, exist_ok=True)
@@ -1656,7 +1741,14 @@ def run_vietsub_pipeline(job):
                 if groups:
                     job.log(f'   Che đúng khung từng câu phụ đề cũ, chỉ lúc câu hiện ({len(groups)} vùng)' if not cleaned
                             else f'   Lấp thêm đúng chỗ phụ đề cũ lúc câu hiện ({len(groups)} vùng) — hết vệt chữ sót trên nền sáng', 'step')
-        if cfg.get('burn_subtitles', True):
+        burn = cfg.get('burn_subtitles', True)
+        if variant:
+            # cùng 1 lượt dựng ra thêm bản khung khác (che chữ cũ đã xong ở trên → dùng chung), phụ đề đặt lại cho khung đó
+            graph.append(f'[{cur}]split[vmain][vvar]')
+            graph.append(_variant_chain('vvar', w, h, *variant))
+            graph.append('[vc]subtitles=subs_v.ass:fontsdir=fonts[vout2]' if burn else '[vc]null[vout2]')
+            cur = 'vmain'
+        if burn:
             graph.append(f'[{cur}]subtitles=subs.ass:fontsdir=fonts[vout]')
         else:
             graph.append(f'[{cur}]null[vout]')
@@ -1669,8 +1761,7 @@ def run_vietsub_pipeline(job):
         if said:
             # có câu AI viết gọn lúc tạo giọng → phụ đề ghi lại theo đúng lời đọc (không để chữ một đằng, giọng một nẻo)
             cues = _part_cues(said, layout)
-            sub_cues = [{**c, 'text': c['text'].upper() if upper else c['text']} for c in cues]
-            _write_ass(os.path.join(temp_dir, 'subs.ass'), sub_cues, style, w, h, sub_cover_center(cfg))
+            sub_cues = write_subs(cues)
             job.result['vi_srt'] = _write_srt(job.result['vi_srt'], cues)
             if job.result.get('dub_units'):
                 job.result['dub_units'] = [{'start': u['start'], 'end': u['end'], 'text': u['text'], 'orig': u.get('orig', ''),
@@ -1693,23 +1784,75 @@ def run_vietsub_pipeline(job):
             else:
                 graph.append(f'[1:a]{mono},alimiter=limit=0.97:level=disabled[aout]')
             amap = ['-map', '[aout]']
+        amap2 = amap
+        if variant and amap == ['-map', '[aout]']:
+            graph.append('[aout]asplit=2[aout1][aout2]')
+            (amap, amap2) = (['-map', '[aout1]'], ['-map', '[aout2]'])
         fg = os.path.join(temp_dir, 'graph.txt')
         with open(fg, 'w', encoding='utf-8') as f:
             f.write(';'.join(graph))
         out_path = _unique_path(os.path.join(out_dir, base + ('_longtieng.mp4' if voice_wav else '_vietsub.mp4')))
         job.set_progress(65, 'Dựng video')
+        out2 = None
+        if variant:
+            out2 = _unique_path(os.path.join(out_dir, base + ('_doc_9x16' if variant[1] > variant[0] else '_ngang_16x9')
+                                             + ('_longtieng.mp4' if voice_wav else '_vietsub.mp4')))
+            job.log(f'   Xuất thêm bản {"dọc 9:16" if variant[1] > variant[0] else "ngang 16:9"} ({variant[0]}x{variant[1]}) cùng lượt dựng'
+                    + (' · phụ đề song ngữ' if orig_cues else ''), 'info')
         job.log(f'[6] Dựng video: {len(cues)} dòng phụ đề' + (f', che {len(regions)} vùng chữ Trung' if regions and cfg.get('auto_cover_text') else '') +
                 (', đã xoá sạch nét chữ cũ' if cleaned else ', che phụ đề cũ (' + ('xoá nhẹ' if cstyle == 'erase' else 'làm mờ') + ')' if band_covered else '') + (', lồng tiếng Việt' if voice_wav else ''), 'info')
         acodec = (['-c:a', 'copy'] if not voice_wav and _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k'])
-        cmd = [FFMPEG_EXE, '-y', '-i', render_src, *extra_in, '-/filter_complex', 'graph.txt', '-map', '[vout]', *amap,
-               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', *acodec,
-               '-movflags', '+faststart', out_path]
+        enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', *acodec, '-movflags', '+faststart']
+        cmd = [FFMPEG_EXE, '-y', '-i', render_src, *extra_in, '-/filter_complex', 'graph.txt', '-map', '[vout]', *amap, *enc, out_path]
+        if out2:
+            cmd += ['-map', '[vout2]', *amap2, *enc, out2]
         _run_ffmpeg(job, cmd, temp_dir, dur)
         job.result['output_path'] = out_path
         job.log(f'[OK] Video: {out_path}', 'ok')
+        if out2 and os.path.isfile(out2):
+            job.result['output_variants'] = [out2]
+            job.log(f'[OK] Bản {"dọc 9:16" if variant[1] > variant[0] else "ngang 16:9"}: {out2}', 'ok')
         job.set_progress(100, 'Hoàn thành')
         if _is_url(cfg['inp']):
             job.result['video_path'] = ''       # video tải về nằm trong thư mục tạm, sẽ bị dọn
+
+
+def export_subs(job, fmt):
+    """Job Dịch phụ đề đã xong → file phụ đề theo định dạng (cạnh file .srt Việt). fmt: srt | vtt | ass | bilingual. → đường dẫn."""
+    from app.srt_utils import fmt_ts
+    vi = job.result.get('vi_srt') or ''
+    cues = _read_srt(vi)
+    if not cues:
+        raise RuntimeError('Không còn file phụ đề tiếng Việt của job này.')
+    stem = os.path.splitext(vi)[0]
+    stem = stem[:-3] if stem.endswith('_vi') else stem
+    if fmt == 'srt':
+        return vi
+    if fmt == 'vtt':
+        path = stem + '_vi.vtt'
+        rows = ['WEBVTT', '']
+        for c in cues:
+            rows += [f"{fmt_ts(c['start']).replace(',', '.')} --> {fmt_ts(c['end']).replace(',', '.')}", str(c['text']).strip(), '']
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(rows))
+        return path
+    if fmt == 'ass':
+        (w, h) = [int(v) for v in str(job.config.get('target_resolution') or '1920x1080').split('x')]
+        path = stem + '_vi.ass'
+        _write_ass(path, cues, _sub_style(job.config), w, h)
+        return path
+    if fmt == 'bilingual':
+        orig = _read_srt(job.result.get('original_srt'))
+        if not orig:
+            raise RuntimeError('Không có phụ đề gốc để ghép song ngữ.')
+        path = stem + '_song_ngu.srt'
+        rows = []
+        for (i, c) in enumerate(_attach_orig(cues, orig), 1):
+            rows += [str(i), f"{fmt_ts(c['start'])} --> {fmt_ts(c['end'])}", str(c['text']).strip()] + ([c['orig']] if c['orig'] else []) + ['']
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(rows))
+        return path
+    raise RuntimeError('Định dạng không hỗ trợ.')
 
 
 def _run_ffmpeg(job, cmd, cwd, dur):

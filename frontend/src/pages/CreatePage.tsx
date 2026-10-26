@@ -55,7 +55,7 @@ const DEFAULT_CFG = {
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
   remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
-  script_edit: true, scene_preview: true, out_dir: "",
+  script_edit: true, scene_preview: true, out_dir: "", bilingual: false, extra_aspect: "",
   auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080",
   watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, intro_path: "", outro_path: "",
   crop_on: false, crop_box: [0, 0, 100, 84] as number[], crop_fill: true, ...DEFAULT_TEXT_COVER,
@@ -361,6 +361,14 @@ export function CreatePage() {
                 desc={cfg.hardsub_source && cfg.remove_old_sub ? "Đọc phụ đề trên hình làm lời gốc, xoá phụ đề cũ." : "Nghe giọng bằng Whisper, không xoá phụ đề cũ."} />
               <ToggleRow label="Hiện phụ đề tiếng Việt trên video" checked={cfg.burn_subtitles} onChange={(v) => set("burn_subtitles", v)}
                 desc={cfg.burn_subtitles ? "Ghép chữ Việt vào video (kèm file .srt)." : "Video không có chữ — vẫn xuất file .srt riêng."} />
+              {cfg.burn_subtitles && (
+                <ToggleRow label="Phụ đề song ngữ" checked={!!cfg.bilingual} onChange={(v) => set("bilingual", v)}
+                  desc={cfg.bilingual ? "Dòng Việt + lời gốc nhỏ bên dưới (kiểu học tiếng)." : "Chỉ hiện dòng tiếng Việt."} />
+              )}
+              <ToggleRow label={cfg.target_resolution === "1080x1920" ? "Xuất thêm bản ngang 16:9" : "Xuất thêm bản dọc 9:16"} checked={!!cfg.extra_aspect}
+                onChange={(v) => set("extra_aspect", v ? (cfg.target_resolution === "1080x1920" ? "16:9" : "9:16") : "")}
+                desc={cfg.extra_aspect ? (cfg.target_resolution === "1080x1920" ? "Thêm bản cho YouTube — dựng cùng lượt." : "Thêm bản cho TikTok / Shorts: nền mờ, phụ đề to dưới video — dựng cùng lượt.")
+                  : "Chỉ xuất 1 khung hình."} />
             </>}
             {mode === "vietsub" && (
               <ToggleRow label="Lồng tiếng Việt" checked={cfg.dub_voice} onChange={(v) => set("dub_voice", v)}

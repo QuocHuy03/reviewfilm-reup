@@ -1,7 +1,7 @@
 import type { Scene, ScenePart } from "@/lib/types"
 
 /** Một dòng phụ đề hiện trên video: câu `scene`, phần `part` (-1 = cả câu, không có thông tin dòng gốc). */
-export type SubCue = { scene: number; part: number; start: number; end: number; text: string }
+export type SubCue = { scene: number; part: number; start: number; end: number; text: string; orig?: string }
 
 /** Python round (làm tròn về số chẵn khi đúng .5) — để chia chữ giống hệt backend. */
 const pyRound = (x: number) => {
@@ -40,8 +40,8 @@ export function splitByParts(text: string, parts: ScenePart[]): string[] {
 export function sceneCues(s: Scene, index: number): SubCue[] {
   const parts = s.parts && s.parts.length ? s.parts : null
   const texts = partTexts(s)
-  if (!parts) return texts[0] ? [{ scene: index, part: -1, start: s.clip_start, end: s.clip_end, text: texts[0] }] : []
-  return parts.flatMap((p, k) => (texts[k] ? [{ scene: index, part: k, start: Number(p[0]), end: Number(p[1]), text: texts[k] }] : []))
+  if (!parts) return texts[0] ? [{ scene: index, part: -1, start: s.clip_start, end: s.clip_end, text: texts[0], orig: s.orig_text || "" }] : []
+  return parts.flatMap((p, k) => (texts[k] ? [{ scene: index, part: k, start: Number(p[0]), end: Number(p[1]), text: texts[k], orig: String(p[2] ?? "") }] : []))
 }
 
 /** Chữ hiện ở từng dòng của câu (cùng số phần tử với parts; không có parts → 1 phần tử = cả câu). */
