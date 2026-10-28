@@ -22,6 +22,7 @@ import { PresetBar } from "@/components/PresetBar"
 import { FxPicker, fxSummary } from "@/components/FxPicker"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/components/ConfirmHost"
+import { ASR_LABELS, asrLabel } from "@/lib/asr"
 
 type Mode = "review" | "reup" | "vietsub"
 type Source = "file" | "batch"
@@ -39,11 +40,15 @@ export function autoReviewMinutes(videoSec: number) {
   return Math.round(Math.max(0.5, Math.min(25, m * r)) * 10) / 10
 }
 
-export function SimpleSelect({ value, onChange, items, placeholder }: { value: string; onChange: (v: string) => void; items: string[]; placeholder?: string }) {
+export function SimpleSelect({ value, onChange, items, placeholder, labels }: {
+  value: string; onChange: (v: string) => void; items: string[]; placeholder?: string
+  /** tên hiển thị theo giá trị (vd mức nhận dạng giọng nói) — thiếu thì hiện chính giá trị */
+  labels?: Record<string, string>
+}) {
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="w-full"><SelectValue placeholder={placeholder} /></SelectTrigger>
-      <SelectContent>{items.map((i) => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent>
+      <SelectTrigger className="w-full"><SelectValue placeholder={placeholder}>{labels?.[value] ?? value}</SelectValue></SelectTrigger>
+      <SelectContent>{items.map((i) => <SelectItem key={i} value={i}>{labels?.[i] ?? i}</SelectItem>)}</SelectContent>
     </Select>
   )
 }
@@ -60,6 +65,8 @@ const DEFAULT_CFG = {
   watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, intro_path: "", outro_path: "",
   crop_on: false, crop_box: [0, 0, 100, 84] as number[], crop_fill: true, ...DEFAULT_TEXT_COVER,
   color_preset: "none", ken_burns: false, ken_burns_zoom: 0.08, vignette: false, transition: "none", transition_duration: 0.5,
+  // âm thanh: giữ nhạc nền gốc (null = theo chế độ: Reup bật, Review tắt) · hiệu ứng âm thanh (Review) · chuẩn âm lượng xuất
+  keep_bg: null as boolean | null, auto_sfx: false, loudness: "youtube" as "youtube" | "off",
 }
 
 
@@ -80,7 +87,7 @@ const batchItems = (v: string) => Array.from(new Set(v.split(/\r?\n/).map((x) =>
 type Tab = "script" | "voice" | "subs" | "fx" | "post" | "output"
 const TABS: { value: Tab; label: string; icon: ReactNode; desc: string }[] = [
   { value: "script", label: "Kịch bản", icon: <Clapperboard />, desc: "Độ dài, bối cảnh phim" },
-  { value: "voice", label: "Giọng đọc", icon: <Mic2 />, desc: "Giọng, tốc độ, phân vai" },
+  { value: "voice", label: "Giọng đọc", icon: <Mic2 />, desc: "Giọng, nhạc nền gốc, hiệu ứng âm thanh" },
   { value: "subs", label: "Phụ đề", icon: <Captions />, desc: "Kiểu chữ, che phụ đề gốc" },
   { value: "fx", label: "Hiệu ứng", icon: <Sparkles />, desc: "Chuyển cảnh, màu, zoom chậm" },
   { value: "post", label: "Hậu kỳ", icon: <Wand2 />, desc: "Tự sửa lỗi, bài đăng, logo, intro/outro" },
@@ -317,9 +324,9 @@ export function CreatePage() {
           </div>
 
           <Section title="Video nguồn" icon={<FileVideo />}
-            desc={mode === "review" ? "Whisper → AI xem phim & viết kịch bản → lồng tiếng → dựng video"
-              : mode === "vietsub" ? "Whisper → dịch tiếng Việt → che phụ đề cũ & ghép phụ đề Việt — giữ nguyên tiếng gốc"
-              : "Whisper → dịch → lồng tiếng → dựng video"}
+            desc={mode === "review" ? "Nhận dạng giọng nói → AI xem phim & viết kịch bản → lồng tiếng → dựng video"
+              : mode === "vietsub" ? "Nhận dạng giọng nói → dịch tiếng Việt → che phụ đề cũ & ghép phụ đề Việt — giữ nguyên tiếng gốc"
+              : "Nhận dạng giọng nói → dịch → lồng tiếng → dựng video"}
             action={<Segmented size="sm" value={source} onChange={(v) => { setSource(v); setInp("") }} items={[
               { value: "file", label: "File", icon: <FileVideo /> },
               { value: "batch", label: "Nhiều video", icon: <ListPlus /> }]} />}>
@@ -342,8 +349,8 @@ export function CreatePage() {
               <Field label="Ngôn ngữ video gốc">
                 <SimpleSelect value={cfg.source_lang} onChange={(v) => set("source_lang", v)} items={options.languages} />
               </Field>
-              <Field label="Whisper model" hint={whisperHint(cfg.whisper_model, cfg.device)}>
-                <SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} />
+              <Field label="Nhận dạng giọng nói" hint={whisperHint(cfg.whisper_model, cfg.device)}>
+                <SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} labels={ASR_LABELS} />
               </Field>
               <Field label="Thiết bị xử lý">
                 <SimpleSelect value={cfg.device} onChange={(v) => set("device", v)} items={options.devices} />
@@ -358,7 +365,7 @@ export function CreatePage() {
             {mode === "vietsub" && <>
               <ToggleRow label="Video gốc có phụ đề Trung in sẵn" checked={cfg.hardsub_source && cfg.remove_old_sub}
                 onChange={(v) => setCfg((c) => ({ ...c, hardsub_source: v, remove_old_sub: v, dub_only_subbed: v }))}
-                desc={cfg.hardsub_source && cfg.remove_old_sub ? "Đọc phụ đề trên hình làm lời gốc, xoá phụ đề cũ." : "Nghe giọng bằng Whisper, không xoá phụ đề cũ."} />
+                desc={cfg.hardsub_source && cfg.remove_old_sub ? "Đọc phụ đề trên hình làm lời gốc, xoá phụ đề cũ." : "Nghe giọng nói để lấy lời gốc, không xoá phụ đề cũ."} />
               <ToggleRow label="Hiện phụ đề tiếng Việt trên video" checked={cfg.burn_subtitles} onChange={(v) => set("burn_subtitles", v)}
                 desc={cfg.burn_subtitles ? "Ghép chữ Việt vào video (kèm file .srt)." : "Video không có chữ — vẫn xuất file .srt riêng."} />
               {cfg.burn_subtitles && (
@@ -502,6 +509,12 @@ export function CreatePage() {
                 <ToggleRow label="Phân vai nhiều giọng" checked={cfg.multi_voice} onChange={(v) => set("multi_voice", v)}
                   desc="AI nhận diện nhân vật, mỗi vai một giọng VieNeu (cần đăng nhập ChatGPT hoặc Gemini)." />
               )}
+              <ToggleRow label="Giữ nhạc nền & tiếng động gốc" checked={cfg.keep_bg ?? mode === "reup"} onChange={(v) => set("keep_bg", v)}
+                desc="Tách bỏ giọng gốc, giữ nhạc + tiếng động dưới lời Việt — nghe như phim lồng tiếng thật. Chạy ngầm trong lúc AI viết kịch bản." />
+              {mode === "review" && (
+                <ToggleRow label="Hiệu ứng âm thanh tự động" checked={cfg.auto_sfx} onChange={(v) => set("auto_sfx", v)}
+                  desc={'Tiếng "vút" khi chuyển cảnh nhảy đoạn, "bùm" ở đoạn cao trào — video review có nhịp hơn.'} />
+              )}
               </Section>
             )}
 
@@ -635,6 +648,8 @@ export function CreatePage() {
                     items={[{ value: "1920x1080", label: "16:9 · 1080p" }, { value: "1280x720", label: "16:9 · 720p" }, { value: "1080x1920", label: "9:16 · Shorts/TikTok" }]} />
                 </Field>
               )}
+              <ToggleRow label="Chuẩn âm lượng YouTube / TikTok" checked={cfg.loudness !== "off"} onChange={(v) => set("loudness", v ? "youtube" : "off")}
+                desc="Đưa độ to video xuất về -14 LUFS như nền tảng khuyến nghị — không bị nhỏ / to bất thường so với video khác." />
               <Field label="Thư mục xuất">
                 <PathInput value={cfg.out_dir} onChange={(v) => set("out_dir", v)} pick={bridge.pickFolder} />
               </Field>
@@ -654,10 +669,16 @@ export function CreatePage() {
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
             <dt className="text-muted-foreground">Chế độ</dt><dd className="text-right">{mode === "review" ? (reviewMins ? `Review ~${reviewMins} phút${cfg.minutes ? "" : " (tự động)"}` : "Review · tự động") : mode === "vietsub" ? (cfg.dub_voice ? "Dịch phụ đề · lồng tiếng" : "Dịch phụ đề · giữ tiếng gốc") : "Dịch & Reup"}</dd>
             {mode !== "vietsub" && <><dt className="text-muted-foreground">Giọng</dt><dd className="truncate text-right">{cfg.voice}</dd></>}
-            <dt className="text-muted-foreground">Whisper</dt><dd className="text-right">{cfg.whisper_model} · {cfg.device.startsWith("GPU") ? "GPU" : "CPU"}</dd>
+            <dt className="text-muted-foreground">Nhận dạng</dt><dd className="text-right">{asrLabel(cfg.whisper_model)} · {cfg.device.startsWith("GPU") ? "GPU" : "CPU"}</dd>
             <dt className="text-muted-foreground">Phụ đề</dt><dd className="truncate text-right">{cfg.burn_subtitles ? cfg.sub_style : "Không ghép"}</dd>
             <dt className="text-muted-foreground">Khung hình</dt><dd className="text-right">{cfg.target_resolution === "1080x1920" ? "9:16 dọc" : cfg.target_resolution === "1280x720" ? "720p" : "1080p"}{cfg.crop_on ? " · cắt khung" : ""}{cfg.auto_cover_text ? " · che chữ Trung" : ""}</dd>
             {mode !== "vietsub" && <><dt className="text-muted-foreground">Hiệu ứng</dt><dd className="truncate text-right">{fxSummary(cfg) || "Không"}</dd></>}
+            <dt className="text-muted-foreground">Âm thanh</dt>
+            <dd className="truncate text-right">{[
+              mode === "vietsub" ? (cfg.dub_voice && cfg.dub_separate ? "Giữ nhạc nền" : "") : (cfg.keep_bg ?? mode === "reup") ? "Giữ nhạc nền" : "",
+              mode === "review" && cfg.auto_sfx ? "Hiệu ứng âm thanh" : "",
+              cfg.loudness !== "off" ? "-14 LUFS" : "",
+            ].filter(Boolean).join(" · ") || "Mặc định"}</dd>
             {mode === "vietsub" && <><dt className="text-muted-foreground">Lồng tiếng</dt><dd className="truncate text-right">{cfg.dub_voice ? (cfg.dub_by_gender && cfg.voice_female ? "Nam / nữ theo nhân vật" : cfg.voice) : "Không (giữ tiếng gốc)"}</dd></>}
             {mode === "vietsub" && <><dt className="text-muted-foreground">Che phụ đề cũ</dt><dd className="text-right">{cfg.remove_old_sub ? (cfg.sub_in_cover ? "Có · phụ đề Việt nằm giữa" : "Có") : "Không"}</dd></>}
             {mode !== "vietsub" && <><dt className="text-muted-foreground">Hậu kỳ</dt><dd className="text-right">{[cfg.auto_post && "Tự hậu kỳ", cfg.auto_fix && "Tự sửa lỗi", cfg.auto_publish && "Bài đăng AI", !cfg.script_edit && !cfg.scene_preview && "Tự động hoàn toàn", cfg.watermark_path && "Logo", (cfg.intro_path || cfg.outro_path) && "Intro/Outro"].filter(Boolean).join(" · ") || "Thủ công"}</dd></>}

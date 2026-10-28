@@ -15,6 +15,7 @@ import subprocess
 import sys
 import urllib.parse
 
+from core import site_cookies
 from core.utils import _HIDE, register_process, unregister_process
 
 # nền tảng: (tên hiển thị, các tên miền)
@@ -67,37 +68,137 @@ def _dtk_session(fresh=False):
     return sess
 
 
-def dtk_resolve(url):
-    """Douyin/TikTok → {title, author, duration, cover, video (link CDN có tiếng), width, height, size}. RuntimeError nếu lỗi."""
+def _dtk_video(data):
+    """Kết quả phân tích (data.kind/media…) → dict gọn cho app. RuntimeError nếu không phải video."""
+    if data.get('kind') != 'video':
+        raise RuntimeError('link này là bài ảnh, không phải video')
+    media = data.get('media') or {}
+    v = media.get('video') or {}
+    if not v.get('url'):
+        raise RuntimeError('không có link video')
+    cover = (media.get('covers') or [{}])[0].get('url', '')
+    return {'title': data.get('title') or data.get('description') or '', 'author': (data.get('author') or {}).get('nickname', ''),
+            'duration': (data.get('duration_ms') or 0) / 1000 or None, 'cover': cover, 'video': v['url'],
+            'width': v.get('width'), 'height': v.get('height'), 'size': v.get('size_bytes'),
+            'platform_label': PLATFORMS.get(data.get('platform'), ('Douyin',))[0]}
+
+
+def _find_result(x):
+    """Tìm khối kết quả (có 'kind') trong phản hồi task — tên khoá có thể là result / data / output."""
+    if isinstance(x, dict):
+        if 'kind' in x and ('media' in x or 'platform' in x):
+            return x
+        for k in ('result', 'data', 'output', 'content'):
+            r = _find_result(x.get(k))
+            if r:
+                return r
+    return None
+
+
+class DtkBusy(RuntimeError):
+    """Nguồn Douyin tạm nghỉ — `minutes`: nên thử lại sau bao lâu (0 = không rõ)."""
+    def __init__(self, msg, minutes=0):
+        super().__init__(msg)
+        self.minutes = minutes
+
+
+_DTK_LOCK = __import__('threading').Lock()      # nhiều link Douyin → hỏi nguồn lần lượt, không dồn dập
+
+
+def dtk_resolve(url, log_fn=None, should_stop=None, budget=240):
+    """Douyin → {title, author, duration, cover, video (link CDN có tiếng), width, height, size}. RuntimeError nếu lỗi.
+
+    Gửi việc rồi hỏi kết quả (không giữ 1 kết nối chờ lâu → Cloudflare cắt thành 502). Nguồn báo lỗi tạm thời
+    (bị Douyin cho nghỉ, đang quá tải…) thì tự chờ đúng thời gian nguồn yêu cầu rồi thử lại, trong `budget` giây."""
+    import time
     import requests
-    for attempt in range(2):
-        try:
-            r = _dtk_session(fresh=attempt > 0).post(f'{DTK_BASE}/api/v1/parse?wait=25', json={'url': url}, timeout=60)
-        except (requests.RequestException, ValueError) as e:
-            raise RuntimeError(f'không kết nối được ({str(e)[:80]})')
-        if r.status_code in (401, 403) and attempt == 0:
-            continue                   # phiên demo hết hạn → đăng nhập lại 1 lần
-        try:
-            d = r.json()
-        except ValueError:
-            raise RuntimeError(f'HTTP {r.status_code}')
-        if not d.get('success'):
-            err = d.get('error')
-            msg = (err.get('message') if isinstance(err, dict) else err) or d.get('title') or ''
-            raise RuntimeError(f'HTTP {r.status_code}' + (f' — {str(msg)[:120]}' if msg else '') + (' (máy chủ đang quá tải/lỗi, thử lại sau)' if r.status_code >= 500 else ''))
-        data = d.get('data') or {}
-        if data.get('kind') != 'video':
-            raise RuntimeError('link này là bài ảnh, không phải video')
-        media = data.get('media') or {}
-        v = media.get('video') or {}
-        if not v.get('url'):
-            raise RuntimeError('không có link video')
-        cover = (media.get('covers') or [{}])[0].get('url', '')
-        return {'title': data.get('title') or data.get('description') or '', 'author': (data.get('author') or {}).get('nickname', ''),
-                'duration': (data.get('duration_ms') or 0) / 1000 or None, 'cover': cover, 'video': v['url'],
-                'width': v.get('width'), 'height': v.get('height'), 'size': v.get('size_bytes'),
-                'platform_label': PLATFORMS.get(data.get('platform'), ('Douyin',))[0]}
-    raise RuntimeError('phiên demo bị từ chối')
+    from core import cancel
+    log = log_fn or (lambda *_: None)
+    stopped = lambda: (should_stop and should_stop()) or cancel.requested()
+    deadline = time.time() + budget
+    last, relogin, waited_note = 'không rõ', False, False
+    retry_at = [0.0]
+
+    def pause(sec, why):
+        nonlocal waited_note
+        retry_at[0] = time.time() + sec
+        if time.time() + sec > deadline:             # nguồn bắt chờ lâu hơn thời gian còn lại → thôi, báo giờ thử lại
+            return False
+        sec = max(3, sec)
+        log(f'   Nguồn Douyin {why} — tự thử lại sau {int(sec)} giây...' if not waited_note else f'   Vẫn bận ({why}) — thử lại sau {int(sec)} giây...')
+        waited_note = True
+        if cancel.sleep(sec) or stopped():
+            raise RuntimeError('Đã huỷ.')
+        return True
+
+    with _DTK_LOCK:
+        while time.time() < deadline:
+            if stopped():
+                raise RuntimeError('Đã huỷ.')
+            try:
+                sess = _dtk_session(fresh=relogin)
+                relogin = False
+                r = sess.post(f'{DTK_BASE}/api/v1/parse', json={'url': url}, timeout=30)
+            except (requests.RequestException, ValueError, KeyError) as e:
+                last = f'không kết nối được ({str(e)[:80]})'
+                if not pause(15, 'không kết nối được'):
+                    break
+                continue
+            except RuntimeError as e:                # đăng nhập demo lỗi / nguồn tắt
+                last = str(e)
+                if not pause(30, str(e)):
+                    break
+                continue
+            if r.status_code in (401, 403) and not relogin:
+                relogin = True
+                continue
+            if r.status_code >= 500:
+                last = f'HTTP {r.status_code}'
+                if not pause(15, 'đang quá tải'):
+                    break
+                continue
+            try:
+                d = r.json()
+            except ValueError:
+                last = f'HTTP {r.status_code}'
+                if not pause(15, 'trả dữ liệu lỗi'):
+                    break
+                continue
+            res = _find_result(d)
+            if res:                                  # trả kết quả ngay (không qua hàng đợi)
+                return _dtk_video(res)
+            tid = ((d.get('data') or {}) if isinstance(d.get('data'), dict) else {}).get('task_id')
+            if not d.get('success') or not tid:
+                err = d.get('error')
+                msg = (err.get('message') if isinstance(err, dict) else err) or d.get('title') or f'HTTP {r.status_code}'
+                raise RuntimeError(str(msg)[:160])
+            # hỏi kết quả tới khi xong (thường 2–10 giây)
+            x, t_end = {}, time.time() + 90
+            while time.time() < t_end:
+                if cancel.sleep(1.5) or stopped():
+                    raise RuntimeError('Đã huỷ.')
+                try:
+                    j = sess.get(f'{DTK_BASE}/api/v1/tasks/{tid}', timeout=20).json()
+                except (requests.RequestException, ValueError):
+                    continue
+                x = j.get('data') or {}
+                if x.get('state') not in ('queued', 'running', 'pending', 'started'):
+                    break
+            res = _find_result(x)
+            if res:
+                return _dtk_video(res)
+            err = x.get('error') or {}
+            code = err.get('code') or x.get('state') or 'không rõ'
+            last = f"{code}: {err.get('message') or ''}".strip(': ')
+            if x.get('state') in ('queued', 'running', 'pending', 'started') or err.get('retryable'):
+                why = {'UPSTREAM_RISK_CONTROL': 'đang bị Douyin cho nghỉ', 'ENDPOINT_CIRCUIT_OPEN': 'đang tạm ngắt',
+                       'RATE_LIMITED': 'đang giới hạn lượt'}.get(code, 'đang bận')
+                if not pause(err.get('retry_after') or 20, why):
+                    break
+                continue
+            raise RuntimeError(last[:160])
+    mins = max(1, round((retry_at[0] - time.time()) / 60)) if retry_at[0] > time.time() else 0
+    raise DtkBusy(f'nguồn Douyin đang tạm nghỉ ({last[:80]})', mins)
 
 
 def extract_url(text):
@@ -143,8 +244,41 @@ def normalize(url):
     return url
 
 
+_JS = {}
+
+
+def _js_runtime():
+    """Trình chạy JavaScript cho yt-dlp (YouTube bắt buộc để giải mã chữ ký): deno cài kèm qua pip → deno/node trên máy."""
+    if 'v' in _JS:
+        return _JS['v']
+    import shutil
+    v = []
+    try:
+        import deno
+        exe = deno.find_deno_bin()
+        if exe and os.path.isfile(exe):
+            v = ['--js-runtimes', f'deno:{exe}']
+    except Exception:
+        pass
+    if not v:
+        for name in ('deno', 'node'):
+            exe = shutil.which(name)
+            if exe:
+                v = ['--js-runtimes', f'{name}:{exe}']
+                break
+    _JS['v'] = v
+    return v
+
+
+def _base_args():
+    """ffmpeg kèm app (ghép hình + tiếng — máy người dùng thường không có ffmpeg trong PATH) + trình chạy JS."""
+    from core.utils import FFMPEG_EXE
+    a = ['--ffmpeg-location', FFMPEG_EXE] if os.path.isfile(FFMPEG_EXE) else []
+    return a + _js_runtime()
+
+
 def _ytdlp(args, timeout=None, proc_cb=None):
-    cmd = [sys.executable, '-m', 'yt_dlp', '--no-warnings', '--encoding', 'utf-8'] + args
+    cmd = [sys.executable, '-m', 'yt_dlp', '--no-warnings', '--encoding', 'utf-8'] + _base_args() + args
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
                          creationflags=_HIDE)
     register_process(p)
@@ -160,6 +294,9 @@ def _ytdlp(args, timeout=None, proc_cb=None):
 def _friendly(err, url):
     e = (err or '').lower()
     (key, label) = detect_platform(url)
+    if key == 'douyin' and 'fresh cookies' in e:
+        return ('Nguồn tải Douyin đang lỗi, cách dự phòng thì Douyin bắt đăng nhập trình duyệt. '
+                'Bấm "Tải lại" sau vài phút, hoặc dán link video trực tiếp (.mp4).')
     if 'cookie' in e or 'login' in e or 'sign in' in e or 'logged' in e:
         return f'{label} chặn tải tự động với video này — thử lại sau ít phút, hoặc dán link video trực tiếp (.mp4).'
     if 'ip address is blocked' in e or 'geo' in e or 'not available in your country' in e:
@@ -174,8 +311,11 @@ def _friendly(err, url):
         # trang tải được nhưng không có luồng video: thường do video chỉ phát cho khu vực khác / bị ẩn
         return (f'{label} không trả về video cho link này — thường do video chỉ cho xem ở khu vực khác (vd kênh nước ngoài), '
                 'bị ẩn hoặc giới hạn. Mở link trên trình duyệt kiểm tra; nếu bị chặn khu vực thì cần VPN.')
+    if 'ffmpeg' in e and ('not installed' in e or 'not found' in e):
+        return 'Thiếu ffmpeg để ghép hình + tiếng — cài lại app hoặc chọn chất lượng thấp hơn.'
     last = [l for l in (err or '').strip().split('\n') if l.strip()]
-    return (last[-1] if last else 'Lỗi không rõ')[:240]
+    errs = [l for l in last if l.startswith('ERROR')]
+    return ((errs or last)[-1] if last else 'Bộ tải dừng mà không báo lỗi — bấm "Cập nhật bộ tải" trong Cài đặt rồi thử lại.')[:240]
 
 
 def _probe_direct(url):
@@ -210,16 +350,36 @@ def probe(url):
     (key, label) = detect_platform(url)
     if key == 'drama':
         return _probe_drama(url, label)
+    cookie = site_cookies.ytdlp_args(key)
+    if cookie:
+        code, out, err = _ytdlp(['-J', '--no-playlist', '--skip-download'] + cookie + [url], timeout=60)
+        if code == 0:
+            try:
+                d = json.loads(out)
+                return {'url': url, 'platform': key, 'platform_label': label, 'title': d.get('title') or d.get('description', '')[:80],
+                        'duration': d.get('duration'), 'thumbnail': d.get('thumbnail'), 'uploader': d.get('uploader') or d.get('channel'),
+                        'width': d.get('width'), 'height': d.get('height')}
+            except ValueError:
+                pass
     if key in DTK_PLATFORMS:
         try:
-            v = dtk_resolve(url)
+            v = dtk_resolve(url, budget=25)
             return {'url': url, 'platform': key, 'platform_label': label, 'title': v['title'], 'duration': v['duration'],
                     'thumbnail': v['cover'], 'uploader': v['author'], 'width': v['width'], 'height': v['height'], 'source': 'dtk'}
         except RuntimeError:
             pass                       # lùi về yt-dlp
-    code, out, err = _ytdlp(['-J', '--no-playlist', '--skip-download', url], timeout=60)
+    if key == 'douyin' and not cookie:        # không cookie thì Douyin chắc chắn đòi phiên → khỏi chạy thử, báo luôn
+        code, out, err = 1, '', 'Fresh cookies (not necessarily logged in) are needed'
+    else:
+        code, out, err = _ytdlp(['-J', '--no-playlist', '--skip-download', url], timeout=60)
     if code != 0:
-        return {'url': url, 'platform': key, 'platform_label': label, 'error': _friendly(err, url)}
+        msg = _friendly(err, url)
+        if key == 'douyin' and 'fresh cookies' in (err or '').lower():
+            # lúc tải, app chờ nguồn rảnh tới vài phút (xem trước chỉ chờ ngắn) → vẫn nên bấm Tải
+            msg = ('Chưa xem trước được — nguồn Douyin đang bận. Vẫn bấm "Tải video" được: app tự chờ nguồn rảnh rồi tải'
+                   + (' (cookie Douyin đã nạp không còn dùng được).' if cookie else '.'))
+        soft = key == 'douyin' and 'fresh cookies' in (err or '').lower()
+        return {'url': url, 'platform': key, 'platform_label': label, 'error': msg, **({'soft': True} if soft else {})}
     try:
         d = json.loads(out)
     except ValueError:
@@ -412,15 +572,72 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
         log_fn(f'   {s.name} · tập {ep.num}')
         meta['thumbnail'] = s.cover
         return download_drama_episode(s, ep, output_dir, log_fn, progress_fn, should_stop)
-    if detect_platform(url)[0] in DTK_PLATFORMS:
+    (key, label) = detect_platform(url)
+    user_cookie = site_cookies.ytdlp_args(key)
+    if user_cookie:                            # người dùng đã nạp cookie nền tảng này → dùng phiên của họ trước (nhanh, ổn định)
+        log_fn(f'   {label}: tải bằng cookie đã nạp...')
+        path, err = _ytdlp_download(url, output_dir, quality, user_cookie, log_fn, progress_fn, should_stop, meta)
+        cookie_bad = 'fresh cookies' in err.lower() or 'cookie' in err.lower() or 'login' in err.lower()
+        if path or cookie_bad:                 # lỗi khác (video bị xoá, mạng…) không nói gì về cookie → không ghi
+            site_cookies.mark(key, bool(path))
+        if path:
+            return path
+        why = 'hết hạn hoặc thiếu phiên' if cookie_bad else _friendly(err, url)[:100]
+        log_fn(f'   [WARN] {label} không nhận cookie đã nạp ({why}) — thử cách khác...')
+    busy = None
+    if key in DTK_PLATFORMS:
         try:
-            v = dtk_resolve(url)
+            v = dtk_resolve(url, log_fn=log_fn, should_stop=should_stop)
             log_fn(f"   {v['platform_label']}: {v['height']}p, không logo — {v['title'][:50]}")
             meta['thumbnail'] = v.get('cover')
             return download_direct(v['video'], output_dir, title or v['title'], log_fn, progress_fn, should_stop)
         except RuntimeError as e:
-            log_fn(f'   [WARN] Nguồn API mở lỗi ({e}) — thử yt-dlp...')
-    (key, label) = detect_platform(url)
+            if str(e) == 'Đã huỷ.':
+                raise
+            busy = e
+            log_fn(f'   [WARN] Nguồn tải Douyin lỗi ({e}) — thử cách dự phòng...')
+    log_fn(f'   {label}: {url}')
+    if key == 'douyin' and user_cookie:
+        path, last_err = None, err             # không cookie thì Douyin chắc chắn từ chối — bỏ lượt thừa
+    else:
+        path, last_err = _ytdlp_download(url, output_dir, quality, [], log_fn, progress_fn, should_stop, meta)
+    if path:
+        return path
+    # trang đòi phiên trình duyệt → thử cookie của trình duyệt có sẵn trên máy (bỏ qua trình duyệt đã biết là đọc không được)
+    if any(w in last_err.lower() for w in ('cookie', 'login', 'sign in', '403', 'blocked')):
+        for b in ('chrome', 'edge', 'firefox'):
+            if _BROWSER_BAD.get(b, 0) > _now():
+                continue
+            if should_stop and should_stop():
+                raise RuntimeError('Đã huỷ.')
+            log_fn(f'   Thử dùng cookie trình duyệt {b}...')
+            path, err = _ytdlp_download(url, output_dir, quality, ['--cookies-from-browser', b], log_fn, progress_fn, should_stop, meta)
+            if path:
+                return path
+            if re.search(r'could not (copy|find|open)|failed to (decrypt|load)|cookie database|unsupported browser', err, re.I):
+                _BROWSER_BAD[b] = _now() + 1800      # trình duyệt đang mở (khoá file) / chưa cài → 30 phút sau mới thử lại
+            else:
+                last_err = err
+    msg = _friendly(last_err, url)
+    if key == 'douyin' and 'fresh cookies' in last_err.lower():
+        mins = getattr(busy, 'minutes', 0) if isinstance(busy, DtkBusy) else 0
+        wait = f'sau khoảng {mins} phút' if mins else 'sau vài phút'
+        msg = (f'Nguồn tải Douyin miễn phí đang tạm nghỉ (Douyin chặn lượt tải dồn dập) — bấm "Tải lại" {wait}, '
+               'hoặc nạp cookie Douyin (khung "Cookie Douyin" bên phải) để tải ổn định.' if not user_cookie else
+               'Cookie Douyin đã hết hạn — mở douyin.com trên trình duyệt, xuất lại cookie rồi nạp lại.')
+    raise RuntimeError(msg)
+
+
+_BROWSER_BAD = {}
+
+
+def _now():
+    import time
+    return time.time()
+
+
+def _ytdlp_download(url, output_dir, quality, extra, log_fn, progress_fn, should_stop, meta):
+    """1 lượt yt-dlp → (đường dẫn file | None, stderr)."""
     os.makedirs(output_dir, exist_ok=True)
     template = os.path.join(output_dir, '%(title).80B [%(id)s].%(ext)s')
     fmt = QUALITY.get(quality, QUALITY['best'])
@@ -429,56 +646,44 @@ def download(url, output_dir, log_fn=print, quality='best', progress_fn=None, sh
             '--progress-template', 'download:RFPROG %(progress._percent_str)s|%(progress._total_bytes_str)s%(progress._total_bytes_estimate_str)s|%(progress._speed_str)s|%(progress._eta_str)s']
     if quality != 'audio':
         base += ['--merge-output-format', 'mp4']
-    # trang đòi phiên trình duyệt → thử thêm cookie của trình duyệt có sẵn trên máy (không cần đăng nhập trong app)
-    attempts = [[]] + [['--cookies-from-browser', b] for b in ('chrome', 'edge', 'firefox')]
-    log_fn(f'   {label}: {url}')
-    last_err = ''
-    for (k, extra) in enumerate(attempts):
-        if should_stop and should_stop():
-            raise RuntimeError('Đã huỷ.')
-        if k:
-            log_fn(f'   Thử dùng cookie trình duyệt {extra[-1]}...')
-        lines_out, err_lines = [], []
+    lines_out, err_lines = [], []
 
-        def run(p):
-            # đọc stderr ở luồng riêng SONG SONG: đọc hết stdout rồi mới đọc stderr thì yt-dlp in nhiều lỗi (đầy bộ đệm
-            # stderr) sẽ đứng chờ ghi, còn ta đứng chờ stdout → treo mãi
-            import threading
-            t_err = threading.Thread(target=lambda: err_lines.append(p.stderr.read()), daemon=True)
-            t_err.start()
-            for line in p.stdout:
-                line = line.strip()
-                if should_stop and should_stop():
-                    p.kill()
-                    break
-                if line.startswith('RFPROG'):
-                    if progress_fn:
-                        parts = [x.strip() for x in line[6:].split('|')]
-                        try:
-                            pct = float(parts[0].rstrip('%'))
-                        except ValueError:
-                            continue
-                        clean = [re.sub(r'N/?A|Unknown( B/s)?', '', x).strip() for x in parts[1:4]] + ['', '', '']
-                        progress_fn(pct, clean[0], clean[1], clean[2])
-                elif line.startswith('RFTHUMB '):
-                    meta['thumbnail'] = line[8:].strip() if line[8:].strip() not in ('NA', 'None') else None
-                elif line and not line.startswith('['):
-                    lines_out.append(line)
-            p.wait()
-            t_err.join(timeout=10)
-            return p.returncode
+    def run(p):
+        # đọc stderr ở luồng riêng SONG SONG: đọc hết stdout rồi mới đọc stderr thì yt-dlp in nhiều lỗi (đầy bộ đệm
+        # stderr) sẽ đứng chờ ghi, còn ta đứng chờ stdout → treo mãi
+        import threading
+        t_err = threading.Thread(target=lambda: err_lines.append(p.stderr.read()), daemon=True)
+        t_err.start()
+        for line in p.stdout:
+            line = line.strip()
+            if should_stop and should_stop():
+                p.kill()
+                break
+            if line.startswith('RFPROG'):
+                if progress_fn:
+                    parts = [x.strip() for x in line[6:].split('|')]
+                    try:
+                        pct = float(parts[0].rstrip('%'))
+                    except ValueError:
+                        continue
+                    clean = [re.sub(r'N/?A|Unknown( B/s)?', '', x).strip() for x in parts[1:4]] + ['', '', '']
+                    progress_fn(pct, clean[0], clean[1], clean[2])
+            elif line.startswith('RFTHUMB '):
+                meta['thumbnail'] = line[8:].strip() if line[8:].strip() not in ('NA', 'None') else None
+            elif line and not line.startswith('['):
+                lines_out.append(line)
+        p.wait()
+        t_err.join(timeout=10)
+        return p.returncode
 
-        code = _ytdlp(base + extra + [url], proc_cb=run)
-        if should_stop and should_stop():
-            raise RuntimeError('Đã huỷ.')
-        if code == 0:
-            for line in reversed(lines_out):
-                if os.path.isfile(line):
-                    return line
-        last_err = ''.join(err_lines)
-        if k == 0 and not any(w in last_err.lower() for w in ('cookie', 'login', 'sign in', '403', 'blocked')):
-            break                      # lỗi không liên quan đăng nhập → thử cookie trình duyệt cũng vô ích
-    raise RuntimeError(_friendly(last_err, url))
+    code = _ytdlp(base + extra + [url], proc_cb=run)
+    if should_stop and should_stop():
+        raise RuntimeError('Đã huỷ.')
+    if code == 0:
+        for line in reversed(lines_out):
+            if os.path.isfile(line):
+                return line, ''
+    return None, ''.join(err_lines)
 
 
 def download_video(url, output_dir, log_fn=print):
@@ -640,7 +845,7 @@ def tool_version():
 
 def update_tool():
     """Cập nhật yt-dlp lên bản mới nhất (các nền tảng đổi cách chống tải liên tục)."""
-    r = subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'yt-dlp'], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-U', 'yt-dlp[default]'], capture_output=True, text=True,
                        encoding='utf-8', errors='replace', timeout=300, creationflags=_HIDE)
     return r.returncode == 0, (r.stderr or r.stdout)[-300:], tool_version()
 

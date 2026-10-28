@@ -10,7 +10,7 @@ import { Slider } from "@/components/ui/slider"
 import { api } from "@/lib/api"
 import type { JobDetail } from "@/lib/types"
 
-/** Dịch phụ đề đã xong → lồng tiếng Việt từ bản dịch có sẵn (không chạy lại Whisper / dịch). */
+/** Dịch phụ đề đã xong → lồng tiếng Việt từ bản dịch có sẵn (không chạy lại nhận dạng / dịch). */
 export function RedubButton({ job }: { job: JobDetail }) {
   const { openJob, voices } = useStore()
   const [open, setOpen] = useState(false)
@@ -46,7 +46,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
   return (
     <>
       <Button size="sm" variant={dubbed ? "outline" : "default"} onClick={() => setOpen(true)}
-        title="Lồng tiếng Việt cho video này từ bản dịch đã có — không chạy lại Whisper / dịch">
+        title="Lồng tiếng Việt cho video này từ bản dịch đã có — không chạy lại nhận dạng / dịch">
         <Mic2 /> {dubbed ? "Lồng tiếng lại" : "Lồng tiếng"}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -54,7 +54,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
           <DialogHeader>
             <DialogTitle>{dubbed ? "Lồng tiếng lại" : "Lồng tiếng Việt"}</DialogTitle>
             <DialogDescription>
-              Dùng lại bản dịch {job.scenes.length} dòng của video này (không chạy lại Whisper / dịch, video cũ giữ nguyên).
+              Dùng lại bản dịch {job.scenes.length} dòng của video này (không chạy lại nhận dạng / dịch, video cũ giữ nguyên).
               Các bước: phân tích nhân vật → dừng ở <b>Duyệt kịch bản theo vai</b> để bạn kiểm tra ai nói câu nào & chọn giọng từng nhân vật → rồi mới lồng tiếng.
             </DialogDescription>
           </DialogHeader>

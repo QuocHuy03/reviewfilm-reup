@@ -40,7 +40,17 @@ type Cover = {
   text_regions?: TextRegion[] | null
 } & TextCover
 const FULL_CROP: CoverBox = [0, 0, 100, 100]
-type Mixer = { original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean; cover?: Cover; fx?: Fx }
+type Mixer = {
+  original_volume: number; bgm_path: string; bgm_volume: number; audio_ducking: boolean; cover?: Cover; fx?: Fx
+  /** giữ nhạc nền & tiếng động gốc (tách giọng) · mức nhạc nền % · hiệu ứng âm thanh tự động (Review) — chưa chỉnh = theo cấu hình job */
+  keep_bg?: boolean; bg_volume?: number; auto_sfx?: boolean
+}
+/** Giá trị âm thanh nâng cao đang áp dụng: đã chỉnh ở Hậu kỳ > cấu hình lúc tạo job > mặc định (Reup giữ nhạc nền, Review thì không). */
+function audioExtras(mixer: Mixer, jcfg: Record<string, unknown>, mode: "review" | "reup") {
+  const keep = mixer.keep_bg ?? (jcfg.keep_bg == null ? mode === "reup" : Boolean(jcfg.keep_bg))
+  const vol = mixer.bg_volume ?? (jcfg.bg_volume == null ? (mode === "reup" ? 90 : 35) : Math.round(Number(jcfg.bg_volume) * 100))
+  return { keep_bg: keep, bg_volume: vol, auto_sfx: mixer.auto_sfx ?? Boolean(jcfg.auto_sfx) }
+}
 const DEFAULT_BOX: CoverBox = [10, 84, 80, 10]
 
 /** Chạy fn cho từng phần tử, tối đa `limit` việc cùng lúc. Tạo giọng mỗi câu tốn ~1 phút chờ máy chủ → chạy song song thay vì lần lượt. */
@@ -310,6 +320,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
     try {
       await api.confirm(job.id, confirmed ? {
         confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking,
+          ...(({ keep_bg, bg_volume, auto_sfx }) => ({ keep_bg, bg_volume: bg_volume / 100, auto_sfx }))(audioExtras(mixer, job.config as Record<string, unknown>, mode)),
           cover: mixer.cover ? {
             remove_old_sub: cover.remove_old_sub, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [], sub_margin_pct: cover.sub_margin_pct,
             crop_box: cover.crop_on ? cover.crop_box : [], crop_fill: cover.crop_fill, burn_subtitles: cover.burn_subtitles, sub_in_cover: !!cover.sub_in_cover,
@@ -425,7 +436,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
                     <FxPicker fx={fx} onChange={setFx} compact />
                   </div>
                 </TabsContent>
-                <TabsContent value="audio"><AudioTab mixer={mixer} setMixer={setMixer} /></TabsContent>
+                <TabsContent value="audio"><AudioTab mixer={mixer} setMixer={setMixer} mode={mode} jcfg={job.config as Record<string, unknown>} /></TabsContent>
                 <TabsContent value="checks"><ChecksTab issues={issues} onPick={(i) => { select(i); setTab("scene") }} /></TabsContent>
                 <TabsContent value="ai">
                   <AiTab job={job} scenes={scenes} regen={regen} update={edit} regenerate={regenerate} onPick={select} />
@@ -668,12 +679,24 @@ function CoverTab({ cover, setCover, editing, setEditing, cropEditing, setCropEd
   )
 }
 
-function AudioTab({ mixer, setMixer }: { mixer: Mixer; setMixer: (m: Mixer) => void }) {
+function AudioTab({ mixer, setMixer, mode, jcfg }: { mixer: Mixer; setMixer: (m: Mixer) => void; mode: "review" | "reup"; jcfg: Record<string, unknown> }) {
+  const x = audioExtras(mixer, jcfg, mode)
   return (
     <div className="flex flex-col gap-5">
-      <Group label="Tiếng gốc của phim" hint={`${mixer.original_volume}%`}>
+      <ToggleRow label="Giữ nhạc nền & tiếng động gốc" checked={x.keep_bg} onChange={(v) => setMixer({ ...mixer, keep_bg: v })}
+        desc="Tách bỏ giọng gốc, giữ lại nhạc + tiếng động — nghe như phim lồng tiếng thật. Lần đầu mất thêm thời gian tách (có GPU nhanh hơn nhiều)." />
+      {x.keep_bg && (
+        <Group label="Âm lượng nhạc nền gốc" hint={`${x.bg_volume}%`}>
+          <Slider value={[x.bg_volume]} max={150} step={5} onValueChange={([v]) => setMixer({ ...mixer, bg_volume: v })} />
+        </Group>
+      )}
+      <Group label={x.keep_bg ? "Tiếng gốc (khi không tách được)" : "Tiếng gốc của phim"} hint={`${mixer.original_volume}%`}>
         <Slider value={[mixer.original_volume]} max={100} onValueChange={([v]) => setMixer({ ...mixer, original_volume: v })} />
       </Group>
+      {mode === "review" && (
+        <ToggleRow label="Hiệu ứng âm thanh tự động" checked={x.auto_sfx} onChange={(v) => setMixer({ ...mixer, auto_sfx: v })}
+          desc={'Tiếng "vút" khi chuyển cảnh nhảy đoạn, "bùm" ở đoạn cao trào — video review có nhịp hơn.'} />
+      )}
       <Group label="Nhạc nền">
         <PathInput value={mixer.bgm_path} onChange={(v) => setMixer({ ...mixer, bgm_path: v })} pick={bridge.pickAudio} placeholder="Chọn file nhạc (tuỳ chọn)" />
       </Group>

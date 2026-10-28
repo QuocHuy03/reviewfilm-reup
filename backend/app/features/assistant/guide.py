@@ -1,10 +1,10 @@
-"""Cẩm nang ReviewFilm Studio cho Trợ lý AI — viết theo đúng giao diện hiện tại (bản 2.7.0).
+"""Cẩm nang ReviewFilm Studio cho Trợ lý AI — viết theo đúng giao diện hiện tại (bản 2.8.3).
 
 Chỉ ghi những gì có thật trong app. Đổi giao diện / thêm tính năng thì cập nhật ở đây.
 """
 
 APP_GUIDE = """
-# CẨM NANG REVIEWFILM STUDIO (bản 2.7.0)
+# CẨM NANG REVIEWFILM STUDIO (bản 2.8.3)
 
 App desktop biến phim dài thành video review / dịch & reup có thuyết minh + phụ đề.
 AI (xem phim, viết kịch bản, dịch, phân vai, bài đăng) chạy bằng TÀI KHOẢN ChatGPT / Gemini web đăng nhập trong app — không cần API key OpenAI/Gemini.
@@ -13,7 +13,19 @@ Job chạy theo hàng đợi, mỗi lúc 1 job nặng; job đang chờ bạn s�
 ## THANH BÊN TRÁI (thứ tự từ trên xuống)
 - Tổng quan · Tải video · Tạo video · Studio · Lịch sử · Phụ đề · Giọng đọc
 - Dưới cùng: Hỗ trợ (mở taothaoai.com — hướng dẫn, báo lỗi, liên hệ) và Cài đặt (biểu tượng bánh răng).
-- Thanh trên cùng: nút job đang chạy (bấm để mở job trong Studio), đồng hồ CPU/RAM/GPU, nút sáng/tối, nút Trợ lý AI.
+- Thanh trên cùng: nút job đang chạy (bấm để mở job trong Studio), đồng hồ CPU/RAM/GPU, nút "Trợ lý AI", nút sáng/tối.
+- Nút tròn góc dưới bên phải (ẩn ở trang Studio để không che timeline) = mở Trợ lý AI.
+
+## TRỢ LÝ AI (chính là bạn)
+- Khung chat nổi góc dưới phải; mở bằng nút tròn hoặc nút "Trợ lý AI" trên thanh tiêu đề; Esc / nút gạch ngang = thu nhỏ; "Cuộc trò chuyện mới".
+- Gửi kèm: bấm biểu tượng ghim, kéo thả, hoặc dán ảnh chụp màn hình bằng Ctrl+V. Ảnh (PNG/JPG/WEBP/GIF ≤ 8 MB) — đọc được khi đã đăng nhập Gemini;
+  file chữ (.srt, .vtt, .ass, .txt, .log, .json, .md, .csv ≤ 2 MB) — đọc nội dung.
+- Khi đang mở 1 job trong Studio, trợ lý xem được trạng thái, lỗi và nhật ký của job đó.
+- Cần đăng nhập ChatGPT hoặc Gemini (Cài đặt → "Tài khoản AI").
+
+## THÔNG BÁO
+- Job xong / lỗi / đang chờ bạn duyệt → hiện thông báo trong app (nút "Mở"); nếu bạn đang làm việc khác thì có thêm thông báo Windows — bấm để mở đúng job.
+- Tắt ở Cài đặt → "Mặc định" → "Thông báo khi job xong".
 
 ## ĐĂNG NHẬP TÀI KHOẢN AI (quan trọng nhất)
 Cài đặt → tab "Tài khoản AI":
@@ -36,6 +48,10 @@ Cài đặt → tab "Tài khoản AI":
 6. Bấm "Tải video" / "Tải N video".
 - Phim ngắn (DramaBox, GoodShort, ShortMax, NetShort, FreeReels, KissKH, Hồng Quả, DramaWave, RaptDrama, FlexTV, StardustTV): 1 link = cả bộ. Ô "Tập:" chọn tập, vd 1-10,15; để trống = tất cả. Tải 3 tập song song.
 - Nền tảng hỗ trợ (không cần đăng nhập): Douyin, Bilibili, Weibo, AcFun, Youku, Tencent Video, Mango TV, Huya, TikTok, YouTube, Instagram, Pinterest, Dailymotion, Twitch, link .mp4 trực tiếp.
+- Douyin dùng nguồn tải miễn phí dùng chung, đôi lúc bị Douyin cho "nghỉ" vài phút: app tự chờ rồi thử lại; lâu quá thì báo
+  "bấm Tải lại sau khoảng N phút". Muốn tải Douyin ổn định: khung "Cookie Douyin" (cột phải trang Tải video) → mở douyin.com
+  trên Chrome/Edge, xem 1 video (không cần đăng nhập) → extension "Get cookies.txt LOCALLY" → Export → "Nạp file cookie"
+  (hoặc "Dán cookie"). Khung báo đỏ "Douyin không nhận cookie" = cookie hết hạn → xuất lại rồi nạp lại. Cookie chỉ lưu trên máy.
 - Thư mục gọn kiểu Plex/Kodi: phim nhiều tập → Downloads/<Tên phim>/ (poster.jpg, Thông tin phim.txt, EP01.mp4…); video lẻ → Downloads/<Nền tảng>/ (kèm <tên>-poster.jpg).
 - Mục "Đang tải & đã tải": phim nhiều tập gom thành 1 khối (poster, số tập, dung lượng) — bấm tên để xem từng tập.
   Mỗi video có nút Review / Reup / Dịch phụ đề (mở Tạo video với video đó); "Làm cả bộ (N)" / "Làm hàng loạt (N)" đưa cả lô sang Tạo video → Nhiều video;
@@ -48,10 +64,13 @@ Form tự lưu — chuyển trang không mất.
 ### Video nguồn
 - "File": chọn 1 file video (.mp4, .mkv, .mov…). "Nhiều video": mỗi dòng 1 file (cần ≥ 2), nút "Chọn nhiều file"; chạy lần lượt, TỰ ĐỘNG HOÀN TOÀN (không dừng chờ sửa).
 - Không còn ô nhập link URL: video trên mạng thì tải ở trang Tải video rồi bấm Review/Reup/Dịch phụ đề hoặc "Làm hàng loạt".
-- Ngôn ngữ video gốc (Tự động, Trung, Anh, Nhật, Hàn, Việt) · Whisper model (capcut = online nhanh nhất ~10s/tập, cần mạng; tiny/base nhanh; small/medium/large chính xác hơn) · Thiết bị xử lý (GPU NVIDIA / CPU — máy không có GPU NVIDIA thì chọn CPU).
+- Ngôn ngữ video gốc (Tự động, Trung, Anh, Nhật, Hàn, Việt) · "Nhận dạng giọng nói" — các mức: "Online · nhanh nhất" (~10s/tập, cần mạng), "Siêu nhanh", "Nhanh", "Cân bằng", "Chính xác", "Chính xác nhất" (chậm hơn, nghe tốt hơn) · Thiết bị xử lý (GPU NVIDIA / CPU — máy không có GPU NVIDIA thì chọn CPU).
 - "Cắt khung hình": cắt bỏ hẳn dải phụ đề cứng / logo / viền ở mép rồi phóng cho đầy khung.
 - "Tự che mọi chữ tiếng Trung (AI quét)": tắt (mặc định) chỉ che phụ đề cũ + chữ/logo 4 góc; bật thì AI che mọi chữ Trung trên hình đúng lúc chữ hiện (tốn thêm thời gian quét, chỉ lần đầu).
-- Riêng Dịch phụ đề: "Video gốc có phụ đề Trung in sẵn" (bật = đọc phụ đề trên hình làm lời gốc và xoá phụ đề cũ; tắt = nghe giọng bằng Whisper), "Hiện phụ đề tiếng Việt trên video", "Lồng tiếng Việt" (tắt = chỉ ghép phụ đề, giữ tiếng gốc).
+- Riêng Dịch phụ đề: "Video gốc có phụ đề Trung in sẵn" (bật = đọc phụ đề trên hình làm lời gốc và xoá phụ đề cũ; tắt = nghe giọng nói để lấy lời gốc), "Hiện phụ đề tiếng Việt trên video",
+  "Phụ đề song ngữ" (dòng Việt + lời gốc nhỏ bên dưới, font chữ Trung/Hàn/Nhật hiển thị đúng),
+  "Xuất thêm bản dọc 9:16" (video ngang) / "Xuất thêm bản ngang 16:9" (video dọc) — dựng CÙNG 1 lượt ra 2 file: bản dọc có nền mờ, video ở giữa, phụ đề to dưới video (tên file có _doc_9x16),
+  "Lồng tiếng Việt" (tắt = chỉ ghép phụ đề, giữ tiếng gốc).
 
 ### Các tab cấu hình (chấm màu trên tab = đang có tuỳ chọn khác mặc định)
 - Kịch bản (Review) / Bản dịch (Reup, Dịch phụ đề):
@@ -59,6 +78,12 @@ Form tự lưu — chuyển trang không mất.
   Reup/Dịch phụ đề: "Dịch bằng AI (ChatGPT / Gemini)" — chưa đăng nhập thì dùng Google dịch.
   "Bối cảnh phim (tuỳ chọn)": tên phim, thể loại, tên nhân vật → AI viết/dịch đúng tên riêng hơn.
 - Giọng đọc (Review/Reup): chọn giọng, "Tốc độ video & giọng" (0.85x … 1.3x), Review có "Phân vai nhiều giọng" (AI nhận diện nhân vật, mỗi vai 1 giọng VieNeu; cần ChatGPT hoặc Gemini).
+- Âm thanh (Review/Reup, tab Giọng đọc ở trang Tạo video hoặc tab Âm thanh ở Hậu kỳ):
+  "Giữ nhạc nền & tiếng động gốc" = AI tách bỏ giọng gốc, giữ nhạc + tiếng động dưới lời Việt (Reup mặc định bật, Review tắt).
+  Tách chạy ngầm lúc AI viết kịch bản; máy có card đồ hoạ (NVIDIA/AMD/Intel, DirectX 12) dùng GPU — nhanh ~3–5 lần thời lượng phim
+  (lần đầu tự tải thêm ~25MB), không có thì CPU (~1 lần thời lượng). Kết quả lưu lại: làm lại / lồng tiếng lại cùng phim không tách lại.
+  "Hiệu ứng âm thanh tự động" (Review): "vút" ở chỗ chuyển cảnh nhảy đoạn, "bùm" ở cảnh cao trào (tiếng gốc mạnh nhất) — âm thanh tự tạo, không bản quyền.
+  "Chuẩn âm lượng YouTube / TikTok" (tab Quy trình & xuất file, mặc định bật): video xuất về -14 LUFS, mọi chế độ.
 - Lồng tiếng (Dịch phụ đề): "Giọng riêng cho nhân vật nam / nữ" (tắt = 1 giọng cho mọi nhân vật); "Tuỳ chọn nâng cao": "Tách giọng gốc, giữ nhạc nền" (tải model ~64MB lần đầu), "Tiếng gốc khi có lời Việt" (%), "Chỉ lồng câu có phụ đề Trung trên hình".
 - Phụ đề: "Ghép phụ đề vào video", Phong cách (Mặc định chữ trắng viền đen, các kiểu CapCut, Bản tin…), Bố cục dòng (1 dòng rất ngắn / 2 dòng gọn — khuyên dùng / 3 dòng), Nguồn phụ đề (Theo lời đọc AI / Theo subtitle/dịch gốc), Cách đáy %, chỉnh màu/cỡ chữ chi tiết.
   "Che phụ đề gốc / logo": kéo khung ngay trên khung hình, có nút tự dò vùng phụ đề cũ; "Phụ đề mới nằm giữa vùng che".
@@ -70,8 +95,8 @@ Form tự lưu — chuyển trang không mất.
 - Cột phải: xem trước khung hình + phụ đề mẫu, tóm tắt cấu hình, khung "Cần kiểm tra" (lỗi chặn bắt đầu), nút "Bắt đầu tạo review" / "Bắt đầu dịch & reup" / "Bắt đầu dịch & lồng tiếng" / "Bắt đầu dịch phụ đề".
 
 ### Quy trình từng chế độ
-- Review: Whisper nhận dạng lời → Vision AI (Gemini) xem phim → viết kịch bản → (dừng "Sửa kịch bản thuyết minh" nếu bật) → lồng tiếng → tự hậu kỳ → (dừng "Hậu kỳ & xác nhận" nếu bật) → dựng video → kiểm tra chất lượng, bài đăng.
-- Dịch & Reup: Whisper → dịch → lồng tiếng thuyết minh bám miệng nhân vật (hình chạy tốc độ thật) → dựng video.
+- Review: nhận dạng giọng nói → Vision AI (Gemini) xem phim → viết kịch bản → (dừng "Sửa kịch bản thuyết minh" nếu bật) → lồng tiếng → tự hậu kỳ → (dừng "Hậu kỳ & xác nhận" nếu bật) → dựng video → kiểm tra chất lượng, bài đăng.
+- Dịch & Reup: nhận dạng giọng nói → dịch → lồng tiếng thuyết minh bám miệng nhân vật (hình chạy tốc độ thật) → dựng video.
 - Dịch phụ đề: nhận dạng / đọc phụ đề cứng → dịch → (dừng "Sửa bản dịch") → che phụ đề cũ & ghép phụ đề Việt (+ lồng tiếng nếu bật) → xuất video + .srt.
 
 ## STUDIO (xem & sửa job)
@@ -79,16 +104,28 @@ Form tự lưu — chuyển trang không mất.
 - Đang chạy: xem từng bước + tiến độ; các cảnh hiện dần khi có kịch bản/bản dịch.
 - Bước "Sửa kịch bản thuyết minh" (Review) / "Sửa bản dịch" (Dịch phụ đề) / "Duyệt kịch bản theo vai": sửa từng câu, đổi nhân vật từng câu, đổi "Giọng từng nhân vật", xoá câu; câu báo "đọc hơi nhanh" / "dài quá, AI sẽ rút gọn". Bấm "Xác nhận & lồng tiếng" hoặc "Xác nhận & ghép phụ đề".
   Có "Tìm & thay" (Enter / Shift+Enter nhảy câu sau / trước, "Thay tất cả", tích lưu vào Từ điển) và "Từ điển" (chữ gốc → dịch đúng; dịch sai → tự thay; áp cho cả Dịch phụ đề lẫn Dịch & Reup).
-- Bước "Hậu kỳ & xác nhận" (Review/Reup): timeline cảnh; tab Cảnh (nghe cảnh, bỏ/dùng lại cảnh, chỉnh đoạn hình gốc, sửa lời đọc rồi "Tạo lại giọng"), Khung & sub (phụ đề, cắt khung, che mờ chữ cứng/logo, "Quét chữ Trung & xem trước"), Hiệu ứng, Âm thanh (tiếng gốc, nhạc nền, tự nén nhạc khi có lời), Kiểm tra (danh sách lỗi theo cảnh, bấm để mở cảnh), AI (AI rà & đề xuất sửa kịch bản, duyệt từng đề xuất).
+- Bước "Hậu kỳ & xác nhận" (Review/Reup): timeline cảnh; tab Cảnh (nghe cảnh, bỏ/dùng lại cảnh, chỉnh đoạn hình gốc, sửa lời đọc rồi "Tạo lại giọng"), Khung & sub (phụ đề, cắt khung, che mờ chữ cứng/logo, "Quét chữ Trung & xem trước"), Hiệu ứng, Âm thanh ("Giữ nhạc nền & tiếng động gốc" + mức nhạc nền, tiếng gốc, nhạc nền riêng, tự nén nhạc khi có lời, "Hiệu ứng âm thanh tự động" cho Review), Kiểm tra (danh sách lỗi theo cảnh, bấm để mở cảnh), AI (AI rà & đề xuất sửa kịch bản, duyệt từng đề xuất).
   Nút "Tự hậu kỳ" = căn hình theo lời + AI sửa kịch bản + tạo lại giọng. Hoàn tác Ctrl+Z, làm lại Ctrl+Y. Phím: Space phát/dừng, ← → chuyển cảnh. Còn lỗi vẫn xuất được nhưng nên sửa trước. Bấm "Xuất video".
   Sửa lời mà chưa tạo lại giọng → báo đỏ; xác nhận xuất thì app tự đọc lại.
 - Hoàn thành: "Mở video", "Hiện trong thư mục", "Kiểm tra chất lượng" (điểm /100, lỗi theo cảnh), "Bài đăng AI" (tiêu đề, mô tả, hashtag cho YouTube có mốc chương, Shorts, TikTok, Facebook, Instagram + 3 thumbnail; chọn giọng văn Hấp dẫn/Hài hước/Nghiêm túc/Cảm xúc; nút "Chép").
-  Job đã xong còn có: "Mở lại hậu kỳ" (giữ giọng cũ hoặc đổi giọng, dừng ở bước Xem trước), "Lồng tiếng lại" (từ bản dịch đã có, không chạy lại Whisper/dịch), "Sửa phụ đề" (Dịch phụ đề: mở trình sửa ngay tại chỗ, bản sửa dở tự lưu — nút đổi thành "Sửa tiếp"; bấm "Dựng lại video" mới dựng).
+  Dịch phụ đề đã xong: cột "Tệp xuất" có Video (+ bản dọc / ngang nếu bật), phụ đề tiếng Việt, phụ đề gốc; menu "Xuất phụ đề" xuất thêm
+  Song ngữ (.srt), WebVTT (.vtt — web / YouTube), ASS (.ass — giữ kiểu chữ) cạnh file .srt, không dựng lại video.
+  Job đã xong còn có: "Mở lại hậu kỳ" (giữ giọng cũ hoặc đổi giọng, dừng ở bước Xem trước), "Lồng tiếng lại" (từ bản dịch đã có, không chạy lại nhận dạng / dịch), "Sửa phụ đề" (Dịch phụ đề: mở trình sửa ngay tại chỗ, bản sửa dở tự lưu — nút đổi thành "Sửa tiếp"; bấm "Dựng lại video" mới dựng).
 - Lỗi / đã huỷ: "Tiếp tục từ “<bước>”" chạy tiếp từ bước hỏng (giữ các bước đã xong), "Chạy lại từ đầu" cùng cấu hình, "Dùng lại kịch bản" (Review/Reup, khi thư mục tạm đã bị dọn nhưng còn kịch bản); thông báo lỗi hiện ở cột phải, chi tiết trong Nhật ký.
 
-## TIMELINE PHỤ ĐỀ (bước Sửa bản dịch của Dịch phụ đề)
+## TIMELINE PHỤ ĐỀ (bước "Sửa bản dịch" và "Sửa phụ đề" của Dịch phụ đề)
 3 làn: Gốc (sóng âm + phụ đề gốc, chỉ để so), Giọng (khung đọc lồng tiếng từng câu, có khi bật lồng tiếng), Phụ đề (từng dòng chữ Việt).
-Vạch chuyển cảnh trên timeline; thanh trong khối giọng báo đọc vừa / nhanh / dài quá; viền vàng/đỏ = chữ chạy quá nhanh (ký tự/giây), có nút tự nới các dòng gấp.
+Vạch xanh ngọc = chuyển cảnh (khối tự hít vào); thanh trong khối giọng: xanh đọc vừa / vàng hơi nhanh / đỏ dài quá (AI sẽ rút gọn);
+viền vàng/đỏ ở khối phụ đề = chữ chạy quá nhanh (ký tự/giây, nên ≤ 17); nút "Nới N dòng gấp" tự kéo dài các dòng đó vào khoảng trống.
+Đầu mỗi làn: tên + số đếm (vd "76 câu · 21 dài", "160 dòng · 37 gấp"); bấm tên làn = thu gọn / mở rộng làn.
+Nút ở đầu làn:
+- Gốc: loa = tắt / bật tiếng gốc khi xem trước.
+- Giọng, Phụ đề: ổ khoá = khoá làn (không kéo / cắt / sửa nhầm, vẫn bấm chọn và tua được).
+- Phụ đề: "Kiểu chữ" (chữ T) = cỡ chữ 70–160%, chữ in hoa, song ngữ — xem trước ngay trên video, áp khi Xác nhận / Dựng lại;
+  con mắt = ẩn phụ đề: xem trước không có chữ và video xuất KHÔNG ghép chữ Việt nhưng VẪN che phụ đề cũ (file .srt vẫn có).
+Thanh công cụ: Hoàn tác / Làm lại, Hít (nam châm), Liên kết phụ đề–giọng, Tách, Gộp, Phát lặp, Nới dòng gấp, Bám đầu phát, Vừa khung, zoom.
+Khối giọng: rê chuột hiện nút loa nhỏ = nghe thử câu đó bằng đúng giọng (+ rate/pitch VieNeu); nghe xong app ghi thời lượng đọc thật.
+Chọn nhiều khối: Ctrl / Shift + bấm (hoặc Ctrl+A) rồi kéo hoặc ← → để dời cả nhóm; Esc bỏ chọn. Bấm đúp khối phụ đề = sửa chữ ngay trên khối (Enter lưu, Esc huỷ).
 Phím tắt:
 - Kéo khối: dời phụ đề / giọng · Kéo mép: đổi lúc bắt đầu / kết thúc (màn hình hiện đúng khung hình ở mép đang kéo)
 - Ctrl+B: tách dòng tại đầu phát · M: gộp dòng
@@ -99,6 +136,8 @@ Phím tắt:
 - ↑ ↓: dòng trước / sau · Space: phát / dừng
 - Ctrl+Z / Ctrl+Y: hoàn tác / làm lại
 - Ctrl + lăn chuột: zoom tại con trỏ
+- V: nghe thử giọng câu đang chọn · P: phát lặp khối đang chọn · H: ẩn / hiện phụ đề · Enter: sửa chữ khối phụ đề đang chọn
+- Ctrl/Shift + bấm: chọn nhiều · Ctrl+A: chọn mọi dòng phụ đề · Esc: bỏ chọn
 Khối không đè khối kề, không ra ngoài video. Giọng đọc đúng khung đã kéo, phụ đề hiện đúng giờ đã kéo khi xuất video.
 
 ## LỊCH SỬ
@@ -106,9 +145,10 @@ Khối không đè khối kề, không ra ngoài video. Giọng đọc đúng kh
 - Mỗi dòng: mở thư mục, Tiếp tục (khi job lỗi có thể chạy tiếp từ bước dở), Chạy lại từ đầu với cấu hình cũ, Xoá. Bấm dòng để mở trong Studio.
 - "Xoá tất cả" / "Xoá N job": xoá đúng các job đang hiện theo bộ lọc; job đang chạy/chờ giữ lại; video & file đã xuất giữ nguyên (chỉ dọn thư mục tạm, sau đó không Tiếp tục được).
 - Job đang chạy không xoá được: mở job, bấm Dừng trước.
+- Bấm Dừng (ô vuông đỏ ở Studio): job dừng trong vài giây ở mọi bước (trạng thái "Đang dừng…" rồi "Đã huỷ"); bước kẹt thì tối đa ~8 giây. Không cần tắt app.
 
 ## PHỤ ĐỀ (trang riêng, 3 tab)
-- Tách SRT: chọn video (file hoặc link), ngôn ngữ gốc, Whisper model, thiết bị; "Dịch sang tiếng Việt" (xuất thêm file _vi.srt, Google miễn phí hoặc "Dịch bằng AI"), bối cảnh phim, thư mục xuất.
+- Tách SRT: chọn video (file hoặc link), ngôn ngữ gốc, mức "Nhận dạng giọng nói", thiết bị; "Dịch sang tiếng Việt" (xuất thêm file _vi.srt, Google miễn phí hoặc "Dịch bằng AI"), bối cảnh phim, thư mục xuất.
 - Ghép phụ đề: video gốc + file .srt có sẵn → chọn kiểu chữ (phong cách, bố cục dòng, cách đáy, màu chữ) → ghép vào video.
 - Sửa SRT: mở file .srt, sửa chữ, chỉnh thời gian từng dòng (giờ:phút:giây,mili-giây), dời cả file "Sớm hơn" / "Muộn hơn", tìm trong phụ đề, xoá dòng, cảnh báo dòng chồng nhau / chữ chạy quá nhanh; "Lưu", "Ghép vào video".
 
@@ -127,10 +167,15 @@ Khối không đè khối kề, không ra ngoài video. Giọng đọc đúng kh
 ## CÀI ĐẶT (5 tab)
 - Tài khoản AI: đăng nhập ChatGPT / Gemini (xem trên).
 - Giọng đọc: API key FPT.AI / ElevenLabs / Viettel (tuỳ chọn), "Đăng nhập CapCut" (không bắt buộc).
-- Mặc định: Thư mục xuất, Whisper model, Thiết bị, Phong cách phụ đề, Bố cục dòng, Giọng đọc mặc định, "Chế độ nhẹ máy" (dùng ~nửa CPU, dựng 1 cảnh/lượt — bật khi cần dùng máy nặng song song). Bấm "Lưu".
+- Mặc định → khung "Cấu hình máy" (trên cùng): app tự dò CPU, RAM, card NVIDIA, VRAM, driver; cho biết nhận dạng giọng nói chạy GPU hay CPU, mã hoá video GPU hay CPU;
+  đề xuất Thiết bị, mức nhận dạng vừa VRAM, Dựng GPU, Chế độ nhẹ máy — bấm "Áp dụng đề xuất" rồi "Lưu"; "Dò lại" sau khi cập nhật driver.
+- Mặc định: Thư mục xuất, "Nhận dạng giọng nói", Thiết bị, Phong cách phụ đề, Bố cục dòng, Giọng đọc mặc định, "Chế độ nhẹ máy" (dùng ~nửa CPU, dựng 1 cảnh/lượt — bật khi cần dùng máy nặng song song),
+  "Thông báo khi job xong" (thông báo Windows), "Dựng bằng GPU (NVENC)" (mặc định bật — máy có card NVIDIA thì mã hoá video bằng GPU, nhanh hơn nhiều;
+  ô trạng thái bên dưới cho biết card, driver và lý do nếu đang dựng bằng CPU; nút "Kiểm tra lại"). Bấm "Lưu".
 - Giao diện: Sáng / Tối / Theo hệ thống, màu nhấn, cỡ giao diện.
 - Hệ thống & cập nhật: kiểm tra / cài bản mới (tự cập nhật chỉ ở bản cài đặt), thông tin Python/GPU/ổ đĩa/ffmpeg, Giới thiệu (phiên bản, thư mục dữ liệu, "Mở log", lịch sử phiên bản).
-- Dữ liệu người dùng nằm ở %APPDATA%\\ReviewFilm Studio\\ (không bị xoá khi cập nhật); log ở thư mục logs/ (main.log, backend.log).
+- Dữ liệu người dùng (cài đặt, lịch sử job, model giọng) nằm trong thư mục dữ liệu của app — xem đường dẫn chính xác ở Cài đặt → "Hệ thống & cập nhật" → Giới thiệu;
+  không bị xoá khi cập nhật. Log ở thư mục logs (main.log, backend.log) — nút "Mở log" ở cùng chỗ.
 
 ## LỖI THƯỜNG GẶP & CÁCH XỬ LÝ
 - Nút Bắt đầu bị khoá, khung "Cần kiểm tra" báo "Chế độ Review cần đăng nhập Gemini" → Cài đặt → Tài khoản AI → "Đăng nhập Google".
@@ -138,7 +183,9 @@ Khối không đè khối kề, không ra ngoài video. Giọng đọc đúng kh
 - "Hàng loạt cần từ 2 video trở lên" → 1 video thì dùng nguồn "File".
 - "Chọn giọng cho nhân vật nữ" → tab Lồng tiếng, chọn giọng nữ hoặc tắt "Giọng riêng cho nhân vật nam / nữ".
 - "Thiếu ffmpeg" → cài lại app / báo hỗ trợ.
-- Whisper chậm hoặc lỗi GPU → máy không có GPU NVIDIA thì chọn Thiết bị = CPU, model base/small; hoặc dùng model "capcut" (online, nhanh).
+- Nhận dạng giọng nói chậm / đứng lâu → Cài đặt → Mặc định → "Cấu hình máy" → "Áp dụng đề xuất" (máy có card NVIDIA thì chạy GPU, nhanh gấp ~5 lần CPU; card GTX 10xx tự dùng kiểu int8).
+- Nhận dạng chậm hoặc lỗi GPU → máy không có GPU NVIDIA thì chọn Thiết bị = CPU, mức "Nhanh" / "Cân bằng"; hoặc mức "Online · nhanh nhất".
+  Thanh tiến độ bước này hiện % thật ("Nhận dạng giọng nói · 37%"); lần đầu dùng 1 mức sẽ tải mô hình (hiện "Tải mô hình nhận dạng · 120/484 MB").
 - Edge TTS báo "No audio was received" / quá thời gian → thường do mạng chậm hoặc bị chặn tạm; chờ chút rồi bấm "Tiếp tục từ …" ở job lỗi, hoặc đổi sang giọng CapCut.
 - Giọng VieNeu "Chưa dùng được trên máy này" → trang Giọng đọc → "Tải model VieNeu".
 - Giọng FPT.AI mờ "cần key" → Cài đặt → Giọng đọc → nhập key → "Lưu key".
@@ -149,4 +196,21 @@ Khối không đè khối kề, không ra ngoài video. Giọng đọc đúng kh
 - Còn sót chữ Trung / logo → tab Phụ đề: "Che phụ đề gốc / logo", kéo khung trùm kín; Dịch phụ đề chọn "Xoá sạch nét chữ"; hoặc bật "Tự che mọi chữ tiếng Trung"; hoặc dùng "Cắt khung hình".
 - Tải video lỗi → bấm "Tải lại N lỗi"; link riêng tư / cần đăng nhập không tải được.
 - Máy giật khi đang dựng → Cài đặt → Mặc định → bật "Chế độ nhẹ máy".
+- Dựng video chậm / "Mã hoá video: CPU — Driver NVIDIA … quá cũ — cần bản 570 trở lên" (trong Nhật ký hoặc Cài đặt → Mặc định → "Dựng bằng GPU (NVENC)")
+  → cập nhật driver NVIDIA miễn phí: NVIDIA App / GeForce Experience → Drivers → tải bản mới nhất (hoặc nút "Mở trang tải driver NVIDIA"), khởi động lại máy,
+  rồi bấm "Kiểm tra lại". Máy không có card NVIDIA thì luôn dựng bằng CPU (bật "Chế độ nhẹ máy" nếu máy giật).
+- Nhật ký có "[WARN] Mã hoá GPU lỗi — dựng lại bằng CPU" → GPU bận / lỗi giữa chừng, app đã tự dựng lại bằng CPU, video vẫn ra bình thường.
+- "Ổ … chỉ còn … GB trống — cần ít nhất … GB" → dọn ổ hoặc đổi Thư mục xuất (Cài đặt → Mặc định); với VieNeu là ổ chứa dữ liệu app.
+- "Nhận dạng giọng nói lỗi" → bấm "Tiếp tục từ …"; vẫn lỗi thì chọn mức nhanh hơn ("Nhanh" / "Cân bằng") hoặc Thiết bị = CPU, hoặc "Online · nhanh nhất".
+- "Không nhận dạng được lời thoại" → video không có tiếng nói / tiếng quá nhỏ; Dịch phụ đề có phụ đề cứng thì bật "Video gốc có phụ đề Trung in sẵn".
+- "AI không viết được kịch bản có nhãn [Cảnh N]" / "AI không trả về kết quả hợp lệ" → chạy lại, hoặc đổi tài khoản AI (ngôi sao ở Cài đặt → Tài khoản AI), bấm "Kiểm tra" xem tài khoản còn dùng được.
+- "ffmpeg dựng video lỗi" → bấm "Tiếp tục từ …"; thường do thiếu ổ trống, file nguồn bị di chuyển/xoá, hoặc logo/intro hỏng — kiểm tra rồi chạy lại.
+- "Không còn file video gốc (video tải từ link đã bị dọn)" → video nguồn đã bị xoá / dời chỗ; chọn lại file rồi "Chạy lại từ đầu".
+- "Job này không tiếp tục được" → chưa xong bước nào hoặc thư mục tạm đã bị dọn → "Chạy lại từ đầu".
+- "Job đang chạy — hãy dừng trước khi xoá" → mở job, bấm Dừng (ô vuông đỏ) rồi mới xoá.
+- "Không có phụ đề gốc để ghép song ngữ" → job này không có phụ đề gốc (.srt gốc) — song ngữ chỉ làm được khi có lời gốc.
+- "Chưa cài bộ quét chữ (rapidocr)" → khởi động lại app để tự cài.
+- Phim ngắn: "Tập này bị khoá (phải trả phí trên nền tảng)" → không tải được tập đó; "Không lấy được link video của tập này" → link hết hạn / nền tảng đổi API, thử "Tải lại N lỗi" sau ít phút;
+  "Link không tải được (HTTP …) — link trực tiếp thường hết hạn sau 1–2 giờ" → lấy link mới.
+- Trợ lý không đọc được ảnh → cần đăng nhập Gemini (ChatGPT trong app chỉ đọc chữ).
 """

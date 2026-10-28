@@ -406,5 +406,5 @@ def split_turns(video, segments, log=print, min_len=2.4, win=1.5, thr=0.38):
             if text:
                 out.append({'start': p[0][0], 'end': max(p[-1][1], p[0][0] + 0.2), 'text': text, 'words': p})
     if n_split:
-        log(f'   Tách {n_split} chỗ đổi người nói giữa câu (đối đáp nhanh, Whisper gộp chung)', 'step')
+        log(f'   Tách {n_split} chỗ đổi người nói giữa câu (đối đáp nhanh, bị nhận dạng gộp chung)', 'step')
     return out

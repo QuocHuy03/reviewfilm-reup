@@ -258,8 +258,10 @@ def clean_video(video, regions, out_path, log=print, progress=None, should_stop=
     from core import perf as _perf
     with _perf.parallel(4):                      # giải mã + mã hoá chỉ cần ít luồng — phần lớn CPU cho các luồng xoá chữ
         dec_cmd = _budgeted([FFMPEG_EXE, '-v', 'error', '-i', video, '-vf', f'fps={fps:.6f}', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-'])
+        from core import encoder as _encoder
+        _enc_args = _encoder.video_args('intermediate')[:-2]   # bỏ -pix_fmt (đã đặt riêng ở dưới)
         enc_cmd = _budgeted([FFMPEG_EXE, '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', f'{w}x{h}', '-r', f'{fps:.6f}',
-                             '-i', '-', '-i', video, '-map', '0:v', '-map', '1:a?', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '15',
+                             '-i', '-', '-i', video, '-map', '0:v', '-map', '1:a?', *_enc_args,
                              '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-shortest', out_path])
     dec = subprocess.Popen(dec_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_HIDE)
     enc = subprocess.Popen(enc_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=_HIDE)

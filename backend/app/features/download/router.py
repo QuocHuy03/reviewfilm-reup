@@ -20,6 +20,38 @@ def probe(req: ProbeRequest):
         return list(ex.map(_probe, urls))
 
 
+class CookieRequest(BaseModel):
+    text: str                      # nội dung cookies.txt / JSON / "k=v; k2=v2" người dùng xuất từ trình duyệt của họ
+
+
+@router.get('/cookies')
+def cookies_status():
+    """Cookie người dùng đã nạp cho từng nền tảng (không trả giá trị cookie)."""
+    from core import site_cookies
+    return site_cookies.all_status()
+
+
+@router.post('/cookies/{site}')
+def cookies_save(site: str, req: CookieRequest):
+    from fastapi import HTTPException
+    from core import site_cookies
+    if site not in site_cookies.SITES:
+        raise HTTPException(404, 'Nền tảng không hỗ trợ nạp cookie.')
+    try:
+        return site_cookies.save(site, req.text)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete('/cookies/{site}')
+def cookies_delete(site: str):
+    from fastapi import HTTPException
+    from core import site_cookies
+    if site not in site_cookies.SITES:
+        raise HTTPException(404, 'Nền tảng không hỗ trợ nạp cookie.')
+    return site_cookies.delete(site)
+
+
 class PosterRequest(BaseModel):
     image: str                     # link ảnh bìa (từ xem trước)
     title: str = ''

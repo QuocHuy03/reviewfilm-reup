@@ -1,5 +1,5 @@
 import {
-  AlertTriangle, Captions, ChevronDown, Layers, Subtitles, CheckCircle2, Download, ExternalLink, FolderOpen, ImageDown, Languages, Link2, Loader2, RotateCw,
+  AlertTriangle, Captions, ClipboardPaste, Cookie, FileUp, ChevronDown, Layers, Subtitles, CheckCircle2, Download, ExternalLink, FolderOpen, ImageDown, Languages, Link2, Loader2, RotateCw,
   Search, Wand2, X, XCircle,
 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -15,8 +15,9 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { api, bridge, mediaUrl } from "@/lib/api"
 import { basename, fmtClock, fmtRelative } from "@/lib/format"
-import type { DownloadItem, JobSummary, ProbeInfo } from "@/lib/types"
+import type { DownloadItem, JobSummary, ProbeInfo, SiteCookie } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { VideoThumb } from "@/components/VideoThumb"
 import { openBatchInCreate, openInCreate } from "./CreatePage"
 
 type Quality = "best" | "1080" | "720" | "audio"
@@ -139,7 +140,7 @@ export function DownloadPage() {
   }
 
 
-  const okCount = infos.filter((i) => !i.error).length
+  const okCount = infos.filter((i) => !i.error || i.soft).length
   const q = query.trim().toLowerCase()
   const shownJobs = q ? jobs.filter((j) => j.title.toLowerCase().includes(q)
     || (j.result.items ?? []).some((it) => (it.series || "").toLowerCase().includes(q) || basename(it.path || "").toLowerCase().includes(q))) : jobs
@@ -179,13 +180,10 @@ export function DownloadPage() {
                 return (
                   <div key={i.url} className="flex items-center gap-3 px-3 py-2.5">
                     {i.thumbnail && !i.error
-                      ? <button title="Xem poster" className="group relative shrink-0 overflow-hidden rounded"
-                          onClick={() => setPreview({ src: api.thumbUrl(i.thumbnail!, true), title: parsed.titles[i.url] || i.title || "", probe: i })}>
-                          <img src={api.thumbUrl(i.thumbnail)} alt="" className="h-12 w-20 bg-muted object-cover transition group-hover:scale-105" />
-                          <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-white opacity-0 transition group-hover:opacity-100"><Search className="size-4" /></span>
-                        </button>
-                      : <span className={cn("flex h-12 w-20 shrink-0 items-center justify-center rounded", i.error ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground")}>
-                          {i.error ? <XCircle className="size-4" /> : <Search className="size-4" />}</span>}
+                      ? <VideoThumb image={api.thumbUrl(i.thumbnail)} duration={i.duration} title="Xem poster" className="h-14 w-24"
+                          onClick={() => setPreview({ src: api.thumbUrl(i.thumbnail!, true), title: parsed.titles[i.url] || i.title || "", probe: i })} />
+                      : <VideoThumb duration={i.error ? null : i.duration} className={cn("h-14 w-24", i.soft && "bg-warning/10 text-warning")} error={!!i.error && !i.soft}
+                          icon={i.error ? (i.soft ? <AlertTriangle className="text-warning" /> : <XCircle />) : <Search />} />}
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-medium">{parsed.titles[i.url] || i.title || i.url}</p>
                       <p className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
@@ -195,7 +193,7 @@ export function DownloadPage() {
                         {i.uploader && <span className="truncate">{i.uploader}</span>}
                         {i.source === "dtk" && <span className="text-success">· 1080p không logo</span>}
                       </p>
-                      {i.error && <p className="mt-0.5 text-[11px] text-destructive">{i.error}</p>}
+                      {i.error && <p className={cn("mt-0.5 text-[11px]", i.soft ? "text-warning" : "text-destructive")}>{i.error}</p>}
                       {i.episodes && !i.error && (() => {
                         const sel = epSel[i.url] ?? i.ep ?? ""
                         return (
@@ -300,8 +298,82 @@ export function DownloadPage() {
             ))}
           </div>
         </Section>
+        <SiteCookieCard refreshKey={jobs.filter((j) => !["running", "queued"].includes(j.status)).length} />
       </div>
     </div>
+  )
+}
+
+/**
+ * Cookie Douyin (tuỳ chọn): người dùng xuất cookie từ trình duyệt của CHÍNH HỌ rồi nạp vào — Douyin bắt "phiên trình duyệt"
+ * mới cho tải; nguồn tải miễn phí hay bị tạm nghỉ. Có cookie → app tải bằng phiên đó trước, ổn định hơn.
+ */
+function SiteCookieCard({ refreshKey }: { refreshKey: number }) {
+  const [list, setList] = useState<SiteCookie[]>([])
+  const [pasting, setPasting] = useState(false)
+  const [text, setText] = useState("")
+  const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => { api.siteCookies().then(setList).catch(() => {}) }, [refreshKey])   // job tải xong → cập nhật (cookie có bị từ chối không)
+  const c = list.find((x) => x.site === "douyin")
+  if (!c) return null
+
+  const save = async (raw: string) => {
+    if (!raw.trim()) return
+    setBusy(true)
+    try {
+      const s = await api.saveSiteCookie("douyin", raw)
+      setList((l) => l.map((x) => (x.site === s.site ? s : x)))
+      setText(""); setPasting(false)
+      toast.success("Đã nạp cookie Douyin", { description: `${s.count} cookie — link Douyin sẽ tải bằng phiên này trước.` })
+    } catch (e) {
+      toast.error("Cookie chưa dùng được", { description: (e as Error).message })
+    } finally { setBusy(false) }
+  }
+  const remove = async () => {
+    if (!await confirmAction({ title: "Xoá cookie Douyin?", action: "Xoá", desc: "App quay lại dùng nguồn tải miễn phí (hay bị tạm nghỉ)." })) return
+    const s = await api.deleteSiteCookie("douyin")
+    setList((l) => l.map((x) => (x.site === s.site ? s : x)))
+  }
+  const exp = c.expires_in_days
+  const expired = (exp !== null && exp <= 0) || c.rejected
+  return (
+    <Section title="Cookie Douyin" icon={<Cookie />} desc="Tuỳ chọn — để tải Douyin ổn định, không phụ thuộc nguồn miễn phí">
+      <div className={cn("flex items-center gap-2 rounded-md border px-2.5 py-2 text-[12px]",
+        !c.has ? "border-border bg-background/40" : expired ? "border-destructive/40 bg-destructive/10" : "border-success/40 bg-success/10")}>
+        {c.has ? (expired ? <AlertTriangle className="size-4 shrink-0 text-destructive" /> : <CheckCircle2 className="size-4 shrink-0 text-success" />)
+          : <Cookie className="size-4 shrink-0 text-muted-foreground" />}
+        <span className="min-w-0 flex-1">
+          {!c.has ? "Chưa nạp — đang dùng nguồn tải miễn phí"
+            : c.rejected ? "Douyin không nhận cookie này ở lần tải gần nhất — xuất lại rồi nạp lại"
+              : expired ? "Cookie đã hết hạn — xuất lại rồi nạp lại"
+              : `Đã nạp ${c.count} cookie${c.updated ? ` · ${fmtRelative(new Date(c.updated * 1000).toISOString())}` : ""}${exp !== null ? ` · còn ${Math.floor(exp)} ngày` : ""}`}
+        </span>
+        {c.has && <Button size="icon-xs" variant="ghost" title="Xoá cookie" onClick={remove}><X /></Button>}
+      </div>
+      <input ref={fileRef} type="file" accept=".txt,.json,text/plain,application/json" className="hidden"
+        onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) save(await f.text()) }} />
+      <div className="flex gap-1.5">
+        <Button size="sm" variant="outline" className="flex-1" disabled={busy} onClick={() => fileRef.current?.click()}>
+          {busy ? <Loader2 className="animate-spin" /> : <FileUp />} Nạp file cookie
+        </Button>
+        <Button size="sm" variant={pasting ? "secondary" : "outline"} className="flex-1" disabled={busy} onClick={() => setPasting((v) => !v)}>
+          <ClipboardPaste /> Dán cookie
+        </Button>
+      </div>
+      {pasting && (
+        <div className="flex flex-col gap-1.5">
+          <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} className="font-mono text-[11px]"
+            placeholder={"Dán nội dung cookies.txt, JSON từ Cookie-Editor,\nhoặc chuỗi  s_v_web_id=...; ttwid=..."} />
+          <Button size="sm" disabled={busy || !text.trim()} onClick={() => save(text)}>Lưu cookie</Button>
+        </div>
+      )}
+      <ol className="list-decimal space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted-foreground">
+        <li>Mở <b className="text-foreground/80">douyin.com</b> trên Chrome/Edge, xem 1 video (không cần đăng nhập).</li>
+        <li>Dùng extension <b className="text-foreground/80">Get cookies.txt LOCALLY</b> → Export → được file .txt.</li>
+        <li>Bấm <b className="text-foreground/80">Nạp file cookie</b> chọn file đó. Cookie chỉ lưu trên máy này.</li>
+      </ol>
+    </Section>
   )
 }
 
@@ -322,17 +394,6 @@ function groupItems(items: DownloadItem[]) {
 
 /** Poster đang xem phóng to: ảnh từ link (chưa tải) hoặc file đã lưu trên máy. */
 type PosterView = { src: string; title: string; probe?: ProbeInfo; path?: string }
-
-function Poster({ path, className, title, onView, error }: { path?: string; className?: string; title?: string; onView?: (v: PosterView) => void; error?: boolean }) {
-  if (!path) return <span className={cn("flex shrink-0 items-center justify-center rounded", error ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground", className)}>
-    {error ? <AlertTriangle className="size-3.5" /> : <Download className="size-3.5" />}</span>
-  return (
-    <button title="Xem poster" className={cn("group relative shrink-0 overflow-hidden rounded bg-muted", className)}
-      onClick={() => onView?.({ src: mediaUrl(path), title: title || basename(path), path })}>
-      <img src={mediaUrl(path)} alt="" loading="lazy" className="size-full object-cover transition group-hover:scale-105" />
-    </button>
-  )
-}
 
 function PosterDialog({ view, saving, onClose, onSave }: { view: PosterView | null; saving: boolean; onClose: () => void; onSave: (i: ProbeInfo) => void }) {
   const [size, setSize] = useState("")
@@ -381,7 +442,11 @@ function ItemRow({ it, running, onCreate, label, onView }: {
 }) {
   return (
     <div className="flex items-center gap-2.5 px-3 py-2 text-[12px]">
-      {label ? <span className="w-14 shrink-0 text-muted-foreground tabular">{label}</span> : <Poster path={it.poster} className="h-9 w-14" title={basename(it.path || it.url)} onView={onView} error={!!it.error && !it.path} />}
+      {label ? <span className="w-14 shrink-0 text-muted-foreground tabular">{label}</span>
+        : <VideoThumb image={it.poster ? mediaUrl(it.poster) : undefined} video={it.path ? mediaUrl(it.path) : undefined} duration={it.duration}
+            className="h-12 w-[84px]" error={!!it.error && !it.path} icon={it.error && !it.path ? <AlertTriangle /> : <Download />}
+            title={it.path ? "Xem video" : it.poster ? "Xem poster" : undefined}
+            onClick={it.path ? () => bridge.open(it.path!) : it.poster ? () => onView?.({ src: mediaUrl(it.poster!), title: basename(it.url), path: it.poster }) : undefined} />}
       {it.path ? <>
         <div className="min-w-0 flex-1">
           <p className="truncate" title={it.path}>{basename(it.path)}</p>
@@ -411,7 +476,9 @@ function SeriesGroup({ name, items, running, onCreate, onBatch, onView }: {
   return (
     <div className="border-b border-border/60 last:border-b-0">
       <div className="flex items-center gap-3 px-3 py-2.5">
-        <Poster path={first.poster} className="h-14 w-10" title={name} onView={onView} />
+        <VideoThumb image={first.poster ? mediaUrl(first.poster) : undefined} title={first.poster ? "Xem poster" : name} className="h-16 w-11"
+          duration={done.length && done.every((x) => x.duration) ? done.reduce((n, x) => n + (x.duration ?? 0), 0) : null}
+          onClick={first.poster ? () => onView?.({ src: mediaUrl(first.poster!), title: name, path: first.poster }) : undefined} />
         <button className="min-w-0 flex-1 text-left" onClick={() => setOpen(!open)}>
           <p className="flex items-center gap-1.5 truncate text-[13px] font-medium">
             {name} <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground transition", open && "rotate-180")} />

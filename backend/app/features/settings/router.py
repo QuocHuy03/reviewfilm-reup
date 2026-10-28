@@ -124,6 +124,21 @@ def _web_ai_status():
 
 
 
+@router.get('/system/hardware')
+def hardware(force: bool = False):
+    """Cấu hình máy (CPU, RAM, GPU, VRAM, driver, Whisper CUDA, NVENC) + cài đặt đề xuất hợp với máy."""
+    from core import hardware as hw
+    return hw.profile(force=force)
+
+
+@router.get('/system/encoder')
+def encoder_status(force: bool = False):
+    """Dựng video bằng GPU (NVENC) được không: {available, gpu, driver, reason, enabled}. force=1 → dò lại (vd vừa cập nhật driver)."""
+    from core import encoder
+    st = encoder.probe(force=force)
+    return {**st, 'enabled': config.load_settings().get('gpu_encode', True) is not False, 'min_driver': encoder.MIN_DRIVER}
+
+
 @router.get('/system')
 def system():
     from core.utils import FFMPEG_EXE, FFPROBE_EXE, get_free_space_gb

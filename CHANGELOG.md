@@ -12,6 +12,112 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-10-27
+
+### Added
+- **Ảnh video kiểu thư viện dựng phim** (trang Tải video, Lịch sử): bo góc, thời lượng ở góc dưới phải (vd `00:05.08`),
+  rê chuột → ảnh phóng nhẹ, nổi lên, hiện nút Play; bấm để xem video. Chưa có ảnh bìa thì tự lấy 1 khung hình trong video;
+  phim nhiều tập hiện tổng thời lượng các tập. Video tải về được ghi thời lượng ngay khi tải xong.
+- **Giữ nhạc nền & tiếng động gốc khi lồng tiếng (Review / Reup)**: AI tách bỏ giọng gốc, giữ nhạc + tiếng động, hạ nhẹ
+  khi có lời Việt — nghe như phim lồng tiếng thật (trước: tiếng gốc bị nén gần như tắt, mất luôn nhạc). Reup mặc định bật,
+  Review tuỳ chọn; chỉnh mức nhạc nền ở tab Âm thanh (Hậu kỳ). Tách chạy ngầm trong lúc AI viết kịch bản.
+- **Tách giọng bằng GPU**: mọi card DirectX 12 (NVIDIA / AMD / Intel) — nhanh ~3–5 lần thời lượng phim (GTX 1060: phim
+  30 phút ≈ 7 phút), tự tải bộ tăng tốc ~25MB lần đầu; không có GPU thì CPU (nhanh hơn bản cũ ~1.6 lần). Kết quả được lưu:
+  làm lại job, lồng tiếng lại, Review rồi Reup cùng phim không phải tách lại.
+- **Chuẩn âm lượng YouTube / TikTok** (mặc định bật, mọi chế độ): video xuất về -14 LUFS (đo 2 lượt, chỉnh tuyến tính,
+  không méo tiếng) — không còn nhỏ / to bất thường so với video khác. Tắt được ở tab Quy trình.
+- **Hiệu ứng âm thanh tự động (Review)**: "vút" ở chỗ chuyển cảnh nhảy đoạn, "bùm" ở cảnh cao trào (tiếng gốc mạnh nhất).
+  Âm thanh tự tạo, không dính bản quyền; đã chỉnh để loa điện thoại vẫn nghe rõ.
+
+### Fixed
+- **Tự che chữ Trung bị phình thành khối to** (vd góc trái trên ~50% × 20% khung, che suốt cả phim; dải phụ đề cao gấp
+  2–3 lần chữ): chữ khác nhau hiện lần lượt ở gần nhau bị cộng dồn thành 1 vùng. Giờ mỗi dòng chữ che đúng khung, đúng lúc
+  nó hiện; 1 lần quét hụt giữa 2 câu phụ đề không còn làm lộ chữ. Cách làm mờ mới: 1 lớp mờ + mặt nạ cho mọi vùng → bao
+  nhiêu vùng cũng gần như không thêm thời gian dựng (trước: tối đa 16 nhóm, nhóm thứ 17 trở đi bị bỏ → lộ chữ).
+- Video quay điện thoại có cờ xoay: vùng xoá chữ (kiểu "Xoá nhẹ") không còn lệch chỗ.
+
+## [2.11.2] - 2026-10-27
+
+### Added
+- **Cookie Douyin** (khung mới ở trang Tải video): nạp cookie từ trình duyệt của chính bạn (file cookies.txt, JSON Cookie-Editor
+  hoặc dán chuỗi) → link Douyin tải bằng phiên đó trước, ổn định, không phụ thuộc nguồn miễn phí. Khung báo đỏ khi Douyin
+  không nhận cookie (hết hạn) để xuất lại. Cookie chỉ lưu trên máy.
+
+### Fixed
+- **Douyin lúc tải được lúc không**: nguồn tải miễn phí hay bị Douyin cho "nghỉ" vài phút — giờ app tự chờ đúng thời gian rồi
+  thử lại (ghi rõ trong nhật ký); chờ quá lâu thì báo "bấm Tải lại sau khoảng N phút". Hết lỗi 502 do giữ kết nối quá lâu.
+- Xem trước link Douyin lỗi (nguồn bận) không còn khoá nút "Tải video" — hiện cảnh báo vàng, vẫn bấm tải được.
+- Bỏ các lượt thử cookie Chrome/Edge chắc chắn hỏng (trình duyệt đang mở) — mỗi link Douyin lỗi nhanh hơn ~30 giây.
+- Nhật ký job tải lỗi không còn in đoạn lỗi kỹ thuật (traceback) khó đọc.
+
+## [2.11.1] - 2026-10-27
+
+### Added
+- **Báo có bản mới**: vừa phát hiện bản cập nhật là hiện thông báo (trong app + thông báo Windows) và tải ngầm;
+  tải xong báo lần nữa kèm nút "Khởi động lại". Bản phát hành đăng thẳng (không còn để nháp) nên app thấy ngay.
+
+### Fixed
+- **Tải video YouTube / các trang khác bị lỗi trên máy không có ffmpeg**: bộ tải giờ luôn dùng ffmpeg kèm app để ghép hình + tiếng,
+  và cài kèm trình chạy JavaScript (Deno) mà YouTube bắt buộc để giải mã chữ ký video — trước đây báo "Lỗi không rõ".
+- Thông báo lỗi tải rõ hơn: lấy đúng dòng lỗi gốc, không bị lỗi đọc cookie trình duyệt che mất; Douyin báo đúng lý do
+  (nguồn tải miễn phí ngừng hoạt động, Douyin bắt buộc phiên trình duyệt).
+
+## [2.11.0] - 2026-10-27
+
+### Changed
+- **Nhận dạng giọng nói** không còn hiện tên kỹ thuật: ô chọn đổi thành "Nhận dạng giọng nói" với các mức dễ hiểu
+  (Online · nhanh nhất / Siêu nhanh / Nhanh / Cân bằng / Chính xác / Chính xác nhất); nhật ký, thông báo lỗi, cẩm nang trợ lý cũng đổi theo.
+- **Timeline gọn kiểu NLE (cả timeline phụ đề lẫn Review / Reup)**: tên làn IN HOA rõ ràng + dòng đếm nhỏ, cột icon thẳng hàng (khoá · mắt · loa / kiểu chữ),
+  **con mắt từng làn như CapCut** (tắt = ẩn làn cho gọn, bật lại là hiện; nhớ lựa chọn), thu phóng gọn "− 100% + Vừa khung" (100% = vừa khung),
+  thước thời gian dạng 00:01.00, khối hẹp không còn chữ vụn.
+
+### Fixed
+- **Bước nhận dạng giọng nói đứng ở 10% rất lâu (tưởng treo)**: giờ báo % thật theo đoạn đã nghe ("Nhận dạng giọng nói · 37%", nhật ký mỗi 25%)
+  và tiến độ tải mô hình lần đầu theo MB ("Tải mô hình nhận dạng · 120/484 MB").
+
+## [2.10.1] - 2026-10-27
+
+### Fixed
+- **Bấm "Dừng" không dừng job (phải tắt app)**: trước chỉ dừng được giữa các bước — đang tạo giọng hàng loạt, chờ AI trả lời (tới 15 phút)… thì chạy tiếp tới hết.
+  Giờ mọi bước nhận lệnh dừng ngay (cả luồng phụ tạo giọng CapCut / Edge / FPT / VieNeu, hậu xử lý giọng, chờ AI); tiến trình con bị diệt;
+  bước nào không nhả kịp thì sau 8 giây app vẫn chốt "Đã huỷ" và nhả lượt cho job sau. Đo thật: dừng trong 0.2–4.4 giây ở mọi bước của Dịch phụ đề.
+
+## [2.10.0] - 2026-10-27
+
+### Added
+- Cài đặt → Mặc định → **"Cấu hình máy"**: tự dò CPU, RAM, card NVIDIA, VRAM, driver, Whisper chạy GPU hay CPU, mã hoá NVENC —
+  đề xuất cài đặt hợp với máy (Thiết bị, Whisper model vừa VRAM, Dựng GPU, Chế độ nhẹ máy), bấm "Áp dụng đề xuất".
+
+### Fixed
+- **Whisper không chạy GPU trên card NVIDIA đời cũ (GTX 10xx / Pascal)**: trước luôn xin kiểu float16 (card cũ không hỗ trợ) → lặng lẽ chạy CPU.
+  Giờ tự chọn kiểu tính hợp với card (float16 card mới, int8 card cũ) — đo trên GTX 1060: nhận dạng 60s audio 52s → 10s (nhanh gấp 5 lần), kết quả như nhau.
+
+## [2.9.1] - 2026-10-27
+
+### Changed
+- Dịch phụ đề: bản dọc 9:16 dựng nền mờ nhanh gấp ~2 lần (thu nhỏ trước rồi mới làm mờ — đo 12.8s → 6.0s / 1 phút video 1080p, hình như cũ).
+- Đã đo lại bộ mã hoá CPU (x264 veryfast crf 20): giữ nguyên vì là điểm cân bằng tốt nhất tốc độ / dung lượng / chất lượng;
+  giải mã phần cứng (D3D11VA / DXVA2) chậm hơn giải mã CPU trên máy nhiều nhân nên không bật.
+
+## [2.9.0] - 2026-10-27
+
+### Added
+- **Dựng video bằng GPU NVIDIA (NVENC)** cho mọi chế độ — Dịch phụ đề (cả bản dọc 9:16), Ghép phụ đề, Xoá sạch nét chữ, Review / Reup.
+  Dò GPU 1 lần bằng đúng bộ tham số sẽ dùng; GPU lỗi giữa chừng thì tự dựng lại bằng CPU (video vẫn ra). Nhật ký ghi rõ mã hoá bằng GPU hay CPU và thời gian dựng.
+- Cài đặt → Mặc định → **"Dựng bằng GPU (NVENC)"**: bật / tắt, hiện card + driver đang dùng, lý do khi phải dựng bằng CPU
+  (vd driver NVIDIA quá cũ — cần ≥ 570) kèm cách cập nhật, nút "Kiểm tra lại" và "Mở trang tải driver NVIDIA".
+
+### Fixed
+- Review / Reup trước đây tưởng có GPU nhưng thực tế luôn dựng bằng CPU trên máy driver NVIDIA < 570 mà không báo — giờ báo rõ lý do.
+
+## [2.8.4] - 2026-10-26
+
+### Changed
+- Trợ lý AI: viết lại prompt hệ thống chuyên nghiệp — vai trò rõ, thứ tự nguồn sự thật (ngữ cảnh job → cẩm nang → ảnh/file),
+  khuôn trả lời theo loại câu hỏi (cách làm / lỗi: Nguyên nhân → Cách sửa → Nếu vẫn lỗi / nên chọn gì), quy trình chẩn đoán job, không bịa tính năng.
+- Trợ lý AI hiểu job đang mở rõ hơn: cấu hình chính, file đã xuất, lỗi / cảnh báo tách riêng (job đã xong không bị chẩn đoán nhầm là hỏng).
+- Cẩm nang trợ lý cập nhật bản 2.8.3 (song ngữ, xuất bản dọc, xuất phụ đề, nút đầu làn timeline, thông báo, gửi kèm ảnh, lỗi thường gặp lấy từ thông báo lỗi thật).
+
 ## [2.8.3] - 2026-10-26
 
 ### Added
@@ -331,7 +437,16 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.3...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...HEAD
+[2.12.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.2...v2.12.0
+[2.11.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.1...v2.11.2
+[2.11.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.0...v2.11.1
+[2.11.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.10.1...v2.11.0
+[2.10.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.10.0...v2.10.1
+[2.10.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.9.1...v2.10.0
+[2.9.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.9.0...v2.9.1
+[2.9.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.4...v2.9.0
+[2.8.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.3...v2.8.4
 [2.8.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.2...v2.8.3
 [2.8.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.1...v2.8.2
 [2.8.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.8.0...v2.8.1

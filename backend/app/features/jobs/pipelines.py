@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from app import constants as C
 from app.config import get_key, load_settings
 from app.srt_utils import cues_to_srt, parse_srt, rechunk_cues, scenes_to_cues, segments_to_cues
-from .manager import JobCancelled
+from .manager import JobCancelled, JobFailed
 
 VIDEO_EXTS = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v', '.ts', '.wmv')
 DEFAULT_LAYOUT = '2 dòng gọn (khuyên dùng)'
@@ -203,29 +203,30 @@ def _is_hallucination(text):
 def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False, words=False):
     """Whisper. allow_empty=True (Review): video không có lời thoại vẫn chạy tiếp — AI viết kịch bản từ hình ảnh."""
     from core.transcriber import transcribe_audio
-    engine = 'CapCut' if cfg.get('whisper_model') == 'capcut' else 'Whisper'
-    job.set_progress(10, f'Nhận dạng giọng nói ({engine})')
-    job.log(f'[2] {engine} nhận dạng giọng nói...', 'info')
+    job.set_progress(10, 'Nhận dạng giọng nói')
+    job.log('[2] Nhận dạng giọng nói...', 'info')
     lang = C.LANGUAGE_MAP.get(cfg.get('source_lang', 'Tự động'), 'auto')
+    # tiến độ thật trong bước này: 10% → 28% (trước đứng yên 10% tới khi xong cả phim → tưởng treo)
     transcript = transcribe_audio(video_path, cfg.get('whisper_model', 'base'), temp_dir, lang, job.log,
                                   device=cfg.get('device', 'GPU (NVIDIA)'), beam_size=beam, should_stop=lambda: job.cancelled,
-                                  word_timestamps=words)
+                                  word_timestamps=words,
+                                  progress=lambda p, text=None: job.set_progress(10 + int(18 * p), text or 'Nhận dạng giọng nói'))
     job.check()
     if transcript is None:
         # None = Whisper/trích audio LỖI (khác với "không có lời thoại"). Chỉ coi là không lời khi video không có tiếng.
         from core.video_editor import _has_audio
         if _has_audio(video_path):
-            raise RuntimeError('Whisper chạy lỗi (xem nhật ký phía trên) — bấm Tiếp tục để thử lại, hoặc đổi Whisper model nhỏ hơn.')
+            raise RuntimeError('Nhận dạng giọng nói lỗi (xem nhật ký phía trên) — bấm Tiếp tục để thử lại, hoặc chọn mức nhận dạng nhanh hơn.')
         job.log('   Video không có track âm thanh.', 'warn')
     if transcript and transcript.get('segments'):
         kept = [seg for seg in transcript['segments'] if not _is_hallucination(seg.get('text', ''))]
         dropped = len(transcript['segments']) - len(kept)
         if dropped:
-            job.log(f'   [LỌC] Bỏ {dropped} đoạn Whisper nghe nhầm (chữ lặp vô nghĩa, thường do nhạc/tiếng ngân)', 'warn')
+            job.log(f'   [LỌC] Bỏ {dropped} đoạn nghe nhầm (chữ lặp vô nghĩa, thường do nhạc/tiếng ngân)', 'warn')
             transcript = {**transcript, 'segments': kept}
     if not transcript or not transcript.get('segments'):
         if not allow_empty:
-            raise RuntimeError('Whisper không nhận dạng được lời thoại (video có thể không có tiếng nói).')
+            raise RuntimeError('Không nhận dạng được lời thoại (video có thể không có tiếng nói).')
         job.log('   [CẢNH BÁO] Video không có lời thoại (chỉ nhạc/hiệu ứng) — AI sẽ viết kịch bản chỉ dựa vào hình ảnh.', 'warn')
         transcript = {**(transcript or {}), 'segments': []}
     return transcript, lang
@@ -297,6 +298,7 @@ class Run:
     lang: str = 'auto'
     layout: dict = field(default_factory=dict)
     mixer: dict = field(default_factory=dict)
+    sep: dict = field(default_factory=dict)        # tách giọng chạy nền (luồng, kết quả) — không lưu checkpoint
 
     def log(self, msg, tag=None):
         self.job.log(msg, tag)
@@ -378,6 +380,80 @@ def _step_source(run):
         cues = _rechunk(segments_to_cues(run.transcript['segments']), run.layout)
         run.job.result['original_srt'] = _write_srt(os.path.join(run.out_dir, run.base + '_original.srt'), cues)
         run.log(f"   Đã lưu SRT gốc: {run.job.result['original_srt']}", 'ok')
+    _start_bg_separation(run)
+
+
+def _keep_bg(run):
+    """Giữ nhạc nền & tiếng động gốc (tách giọng)? Hậu kỳ chọn > cấu hình lúc tạo > mặc định (Reup bật, Review tắt)."""
+    v = (run.mixer or {}).get('keep_bg')
+    if v is None:
+        v = run.cfg.get('keep_bg')
+    return (not run.is_review) if v is None else bool(v)
+
+
+def _bg_volume(run):
+    v = (run.mixer or {}).get('bg_volume', run.cfg.get('bg_volume'))
+    return max(0.0, min(2.0, float(v))) if v is not None else (0.35 if run.is_review else 0.9)
+
+
+def _start_bg_separation(run):
+    """Tách giọng ở luồng nền (trong lúc AI viết kịch bản / đọc giọng) — tới bước dựng thường đã xong.
+    Chạy SAU Whisper để không giành GPU với nhận dạng giọng nói."""
+    import threading
+    from core.video_editor import _has_audio
+    if run.sep or not _keep_bg(run) or not run.video_path or not _has_audio(run.video_path):
+        return
+    job = run.job
+    box = run.sep
+
+    def prog(p):
+        if p >= box.get('pct', 0) + 25 or p == 100:
+            box['pct'] = p
+            if p < 100:
+                job.log(f'   Tách giọng gốc (chạy nền): {p}%', 'step')
+
+    def work():
+        from core import vocal_sep
+        try:
+            box['res'] = vocal_sep.separate(run.video_path, None, job.log, prog,
+                                            lambda: job.cancelled or box.get('stop') or job.status in ('error', 'done', 'cancelled'))
+        except Exception as e:
+            box['err'] = e
+    job.log('   Tách giọng gốc để giữ nhạc nền & tiếng động (chạy nền)...', 'info')
+    box['thread'] = threading.Thread(target=work, daemon=True)
+    box['thread'].start()
+
+
+def _bg_track(run):
+    """Nhạc nền đã tách cho bước dựng ('' nếu tắt / lỗi). Chưa chạy (job tiếp tục từ checkpoint / vừa bật ở Hậu kỳ) → tách ngay."""
+    from core import vocal_sep
+    from core.video_editor import _has_audio
+    if not _keep_bg(run) or not _has_audio(run.video_path):
+        return ''
+    job = run.job
+    box = run.sep
+    if box.get('thread') and box['thread'].is_alive():
+        job.set_progress(85, 'Đợi tách giọng gốc')
+        box['thread'].join()
+    job.check()
+    res = box.get('res')
+    if not res or not res[1]:
+        if box.get('err'):
+            job.log(f"   [WARN] Tách giọng lỗi ({str(box['err'])[:120]}) — dùng tiếng gốc hạ nhỏ như cũ", 'warn')
+            return ''
+        try:
+            res = vocal_sep.separate(run.video_path, None, job.log,
+                                     lambda p: job.set_progress(85, f'Tách giọng gốc {p}%'), lambda: job.cancelled)
+        except Exception as e:
+            if job.cancelled:
+                raise
+            job.log(f'   [WARN] Tách giọng lỗi ({str(e)[:120]}) — dùng tiếng gốc hạ nhỏ như cũ', 'warn')
+            return ''
+        box['res'] = res
+    if res and res[1]:
+        return res[1]
+    job.log('   [WARN] Không tách được giọng gốc — dùng tiếng gốc hạ nhỏ như cũ', 'warn')
+    return ''
 
 
 def _step_script(run):
@@ -685,6 +761,9 @@ def _render_options(cfg, mixer):
                         audio_ducking=bool(mixer.get('audio_ducking', True)))
     if not cfg.get('burn_subtitles', True):
         opts['burn_subtitles'] = False
+    sfx_on = (mixer or {}).get('auto_sfx')
+    if sfx_on if sfx_on is not None else cfg.get('auto_sfx'):   # Hậu kỳ chọn > lúc tạo job; chỉ Review dùng (Reup bỏ qua)
+        opts['auto_sfx'] = True
     # Thương hiệu: logo/watermark, intro, outro (file không tồn tại thì bỏ qua)
     if cfg.get('watermark_path') and os.path.isfile(cfg['watermark_path']):
         opts.update(watermark_path=cfg['watermark_path'], watermark_corner=cfg.get('watermark_corner', 'Trên-Phải'),
@@ -777,7 +856,7 @@ def clean_regions(items):
             continue
         if x2 - x1 >= 0.005 and y2 - y1 >= 0.005 and b > a:
             out.append({'box': [round(x1, 4), round(y1, 4), round(x2, 4), round(y2, 4)], 't_start': round(a, 2), 't_end': round(b, 2)})
-    return out[:600]
+    return out[:2000]
 
 
 def _text_regions(run):
@@ -805,6 +884,15 @@ def _text_regions(run):
     return {'text_regions': regions, 'text_blur_sigma': sigma, 'cover_style': 'blur' if cfg.get('cover_style') == 'blur' else 'erase'} if regions else {}
 
 
+def _bg_options(run):
+    bg = _bg_track(run)
+    if not bg:
+        return {}
+    vol = _bg_volume(run)
+    run.log(f'   Giữ nhạc nền & tiếng động gốc (đã tách giọng) · mức {int(vol * 100)}%', 'info')
+    return {'bg_audio': bg, 'bg_volume': vol}
+
+
 def _render(run, out_path):
     """Dựng job.scenes ra out_path."""
     from core.video_editor import build_review_video
@@ -817,10 +905,15 @@ def _render(run, out_path):
                                 sub_source_mode=sub_source, is_reup=not run.is_review,
                                 mirror_video=bool(cfg.get('mirror_video')), video_speed=_speed(cfg),
                                 should_stop=lambda: job.cancelled,
-                                **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer), **_text_regions(run))
+                                **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer), **_text_regions(run),
+                                **_bg_options(run))
     job.check()
     if not result or not os.path.isfile(out_path):
         raise RuntimeError('Dựng video thất bại.')
+    if cfg.get('loudness', 'youtube') != 'off':          # -14 LUFS như YouTube / TikTok (đã chuẩn thì bỏ qua)
+        from core import loudness
+        loudness.normalize_file(out_path, cfg.get('loudness', 'youtube'), job.log)
+        job.check()
     for s in job.scenes:                         # mốc của lần dựng trước không còn đúng
         s.pop('out_start', None)
         s.pop('out_end', None)
@@ -1022,6 +1115,14 @@ def _download_subs(job, it, lang, log):
         log('   Không nghe thấy lời thoại — không có phụ đề', 'warn')
 
 
+def _media_seconds(path):
+    from core.utils import get_video_duration
+    try:
+        return float(get_video_duration(path) or 0)
+    except Exception:
+        return 0.0
+
+
 def run_download_pipeline(job):
     """Tải nhiều video từ link (YouTube, TikTok, Douyin, Bilibili, Kuaishou, Tiểu Hồng Thư…) — lần lượt, có tiến độ."""
     from core.downloader import (detect_platform, download, download_drama_episode, drama_episodes, normalize, platform_folder, save_poster,
@@ -1086,7 +1187,7 @@ def run_download_pipeline(job):
                     pp = save_poster(meta['thumbnail'], os.path.splitext(path)[0] + '-poster.jpg')
                     if pp:
                         it['poster'] = pp
-            it.update(path=path, size=os.path.getsize(path))
+            it.update(path=path, size=os.path.getsize(path), duration=round(_media_seconds(path), 2) or None)   # thời lượng → hiện trên ảnh bìa
             log(f'   [OK] {os.path.basename(path)} ({os.path.getsize(path) / 1_048_576:.1f} MB)', 'ok')
             if cfg.get('subs') and cfg.get('quality') != 'audio':
                 _download_subs(job, it, cfg['subs'], log)
@@ -1108,7 +1209,7 @@ def run_download_pipeline(job):
             list(ex.map(lambda i: one(i, items[i]), drama_idx))
     ok = sum(1 for it in items if it.get('path'))
     if not ok:
-        raise RuntimeError(items[0].get('error') if n == 1 else f'Không tải được video nào ({n} link) — xem chi tiết từng link.')
+        raise JobFailed(items[0].get('error') if n == 1 else f'Không tải được video nào ({n} link) — xem chi tiết từng link.')
     job.result['output_path'] = next(it['path'] for it in items if it.get('path'))
     job.log(f'[XONG] Tải được {ok}/{n} video → {out_dir}', 'ok')
 
@@ -1153,12 +1254,21 @@ def run_burn_pipeline(job):
         job.set_progress(15, 'Ghép phụ đề (ffmpeg)')
         job.log(f'[1] Ghép {len(cues)} dòng phụ đề vào video...', 'info')
         # cwd=temp_dir + đường dẫn tương đối: filter subtitles= của ffmpeg không chịu ký tự ':' của ổ Windows.
-        cmd = [FFMPEG_EXE, '-y', '-i', video, '-vf', f"subtitles=subs.srt:fontsdir=fonts:force_style='{_force_style(style, size_base=11)}'",
-               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-               *(['-c:a', 'copy'] if _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k']), out_path]
+        from core import encoder
+        acodec = ['-c:a', 'copy'] if _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k']
+        vf = f"subtitles=subs.srt:fontsdir=fonts:force_style='{_force_style(style, size_base=11)}'"
+        venc = encoder.video_args('final')
+        job.log('   ' + encoder.describe(), 'step')
         dur = get_video_duration(video)
-        r = run_subprocess(cmd, timeout=max(600, int(dur * 6)) if dur > 0 else None, cwd=temp_dir,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+
+        def burn(v):
+            return run_subprocess([FFMPEG_EXE, '-y', '-i', video, '-vf', vf, *v, *acodec, out_path],
+                                  timeout=max(600, int(dur * 6)) if dur > 0 else None, cwd=temp_dir,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
+        r = burn(venc)
+        if (r is None or r.returncode != 0) and encoder.is_gpu_args(venc) and not job.cancelled:
+            job.log('   [WARN] Mã hoá GPU lỗi — ghép lại bằng CPU', 'warn')
+            r = burn(encoder.cpu_args('final'))
         job.check()
         if r is None or r.returncode != 0 or not os.path.isfile(out_path):
             raise RuntimeError(f"ffmpeg ghép phụ đề lỗi: {(getattr(r, 'stderr', '') or '')[-600:]}")

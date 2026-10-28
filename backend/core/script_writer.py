@@ -85,7 +85,7 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
     scenes_meta = _build_scenes_from_beats(analysis.get('plot_beats', []), video_duration, target_minutes)
     log_fn(f'''   Đã xây dựng {len(scenes_meta)} cảnh từ timestamp của Gemini''')
     scenes_meta = _enrich_scenes_with_transcript(scenes_meta, transcript)
-    log_fn('   Đã gán thoại Whisper vào các cảnh (tăng độ khớp hình - giọng)')
+    log_fn('   Đã gán lời thoại gốc vào các cảnh (tăng độ khớp hình - giọng)')
     words_per_scene = max(12, int(TTS_WPM * target_minutes / max(1, len(scenes_meta))))
     total_words = words_per_scene * len(scenes_meta)
     log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} từ -> tổng ~{total_words} từ (~{target_minutes} phút)''')
@@ -521,7 +521,7 @@ def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print):
         pass
 def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, engines, script_mode, troll_tone, quality, log_fn=print):
     scenes_meta = _enrich_scenes_with_transcript(scenes_meta, transcript)
-    log_fn('   Đã gán thoại Whisper vào các cảnh (tăng độ khớp hình - giọng)')
+    log_fn('   Đã gán lời thoại gốc vào các cảnh (tăng độ khớp hình - giọng)')
     words_per_scene = max(12, int(TTS_WPM * target_minutes / max(1, len(scenes_meta))))
     total_words = words_per_scene * len(scenes_meta)
     log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} từ -> tổng ~{total_words} từ (~{target_minutes} phút)''')

@@ -157,9 +157,11 @@ def polish_tts(scenes, log_fn=print):
     from concurrent.futures import ThreadPoolExecutor
     import wave as _wave
 
+    from core import cancel
+
     def one(sc):
         src = sc.get('tts_path')
-        if not src or not os.path.isfile(src) or src.endswith('_n.wav'):
+        if not src or not os.path.isfile(src) or src.endswith('_n.wav') or cancel.requested():
             return False
         r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', src, '-ac', '1', '-ar', str(POLISH_RATE), '-f', 's16le', '-'],
                            capture_output=True, creationflags=_HIDE)
@@ -209,6 +211,8 @@ def _safe(fn, *a):
 
 def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **kw):
     """Tạo giọng từng câu (mọi engine) rồi chuẩn hoá (cắt lặng + cân âm lượng) — xem polish_tts."""
+    from core import cancel
+    cancel.check()                           # đã bấm Dừng trước khi bắt đầu đọc
     out = _generate_tts_raw(scenes, voice, temp_dir, rate, log_fn, fptai_key, ref_audio_path, strict_voice, gpu_timeout, **kw)
     for o in out or []:
         o['tts_text'] = o.get('voiceover', '')    # đúng câu đã đọc — sửa lời sau đó mà chưa tạo lại giọng thì biết là lệch
@@ -349,7 +353,10 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
         # Edge hay không trả âm thanh với câu cảm thán rất ngắn ("Hả?", "Ơ!") → lần thử sau đổi cách viết (bỏ dấu hỏi / thêm dấu chấm)
         base = text.rstrip('?!.…, ').strip() or text
         variants = [text, text, base + '.', base, base + '...']
+        from core import cancel
         for attempt in range(retries + 1):
+            if cancel.requested():
+                break
             try:
                 # mặc định chờ kết nối 10s — mạng chậm bắt tay với máy chủ Edge hay quá 10s → bị cắt (ServerTimeoutError /
                 # "No audio was received"); nới 40s thì hết lỗi
@@ -372,7 +379,9 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
         tasks = [_one(i, s.get('voiceover_for_tts', s['voiceover']).strip()) for (i, s) in chunk]
         return await asyncio.gather(*tasks, return_exceptions=True)
     done = 0
+    from core import cancel
     for (ch_idx, chunk) in enumerate(chunks):
+        cancel.check()                       # bấm Dừng → ngừng ngay giữa các lô câu
         results = _run_coro(lambda chunk=chunk: _run_chunk(chunk))
         result_map.update(_collect_results(results, check_file=False))
         done += len(chunk)
@@ -395,7 +404,9 @@ def _render_edge_parallel(scenes, voice, rate, log_fn, temp_dir):
 def _render_fptai_sequential(scenes, voice, fptai_key, log_fn, temp_dir):
     out_scenes = []
     total = len([s for s in scenes if (s.get('voiceover') or '').strip()])
+    from core import cancel
     for (i, scene) in enumerate(scenes):
+        cancel.check()
         text = scene.get('voiceover_for_tts', scene.get('voiceover', '')).strip()
         if not text:
             continue
@@ -534,7 +545,11 @@ def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir, rate=''):
                 good.add(i)
         return good
 
+    from core import cancel
+
     def _job(batch):
+        if cancel.requested():               # bấm Dừng → các gói còn chờ trong hàng bỏ luôn
+            return
         good = _send(batch)
         with lock:
             ok.update(good)
@@ -546,11 +561,13 @@ def _render_capcut_parallel(scenes, voice, cookie, log_fn, temp_dir, rate=''):
         list(ex.map(_job, batches))
     # Cảnh lỗi (CapCut thỉnh thoảng trả "failed" / từ chối khi dồn dập) → nghỉ chút rồi gửi lại theo gói, tối đa 2 lượt
     for attempt in range(2):
+        cancel.check()
         failed = [it for it in items if it[0] not in ok]
         if not failed:
             break
         log_fn(f'   CapCut lỗi {len(failed)} cảnh — gửi lại (lượt {attempt + 1})...')
-        time.sleep(3)
+        if cancel.sleep(3):
+            cancel.check()
         (batches, done[0]) = (_capcut_batches(failed), 0)
         with ThreadPoolExecutor(_CAPCUT_MAX_CONCURRENCY) as ex:
             list(ex.map(_job, batches))
@@ -802,8 +819,13 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
         last = time.time()
         try:
             while True:
+                from core import cancel
+                if cancel.requested():
+                    proc.kill()
+                    log_fn('   [DỪNG] Dừng VieNeu TTS')
+                    break
                 try:
-                    line = lines.get(timeout=2)
+                    line = lines.get(timeout=1)
                 except _q.Empty:
                     now = time.time()
                     if now > deadline or now - last > IDLE_SECS:
@@ -1125,6 +1147,8 @@ def apply_voice_fx(scenes, rate=1.0, pitch_hz=0.0, log_fn=print, engines=('viene
             and (s.get('_tts_engine_used') in engines)]
     done = 0
     for s in todo:
+        from core import cancel
+        cancel.check()
         src = s['tts_path']
         ratio = 1.0
         if abs(pitch_hz) >= 0.05:

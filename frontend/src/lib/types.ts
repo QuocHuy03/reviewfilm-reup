@@ -88,9 +88,16 @@ export type JobSummary = {
   resume_from: string
 }
 
+/** Cookie trình duyệt người dùng tự nạp cho 1 nền tảng (vd Douyin) — không chứa giá trị cookie. */
+export type SiteCookie = { site: string; label: string; has: boolean; count: number; updated: number | null; expires_in_days: number | null
+  /** lần tải gần nhất nền tảng không nhận cookie này → cần xuất lại */
+  rejected: boolean; last_used: number | null }
+
 export type ProbeInfo = {
   url: string; platform: string; platform_label: string; title?: string; duration?: number; thumbnail?: string
   uploader?: string; width?: number; height?: number; source?: string; size?: number; error?: string
+  /** lỗi tạm thời lúc xem trước (vd nguồn Douyin bận) — vẫn bấm Tải được, lúc tải app tự chờ */
+  soft?: boolean
   /** Phim ngắn (DramaBox, ShortMax…): danh sách tập; `ep` = các tập đã chọn sẵn trong link (#ep=1-10) */
   episodes?: { num: number; title: string; locked: boolean }[]; ep?: string
 }
@@ -100,6 +107,8 @@ export type DownloadItem = {
   drama?: string; series?: string; ep?: number
   /** thư mục chứa file · ảnh poster đã lưu */
   folder?: string; poster?: string
+  /** thời lượng video (giây) — hiện trên ảnh bìa */
+  duration?: number
 }
 
 export type Preset = { name: string; mode: string; cfg: Record<string, unknown> }
@@ -168,6 +177,15 @@ export type Settings = {
   sub_layout: string
   sub_custom: Partial<SubStyle>
   light_mode?: boolean
+  gpu_encode?: boolean
+}
+
+/** Cấu hình máy + cài đặt đề xuất (GET /api/system/hardware). */
+export type HardwareProfile = {
+  cpu_threads: number; ram_gb: number; gpu: string; vram_gb: number; driver: string
+  whisper_cuda: boolean; whisper_compute: string; nvenc: boolean; nvenc_reason: string
+  recommend: { device: string; whisper_model: string; gpu_encode: boolean; light_mode: boolean }
+  notes: string[]
 }
 
 export type ApiKey = { name: string; label: string; set: boolean; masked: string }

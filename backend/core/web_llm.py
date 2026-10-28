@@ -101,7 +101,8 @@ def chat(prompt, log_fn=print, model='auto', timeout=900):
     payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
     for attempt in range(2):
         try:
-            r = requests.post(_base() + '/v1/chat/completions', headers=_headers(), json=payload, timeout=timeout)
+            from core import cancel
+            r = cancel.run(lambda: requests.post(_base() + '/v1/chat/completions', headers=_headers(), json=payload, timeout=timeout))
             if r.status_code == 200:
                 rj = r.json()
                 raw = ((rj.get('choices') or [{}])[0].get('message', {}).get('content') or '')
@@ -118,6 +119,9 @@ def chat(prompt, log_fn=print, model='auto', timeout=900):
                     _status_cache['t'] = 0
                     return ''
         except Exception as e:
+            from core import cancel
+            if isinstance(e, cancel.Cancelled):
+                raise
             log_fn(f'   [WARN] Tài khoản AI web lỗi (lần {attempt + 1}/2): {str(e)[:150]}')
         time.sleep(3)
     return ''
@@ -130,7 +134,8 @@ def gemini_files(prompt, files, log_fn=print, timeout=900):
     payload = {'prompt': prompt, 'files': [os.path.abspath(f) for f in files], 'timeout': timeout * 1000}
     for attempt in range(2):
         try:
-            r = requests.post(_base() + '/rf/gemini/files', headers=_headers(), json=payload, timeout=timeout + 60)
+            from core import cancel
+            r = cancel.run(lambda: requests.post(_base() + '/rf/gemini/files', headers=_headers(), json=payload, timeout=timeout + 60))
             if r.status_code == 200:
                 raw = r.json().get('content') or ''
                 _dump_debug(prompt, raw, 'gemini-web')
@@ -144,6 +149,9 @@ def gemini_files(prompt, files, log_fn=print, timeout=900):
                     _status_cache['t'] = 0
                     return ''
         except Exception as e:
+            from core import cancel
+            if isinstance(e, cancel.Cancelled):
+                raise
             log_fn(f'   [WARN] Gemini web lỗi (lần {attempt + 1}/2): {str(e)[:150]}')
         time.sleep(5)
     return ''

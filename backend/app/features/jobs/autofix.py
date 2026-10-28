@@ -11,7 +11,6 @@ Không sửa được gì nữa thì dừng — không dựng lại vô ích.
 """
 import os
 import shutil
-import subprocess
 
 from core.script_writer import strip_scene_label
 from .postedit import MAX_STRETCH, rewrite_to_length
@@ -125,19 +124,10 @@ def relocate_footage(scenes, i, video_duration, reup=False):
 
 
 def normalize_audio(path, log):
-    """Chuẩn hoá âm lượng về -16 LUFS, chép nguyên luồng hình."""
-    from core.utils import FFMPEG_EXE, run_subprocess
-    tmp = os.path.splitext(path)[0] + '.norm.mp4'
-    r = run_subprocess([FFMPEG_EXE, '-y', '-i', path, '-c:v', 'copy', '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11',
-                        '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', tmp], timeout=900,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
-    if r is not None and r.returncode == 0 and os.path.isfile(tmp):
-        os.replace(tmp, path)
-        return True
-    if os.path.isfile(tmp):
-        os.remove(tmp)
-    log(f"   [WARN] Chuẩn hoá âm lượng lỗi: {(getattr(r, 'stderr', '') or '')[-200:]}", 'warn')
-    return False
+    """Chuẩn hoá âm lượng về -14 LUFS (mức YouTube / TikTok — cùng chuẩn với bước dựng), chép nguyên luồng hình."""
+    from core import loudness
+    r = loudness.normalize_file(path, 'youtube', log)
+    return bool(r) and not r.get('skipped')
 
 
 def _respeak(job, scenes, i, text, synth, tag):

@@ -201,7 +201,7 @@ def reedit_job(job_id: str, req: ReeditRequest):
     (runner, prefix) = RUNNERS[old.kind]
     name = old.title.split(' · ', 1)[-1]
     job = manager.start_seeded(old.kind, cfg, runner, f'{prefix} · {name} (hậu kỳ lại)', scenes, checkpoint, result)
-    job.log(f'[HẬU KỲ LẠI] Dùng lại kịch bản {len(scenes)} cảnh từ job {old.id} — bỏ qua Whisper & AI viết kịch bản', 'info')
+    job.log(f'[HẬU KỲ LẠI] Dùng lại kịch bản {len(scenes)} cảnh từ job {old.id} — bỏ qua nhận dạng giọng nói & AI viết kịch bản', 'info')
     return job.summary()
 
 

@@ -1,5 +1,5 @@
 import type {
-  AiEdit, ApiKey, FontInfo, GlossaryEntry, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, QaReport, Scene, Settings, SystemInfo, TextScanState, VieneuStatus, Voice,
+  AiEdit, ApiKey, HardwareProfile, FontInfo, GlossaryEntry, JobDetail, JobSummary, Options, Preset, ProbeInfo, PublishPack, SiteCookie, QaReport, Scene, Settings, SystemInfo, TextScanState, VieneuStatus, Voice,
 } from "./types"
 
 export const BASE_URL = window.rf?.backendUrl ?? "http://127.0.0.1:8765"
@@ -86,6 +86,9 @@ export const api = {
   savePoster: (image: string, title: string, out_dir = "") => request<{ path: string }>("POST", "/api/download/poster", { image, title, out_dir }),
   exportSubs: (id: string, fmt: "srt" | "vtt" | "ass" | "bilingual") => request<{ path: string }>("POST", `/api/jobs/${id}/export-subs`, { fmt }),
   retryDownload: (id: string) => request<JobSummary>("POST", `/api/jobs/${id}/download-retry`),
+  siteCookies: () => request<SiteCookie[]>("GET", "/api/download/cookies"),
+  saveSiteCookie: (site: string, text: string) => request<SiteCookie>("POST", `/api/download/cookies/${site}`, { text }),
+  deleteSiteCookie: (site: string) => request<SiteCookie>("DELETE", `/api/download/cookies/${site}`),
   downloadProbe: (urls: string[]) => request<ProbeInfo[]>("POST", "/api/download/probe", { urls }),
   thumbUrl: (url: string, full = false) => `${BASE_URL}/api/download/thumb?url=${encodeURIComponent(url)}${full ? "&full=1" : ""}`,
   recheckQa: (id: string) => request<QaReport>("POST", `/api/jobs/${id}/qa`),
@@ -100,6 +103,9 @@ export const api = {
   saveSrt: (path: string, cues: { start: number; end: number; text: string }[]) => request<{ ok: boolean }>("PUT", "/api/srt", { path, cues }),
 
   /** Trợ lý AI (dùng tài khoản ChatGPT / Gemini web đã đăng nhập) */
+  hardware: (force = false) => request<HardwareProfile>("GET", `/api/system/hardware${force ? "?force=true" : ""}`),
+  encoderStatus: (force = false) => request<{ available: boolean; gpu: string; driver: string; reason: string; enabled: boolean; min_driver: number }>(
+    "GET", `/api/system/encoder${force ? "?force=true" : ""}`),
   assistantStatus: () => request<{ ready: boolean; chatgpt: boolean; gemini: boolean }>("GET", "/api/assistant/status"),
   assistantAsk: (messages: { role: "user" | "assistant"; content: string }[], job_id?: string | null, page?: string, images: string[] = []) =>
     request<{ answer: string }>("POST", "/api/assistant/ask", { messages, job_id: job_id || undefined, page, images }),

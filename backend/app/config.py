@@ -31,7 +31,8 @@ DEFAULT_SETTINGS = {
     'voice': 'Edge TTS — Nữ Bắc (miễn phí)',
     'sub_style': 'Mặc định (chữ trắng, viền đen)',
     'sub_layout': '2 dòng gọn (khuyên dùng)',
-    'light_mode': False,   # chế độ nhẹ máy: dùng nửa CPU, dựng 1 clip / lượt — vừa chạy tool vừa làm việc khác
+    'light_mode': False,
+    'gpu_encode': True,    # dựng video bằng GPU NVIDIA (NVENC) khi dùng được — tự lùi về CPU nếu không   # chế độ nhẹ máy: dùng nửa CPU, dựng 1 clip / lượt — vừa chạy tool vừa làm việc khác
     'sub_custom': {},   # tuỳ chỉnh chữ phụ đề đè lên preset: sub_font_name, sub_font_color, sub_font_size_factor…
 }
 

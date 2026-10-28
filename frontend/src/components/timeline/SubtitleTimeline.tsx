@@ -1,10 +1,10 @@
 import {
-  ArrowLeftToLine, ArrowRightToLine, AudioWaveform, Captions, ChevronRight, CircleHelp, Combine, Crosshair, Eye, EyeOff, Lock, LockOpen, Type, VolumeX, Link2, Link2Off, Magnet, Maximize2, Mic, Pause, Play,
-  Loader2, Redo2, Repeat, RotateCcw, Scissors, SkipBack, SkipForward, Square, Undo2, Volume2, Wand2, ZoomIn, ZoomOut,
+  ArrowLeftToLine, ArrowRightToLine, AudioWaveform, Captions, CircleHelp, Combine, Crosshair, Eye, EyeOff, Lock, LockOpen, Type, VolumeX, Link2, Link2Off, Magnet, Mic, Pause, Play,
+  Loader2, Redo2, Repeat, RotateCcw, Scissors, SkipBack, SkipForward, Square, Undo2, Volume2, Wand2,
 } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as RPE, type ReactNode } from "react"
 import { toast } from "sonner"
-import { Slider } from "@/components/ui/slider"
+import { LaneHeader, ZoomControl, fmtRuler, type LaneSlot } from "./LaneHeader"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { confirmAction } from "@/components/ConfirmHost"
 import { api } from "@/lib/api"
@@ -893,10 +893,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
         </div>
         <div className="flex items-center justify-end gap-1.5">
           <IconBtn title={follow ? "Bám theo đầu phát: bật" : "Bám theo đầu phát: tắt"} active={follow} onClick={() => setFollow(!follow)}><Crosshair /></IconBtn>
-          <IconBtn title="Vừa khung" onClick={fit}><Maximize2 /></IconBtn>
-          <IconBtn title="Thu nhỏ" onClick={() => setPps((p) => Math.max(MIN_PPS, p / 1.4))}><ZoomOut /></IconBtn>
-          <Slider className="w-24" value={[Math.log(pps)]} min={Math.log(MIN_PPS)} max={Math.log(MAX_PPS)} step={0.01} onValueChange={([v]) => setPps(Math.exp(v))} />
-          <IconBtn title="Phóng to" onClick={() => setPps((p) => Math.min(MAX_PPS, p * 1.4))}><ZoomIn /></IconBtn>
+          <ZoomControl pps={pps} setPps={setPps} min={MIN_PPS} max={MAX_PPS} base={Math.max(MIN_PPS, (view.w - 48) / Math.max(1, total))} onFit={fit} />
           <Tooltip>
             <TooltipTrigger asChild><span className="ml-1 cursor-help text-white/40 hover:text-white/80 [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
             <TooltipContent side="top" className="w-72 p-3 text-xs">
@@ -927,49 +924,31 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
           <div className="border-b border-white/10" style={{ height: RULER_H }} />
           {laneKeys.map((k) => {
             const t = LANES[k]
-            const Icon = t.icon
+            // cột icon thẳng hàng mọi làn: [khoá] [mắt] [loa / kiểu chữ]
+            const lock: LaneSlot = k === "sub" || k === "voice"
+              ? { title: locked[k] ? "Mở khoá làn" : "Khoá làn — không kéo / sửa nhầm", on: locked[k], icon: locked[k] ? <Lock /> : <LockOpen />,
+                  onClick: () => setLocked((m) => ({ ...m, [k]: !m[k as LaneKey] })) }
+              : null
+            const eye: LaneSlot = k === "sub"
+              ? (onToggleSubtitle ? { title: subtitleVisible ? "Ẩn phụ đề (H) — video xuất không ghép chữ Việt, vẫn che phụ đề cũ" : "Hiện phụ đề (H)",
+                  on: !subtitleVisible, danger: true, icon: subtitleVisible ? <Eye /> : <EyeOff />, onClick: onToggleSubtitle } : null)
+              : { title: collapsed[k] ? `Hiện làn ${t.label}` : `Ẩn làn ${t.label}`, on: collapsed[k], danger: true,
+                  icon: collapsed[k] ? <EyeOff /> : <Eye />, onClick: () => toggleCollapse(k) }
+            const third: LaneSlot = k === "orig" && onToggleOrigMute
+              ? { title: origMuted ? "Bật tiếng gốc khi xem trước" : "Tắt tiếng gốc khi xem trước", on: origMuted, danger: true,
+                  icon: origMuted ? <VolumeX /> : <Volume2 />, onClick: onToggleOrigMute }
+              : k === "sub" && subStyleMenu
+                ? { title: "Kiểu chữ phụ đề (cỡ chữ, in hoa, song ngữ)", on: styleOpen, icon: <Type />, onClick: () => setStyleOpen(!styleOpen),
+                    extra: styleOpen && <>
+                      <div className="fixed inset-0 z-40" onClick={() => setStyleOpen(false)} />
+                      <div className="absolute bottom-0 left-full z-50 ml-2 w-64 rounded-lg border border-white/15 bg-[#1f1f23] p-3 text-white/90 shadow-2xl">{subStyleMenu}</div>
+                    </> }
+                : null
             return (
-              <div key={k} className="relative flex items-center gap-1.5 overflow-hidden border-b border-white/10 pr-1.5 pl-3" style={{ height: laneH(k) }}>
-                <span className={cn("absolute left-0 w-[3px] rounded-r", collapsed[k] ? "inset-y-1" : "inset-y-1.5", t.accent)} />
-                <button onClick={() => toggleCollapse(k)} title={`${t.label} — ${t.sub} · bấm để ${collapsed[k] ? "mở rộng" : "thu gọn"} làn`}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left hover:bg-white/5">
-                  {collapsed[k]
-                    ? <ChevronRight className={cn("size-3 shrink-0", t.text)} />
-                    : <span className={cn("flex size-5 shrink-0 items-center justify-center rounded bg-white/5 [&_svg]:size-3.5", t.text)}><Icon /></span>}
-                  <span className="flex min-w-0 flex-col leading-tight">
-                    <span className={cn("truncate text-[11px] whitespace-nowrap", k === "sub" && !subtitleVisible ? "text-white/30 line-through" : "text-white/70")}>{t.label}</span>
-                    {!collapsed[k] && <span className="tabular truncate text-[9.5px] whitespace-nowrap text-white/40">{laneStat[k]}</span>}
-                  </span>
-                </button>
-                <div className={cn("ml-auto flex shrink-0 items-center gap-0.5", collapsed[k] && "hidden")}>
-                  {k === "orig" && onToggleOrigMute && (
-                    <LaneBtn title={origMuted ? "Bật tiếng gốc khi xem trước" : "Tắt tiếng gốc khi xem trước"} on={origMuted} danger onClick={onToggleOrigMute}>
-                      {origMuted ? <VolumeX /> : <Volume2 />}
-                    </LaneBtn>
-                  )}
-                  {k === "sub" && subStyleMenu && (
-                    <div className="relative">
-                      <LaneBtn title="Kiểu chữ phụ đề (cỡ chữ, in hoa, song ngữ)" on={styleOpen} onClick={() => setStyleOpen(!styleOpen)}><Type /></LaneBtn>
-                      {styleOpen && <>
-                        <div className="fixed inset-0 z-40" onClick={() => setStyleOpen(false)} />
-                        <div className="absolute bottom-0 left-full z-50 ml-2 w-64 rounded-lg border border-white/15 bg-[#1f1f23] p-3 text-white/90 shadow-2xl">{subStyleMenu}</div>
-                      </>}
-                    </div>
-                  )}
-                  {k === "sub" && onToggleSubtitle && (
-                    <LaneBtn title={subtitleVisible ? "Ẩn phụ đề (H) — video xuất không ghép chữ Việt, vẫn che phụ đề cũ" : "Hiện phụ đề (H)"}
-                      on={!subtitleVisible} danger onClick={onToggleSubtitle}>
-                      {subtitleVisible ? <Eye /> : <EyeOff />}
-                    </LaneBtn>
-                  )}
-                  {(k === "sub" || k === "voice") && (
-                    <LaneBtn title={locked[k] ? "Mở khoá làn" : "Khoá làn — không kéo / sửa nhầm"} on={locked[k]}
-                      onClick={() => setLocked((m) => ({ ...m, [k]: !m[k as LaneKey] }))}>
-                      {locked[k] ? <Lock /> : <LockOpen />}
-                    </LaneBtn>
-                  )}
-                </div>
-              </div>
+              <LaneHeader key={k} label={t.label} stat={laneStat[k]} accent={t.accent} height={laneH(k)} collapsed={collapsed[k]}
+                dim={k === "sub" && !subtitleVisible} onToggle={() => toggleCollapse(k)}
+                toggleTitle={`${t.label} — ${t.sub} · bấm để ${collapsed[k] ? "mở rộng" : "thu gọn"} làn`}
+                slots={collapsed[k] && k !== "sub" ? [null, eye, null] : [lock, eye, third]} />
             )
           })}
         </div>
@@ -979,7 +958,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             <div className="relative cursor-ew-resize border-b border-white/10 bg-white/[0.03]" style={{ height: RULER_H }} onPointerDown={startScrub}>
               {ticks.map((t) => (
                 <div key={t} className="absolute inset-y-0 border-l border-white/15" style={{ left: t * pps }}>
-                  <span className="tabular absolute top-[3px] left-1 font-mono text-[9.5px] text-white/45">{fmtTick(t)}</span>
+                  <span className="tabular absolute top-[4px] left-1 font-mono text-[10px] text-white/50">{fmtRuler(t)}</span>
                 </div>
               ))}
             </div>
@@ -1059,23 +1038,6 @@ function Wave({ peaks, pps, from, to, h }: { peaks: Peaks; pps: number; from: nu
     }
   }, [peaks, pps, from, w, h])
   return <canvas ref={ref} className="pointer-events-none absolute top-0" style={{ left: from * pps, width: w, height: h }} />
-}
-
-function fmtTick(t: number) {
-  const m = Math.floor(t / 60)
-  const s = t % 60
-  return `${String(m).padStart(2, "0")}:${(Number.isInteger(s) ? String(s) : s.toFixed(1)).padStart(2, "0")}`
-}
-
-function LaneBtn({ title, on, danger, onClick, children }: { title: string; on?: boolean; danger?: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button title={title} aria-pressed={on} onClick={onClick}
-      className={cn("flex size-6 shrink-0 items-center justify-center rounded-md [&_svg]:size-3.5",
-        on ? (danger ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-amber-400/20 text-amber-200 hover:bg-amber-400/30")
-          : "text-white/45 hover:bg-white/10 hover:text-white")}>
-      {children}
-    </button>
-  )
 }
 
 const Sep = () => <span className="mx-1 h-4 w-px shrink-0 bg-white/10" />

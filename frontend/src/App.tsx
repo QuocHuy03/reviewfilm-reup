@@ -40,18 +40,27 @@ function useActiveJob(enabled: boolean) {
   return job
 }
 
-/** Báo một lần khi bản cập nhật đã tải xong. */
+/** Báo khi có bản mới (đang tải nền) và khi tải xong (nút Khởi động lại) — mỗi phiên bản báo 1 lần, kèm thông báo Windows. */
 function useUpdateToast() {
   const { state, install } = useUpdate()
   const shown = useRef("")
   useEffect(() => {
-    if (state?.status !== "downloaded" || !state.version || shown.current === state.version) return
-    shown.current = state.version
-    toast.info(`Đã tải bản cập nhật v${state.version}`, {
-      description: "Khởi động lại để cài. Cài đặt và lịch sử job được giữ nguyên.",
-      duration: Infinity,
-      action: { label: "Khởi động lại", onClick: () => install() },
+    const v = state?.version
+    if (!v || (state.status !== "available" && state.status !== "downloading" && state.status !== "downloaded")) return
+    const key = `${v}:${state.status === "downloaded" ? "done" : "found"}`
+    if (shown.current === key || (key.endsWith("found") && shown.current === `${v}:done`)) return
+    shown.current = key
+    const done = state.status === "downloaded"
+    const title = done ? `Bản cập nhật v${v} đã sẵn sàng` : `Có bản mới v${v}`
+    const desc = done ? "Khởi động lại để cài. Cài đặt và lịch sử job được giữ nguyên." : "Đang tải về ngầm — tải xong sẽ báo để khởi động lại."
+    toast.dismiss("rf-update")
+    toast.info(title, {
+      id: "rf-update", description: desc, duration: done ? Infinity : 10000,
+      action: done ? { label: "Khởi động lại", onClick: () => install() } : undefined,
     })
+    try {
+      if ("Notification" in window && Notification.permission !== "denied") new Notification(`ReviewFilm Studio — ${title}`, { body: desc })
+    } catch { /* bỏ qua */ }
   }, [state, install])
 }
 

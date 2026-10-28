@@ -27,6 +27,7 @@ import { basename, fmtClock, fmtDuration } from "@/lib/format"
 import type { JobDetail, LogLine, QaFix, QaReport, Scene } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/components/ConfirmHost"
+import { asrLabel } from "@/lib/asr"
 
 const NO_MUTE = { video: false, voice: false, music: false }
 const noop = () => {}
@@ -170,9 +171,9 @@ function useStaticTimeline(scenes: Scene[], realTime = false) {
 
 /* ═══════════════════════════════ Đang chạy ═══════════════════════════════ */
 const STEPS: Record<string, [string, number][]> = {
-  review: [["Tải video", 4], ["Whisper nhận dạng lời", 10], ["Vision AI phân tích phim", 30], ["Viết kịch bản", 45], ["Lồng tiếng", 55], ["Tự hậu kỳ", 70], ["Dựng video", 85]],
-  reup: [["Tải video", 4], ["Whisper nhận dạng lời", 10], ["Dịch phụ đề", 30], ["Lồng tiếng", 55], ["Tự hậu kỳ", 70], ["Dựng video", 85]],
-  srt: [["Whisper nhận dạng lời", 10], ["Dịch", 60], ["Xuất SRT", 95]],
+  review: [["Tải video", 4], ["Nhận dạng giọng nói", 10], ["Vision AI phân tích phim", 30], ["Viết kịch bản", 45], ["Lồng tiếng", 55], ["Tự hậu kỳ", 70], ["Dựng video", 85]],
+  reup: [["Tải video", 4], ["Nhận dạng giọng nói", 10], ["Dịch phụ đề", 30], ["Lồng tiếng", 55], ["Tự hậu kỳ", 70], ["Dựng video", 85]],
+  srt: [["Nhận dạng giọng nói", 10], ["Dịch", 60], ["Xuất SRT", 95]],
   burn: [["Chuẩn bị", 0], ["Ghép phụ đề", 15]],
 }
 
@@ -192,7 +193,7 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
   const info: [string, string][] = ([
     ["Nguồn", isLocalVideo(c.inp) ? basename(c.inp) : String(c.inp ?? "")],
     ["Chế độ", KIND_TEXT[job.kind] ?? job.kind],
-    ["Whisper", `${c.whisper_model ?? "base"} · ${String(c.device ?? "").startsWith("GPU") ? "GPU" : "CPU"}`],
+    ["Nhận dạng", `${asrLabel(String(c.whisper_model ?? "base"))} · ${String(c.device ?? "").startsWith("GPU") ? "GPU" : "CPU"}`],
     ["Giọng", c.voice ? String(c.voice).split(" — ").pop()! : ""],
     ["Khung hình", c.target_resolution === "1080x1920" ? "9:16 dọc" : c.target_resolution === "1280x720" ? "720p" : c.target_resolution ? "1080p" : ""],
     ["Hậu kỳ", [c.auto_post && "Tự hậu kỳ", c.script_edit === false && c.scene_preview === false && "Tự động hoàn toàn"].filter(Boolean).join(" · ")],
@@ -827,7 +828,7 @@ export function FailedStage({ job, onResumed }: { job: JobDetail; onResumed: () 
           {job.resumable ? (
             <p className="text-xs text-muted-foreground">Các bước đã xong được giữ lại — “Tiếp tục” chạy tiếp từ bước hỏng, không làm lại từ đầu.</p>
           ) : canReuse ? (
-            <p className="text-xs text-muted-foreground">Không tiếp tục được (thư mục tạm đã bị dọn), nhưng kịch bản {job.scenes.length} cảnh vẫn còn — <b>Dùng lại kịch bản</b> để đọc lại giọng & dựng lại, bỏ qua Whisper và bước viết kịch bản.</p>
+            <p className="text-xs text-muted-foreground">Không tiếp tục được (thư mục tạm đã bị dọn), nhưng kịch bản {job.scenes.length} cảnh vẫn còn — <b>Dùng lại kịch bản</b> để đọc lại giọng & dựng lại, bỏ qua nhận dạng giọng và bước viết kịch bản.</p>
           ) : (job.kind === "review" || job.kind === "reup") && (
             <p className="text-xs text-muted-foreground">Job này không tiếp tục được (lỗi trước khi xong bước đầu, hoặc chạy từ bản cũ) — chạy lại từ đầu với cùng cấu hình.</p>
           )}

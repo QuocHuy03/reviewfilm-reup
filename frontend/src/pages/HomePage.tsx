@@ -16,7 +16,7 @@ const ACTIONS: Action[] = [
   { page: "create", mode: "review", title: "Tạo review phim", desc: "AI xem phim, viết kịch bản, lồng tiếng, dựng video và viết bài đăng.", icon: <Clapperboard /> },
   { page: "create", mode: "reup", title: "Dịch & Reup", desc: "Nhận dạng lời thoại, dịch sang tiếng Việt, lồng tiếng thuyết minh.", icon: <Languages /> },
   { page: "create", mode: "vietsub", title: "Dịch phụ đề", desc: "Dịch phim sang tiếng Việt, xoá phụ đề cũ, ghép phụ đề Việt — lồng tiếng theo nhân vật.", icon: <Subtitles /> },
-  { page: "subtitles", title: "Phụ đề", desc: "Tách SRT bằng Whisper, sửa phụ đề, ghép phụ đề vào video.", icon: <Captions /> },
+  { page: "subtitles", title: "Phụ đề", desc: "Tách SRT tự động, sửa phụ đề, ghép phụ đề vào video.", icon: <Captions /> },
   { page: "voices", title: "Giọng đọc", desc: "", icon: <AudioLines /> },
 ]
 

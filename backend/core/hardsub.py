@@ -162,7 +162,7 @@ def _extract(video, band, step, log, should_stop, progress):
         except Exception:
             pass
     if proc.returncode not in (0, None) or k * step < dur - max(2.0, 3 * step):
-        log(f'   [WARN] Đọc phụ đề cứng dừng giữa chừng ({k * step:.0f}/{dur:.0f}s) — bỏ kết quả, dùng Whisper', 'warn')
+        log(f'   [WARN] Đọc phụ đề cứng dừng giữa chừng ({k * step:.0f}/{dur:.0f}s) — bỏ kết quả, chuyển sang nghe giọng nói', 'warn')
         return []
     # gộp khung liên tiếp cùng câu → dòng phụ đề
     cues = []

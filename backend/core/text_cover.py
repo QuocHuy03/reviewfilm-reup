@@ -94,6 +94,39 @@ def _same_band(a, b):
     return oy >= 0.6 * min(a[3] - a[1], b[3] - b[1]) and ox > -0.05
 
 
+def _area(b):
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _tracks(dets, interval):
+    """Gộp các lần thấy chữ theo thời gian → vùng có thời gian. Chỉ nối khi đúng là CÙNG dòng chữ còn đứng đó
+    (chồng khít khung lần thấy trước, cách nhau ≤ 1.6 lần khoảng quét). Trước gộp cả "cùng dải": câu phụ đề / chữ khác
+    nhau hiện nối tiếp ở gần nhau bị cộng dồn thành 1 khối to (vd góc trái 50% × 20% khung) che suốt cả phim."""
+    tracks = []
+    for (t, box) in sorted(dets, key=lambda x: x[0]):
+        best = None
+        for tr in tracks:
+            gap = t - tr['last']
+            if gap > interval * 2.6 + 1e-6:
+                continue
+            same = _iou(box, tr['prev']) > 0.45 or _iou(box, tr['box']) > 0.6
+            # cùng chỗ → nối qua 1 lần quét hụt (OCR bỏ sót 1 khung → trước lộ chữ ~1 khoảng quét giữa 2 câu phụ đề)
+            if not same or (gap > interval * 1.6 + 1e-6 and _iou(box, tr['prev']) < 0.6):
+                continue
+            u = [min(tr['box'][0], box[0]), min(tr['box'][1], box[1]), max(tr['box'][2], box[2]), max(tr['box'][3], box[3])]
+            if _area(u) > 1.5 * max(_area(tr['box']), _area(box)):
+                continue            # khung rung / nhích dần không được kéo vùng phình mãi
+            score = _iou(box, tr['prev'])
+            if best is None or score > best[0]:
+                best = (score, tr, u)
+        if best:
+            (_, tr, u) = best
+            (tr['box'], tr['prev'], tr['last']) = (u, list(box), t)
+        else:
+            tracks.append({'box': list(box), 'prev': list(box), 'first': t, 'last': t})
+    return tracks
+
+
 def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progress=None):
     """→ [{'box': [x1, y1, x2, y2] (0-1, hình gốc), 't_start', 't_end' (giây video gốc)}]."""
     import numpy as np
@@ -177,18 +210,7 @@ def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progr
             pass
     # chỉ lấy chữ trong các đoạn cần (cache có thể chứa đoạn khác của cùng video)
     dets = [(t, bx) for (t, bx) in dets if bx[3] - bx[1] <= 0.16 and any(a - interval <= t <= b + interval for (a, b) in ranges)]
-    # gộp theo thời gian: cùng chỗ (IoU / cùng dải) và cách nhau ≤ 1.6 lần khoảng quét → một vùng
-    tracks = []
-    for (t, box) in sorted(dets, key=lambda x: x[0]):
-        for tr in tracks:
-            if t - tr['last'] <= interval * 1.6 + 1e-6 and (_iou(box, tr['box']) > 0.3 or _same_band(box, tr['box'])):
-                u = [min(tr['box'][0], box[0]), min(tr['box'][1], box[1]), max(tr['box'][2], box[2]), max(tr['box'][3], box[3])]
-                if u[3] - u[1] > 1.6 * max(box[3] - box[1], tr['h']):
-                    continue        # gộp sẽ phình thành khối lớn (nhiều dòng / chữ chạy dọc) → giữ vùng riêng, che gọn hơn
-                (tr['box'], tr['last'], tr['h']) = (u, t, max(tr['h'], box[3] - box[1]))
-                break
-        else:
-            tracks.append({'box': list(box), 'first': t, 'last': t, 'h': box[3] - box[1]})
+    tracks = _tracks(dets, interval)
     regions = []
     for tr in tracks:
         (x1, y1, x2, y2) = tr['box']

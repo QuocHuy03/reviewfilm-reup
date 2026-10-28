@@ -308,8 +308,9 @@ def _variant_chain(src, w, h, vw, vh):
     else:
         fw = max(2, round(vh * w / h / 2) * 2)
         (fg, pos) = (f'scale={fw}:{vh}', f'{(vw - fw) // 2}:0')
-    return (f'[{src}]split[{src}b][{src}f];[{src}b]scale={vw}:{vh}:force_original_aspect_ratio=increase,crop={vw}:{vh},'
-            f'scale={vw // 8}:{vh // 8},gblur=sigma=5,scale={vw}:{vh},eq=brightness=-0.1:saturation=0.85[{src}bg];'
+    # nền: thu nhỏ NGAY về 1/8 rồi mới làm mờ + chỉnh màu, cuối cùng phóng lên — nhanh gấp ~2 lần cách phóng to trước (hình như nhau)
+    return (f'[{src}]split[{src}b][{src}f];[{src}b]scale={vw // 8}:{vh // 8}:force_original_aspect_ratio=increase:flags=fast_bilinear,'
+            f'crop={vw // 8}:{vh // 8},gblur=sigma=5,eq=brightness=-0.1:saturation=0.85,scale={vw}:{vh}:flags=bilinear[{src}bg];'
             f'[{src}f]{fg},setsar=1[{src}fg];[{src}bg][{src}fg]overlay={pos},setsar=1[vc]')
 
 
@@ -650,7 +651,7 @@ def _start_separation(job, cfg, video, temp_dir):
                 box['pct'] = p
                 job.log(f'   Tách giọng gốc (chạy nền): {p}%', 'step')
         try:
-            box['res'] = vocal_sep.separate(video, os.path.join(temp_dir, 'sep'), job.log, prog,
+            box['res'] = vocal_sep.separate(video, None, job.log, prog,
                                             lambda: job.cancelled or box.get('stop') or job.status in ('error', 'done', 'cancelled'))
         except Exception as e:
             box['err'] = e
@@ -797,19 +798,19 @@ def _hardsub_segments(job, cfg, video):
         job.check()
         band = text_cover.subtitle_band(regions) if regions else None
         if not band:
-            job.log('   Không thấy phụ đề cứng — nhận dạng giọng nói bằng Whisper', 'info')
+            job.log('   Không thấy phụ đề cứng — nghe giọng nói để lấy lời gốc', 'info')
             return None
         segs = hardsub.extract(video, band, 0.2, job.log, should_stop=lambda: job.cancelled,
                                progress=lambda p: job.set_progress(12 + int(p * 0.25), f'Đọc phụ đề cứng · {p}%'))
     except Exception as e:
         if job.cancelled:
             raise
-        job.log(f'   [WARN] Đọc phụ đề cứng lỗi ({str(e)[:120]}) — dùng Whisper', 'warn')
+        job.log(f'   [WARN] Đọc phụ đề cứng lỗi ({str(e)[:120]}) — chuyển sang nghe giọng nói', 'warn')
         return None
     job.check()
     dur = get_video_duration(video) or 60
     if len(segs) < max(5, dur / 60 * 3):          # quá ít câu so với độ dài phim → phụ đề không đủ tin
-        job.log(f'   Chỉ đọc được {len(segs)} câu phụ đề cứng — dùng Whisper cho chắc', 'warn')
+        job.log(f'   Chỉ đọc được {len(segs)} câu phụ đề cứng — nghe giọng nói cho chắc', 'warn')
         return None
     return _analyze_srt(job, segs)
 
@@ -1370,7 +1371,7 @@ def run_vietsub_pipeline(job):
                 raise RuntimeError('File SRT tiếng Việt rỗng hoặc sai định dạng.')
             if cfg.get('orig_srt_path') and os.path.isfile(cfg['orig_srt_path']):
                 job.result['original_srt'] = cfg['orig_srt_path']
-            job.log(f'[1] Dùng lại bản dịch {len(cues)} dòng — bỏ qua Whisper & dịch', 'info')
+            job.log(f'[1] Dùng lại bản dịch {len(cues)} dòng — bỏ qua nhận dạng & dịch', 'info')
             (transcript, lang) = (None, 'reuse')
             dub_plan = cfg.get('dub_plan_reuse') or None
             if dub_plan and _norm_res(dub_plan.get('res')) and len(dub_plan['res'].get('labels') or []) == len(dub_plan.get('units') or []):
@@ -1802,11 +1803,31 @@ def run_vietsub_pipeline(job):
         job.log(f'[6] Dựng video: {len(cues)} dòng phụ đề' + (f', che {len(regions)} vùng chữ Trung' if regions and cfg.get('auto_cover_text') else '') +
                 (', đã xoá sạch nét chữ cũ' if cleaned else ', che phụ đề cũ (' + ('xoá nhẹ' if cstyle == 'erase' else 'làm mờ') + ')' if band_covered else '') + (', lồng tiếng Việt' if voice_wav else ''), 'info')
         acodec = (['-c:a', 'copy'] if not voice_wav and _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k'])
-        enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', *acodec, '-movflags', '+faststart']
-        cmd = [FFMPEG_EXE, '-y', '-i', render_src, *extra_in, '-/filter_complex', 'graph.txt', '-map', '[vout]', *amap, *enc, out_path]
-        if out2:
-            cmd += ['-map', '[vout2]', *amap2, *enc, out2]
-        _run_ffmpeg(job, cmd, temp_dir, dur)
+        from core import encoder
+
+        def build(venc):
+            enc = [*venc, *acodec, '-movflags', '+faststart']
+            c = [FFMPEG_EXE, '-y', '-i', render_src, *extra_in, '-/filter_complex', 'graph.txt', '-map', '[vout]', *amap, *enc, out_path]
+            return c + (['-map', '[vout2]', *amap2, *enc, out2] if out2 else [])
+        venc = encoder.video_args('final')
+        job.log('   ' + encoder.describe(), 'step')
+        t_enc = time.time()
+        try:
+            _run_ffmpeg(job, build(venc), temp_dir, dur)
+        except RuntimeError as e:
+            if not encoder.is_gpu_args(venc) or job.cancelled:
+                raise
+            # GPU lỗi giữa chừng (hết phiên NVENC, driver…) → dựng lại bằng CPU, video vẫn ra
+            job.log(f'   [WARN] Mã hoá GPU lỗi ({str(e)[:140]}) — dựng lại bằng CPU', 'warn')
+            _run_ffmpeg(job, build(encoder.cpu_args('final')), temp_dir, dur)
+        job.log(f'   Dựng + mã hoá mất {time.time() - t_enc:.0f}s', 'step')
+        if cfg.get('loudness', 'youtube') != 'off':
+            from core import loudness
+            job.set_progress(98, 'Chuẩn âm lượng')
+            for f in (out_path, out2):
+                if f and os.path.isfile(f):
+                    job.check()
+                    loudness.normalize_file(f, cfg.get('loudness', 'youtube'), job.log)
         job.result['output_path'] = out_path
         job.log(f'[OK] Video: {out_path}', 'ok')
         if out2 and os.path.isfile(out2):

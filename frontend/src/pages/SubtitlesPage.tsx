@@ -19,6 +19,7 @@ import { api, bridge, mediaUrl } from "@/lib/api"
 import { basename, fmtClock, fmtRelative } from "@/lib/format"
 import { SimpleSelect } from "./CreatePage"
 import { confirmAction } from "@/components/ConfirmHost"
+import { ASR_HINT, ASR_LABELS, asrLabel } from "@/lib/asr"
 
 type Cue = { start: number; end: number; text: string }
 type TabKey = "extract" | "burn" | "edit"
@@ -162,11 +163,11 @@ function ExtractTab({ send }: { send: (h: Omit<Handoff, "n">) => void }) {
         <Section title="Video nguồn" icon={<Captions />} desc="File trên máy hoặc link YouTube / TikTok / Douyin…">
           <PathInput value={inp} onChange={setInp} pick={bridge.pickVideo} placeholder="Chọn video hoặc dán URL" />
         </Section>
-        <Section title="Nhận dạng lời nói" icon={<Wand2 />} desc="Whisper chạy trên máy — không cần API key">
+        <Section title="Nhận dạng lời nói" icon={<Wand2 />} desc="Chạy ngay trên máy — không cần API key">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Ngôn ngữ gốc"><SimpleSelect value={cfg.source_lang} onChange={(v) => set("source_lang", v)} items={options.languages} /></Field>
             <Field label="Bố cục dòng"><SimpleSelect value={cfg.sub_layout} onChange={(v) => set("sub_layout", v)} items={Object.keys(options.sub_layouts)} /></Field>
-            <Field label="Whisper model" hint="capcut: online, nhanh nhất · base nhanh · medium/large chính xác hơn"><SimpleSelect value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} /></Field>
+            <Field label="Nhận dạng giọng nói" hint={ASR_HINT}><SimpleSelect labels={ASR_LABELS} value={cfg.whisper_model} onChange={(v) => set("whisper_model", v)} items={options.whisper_models} /></Field>
             <Field label="Thiết bị" hint={system && !system.gpu ? "Máy không có GPU NVIDIA — nên chọn CPU" : undefined}>
               <SimpleSelect value={cfg.device} onChange={(v) => set("device", v)} items={options.devices} />
             </Field>
@@ -186,7 +187,7 @@ function ExtractTab({ send }: { send: (h: Omit<Handoff, "n">) => void }) {
       </div>
 
       <ActionAside
-        summary={[["Whisper", `${cfg.whisper_model} · ${cfg.device.startsWith("GPU") ? "GPU" : "CPU"}`], ["Ngôn ngữ", cfg.source_lang],
+        summary={[["Nhận dạng", `${asrLabel(cfg.whisper_model)} · ${cfg.device.startsWith("GPU") ? "GPU" : "CPU"}`], ["Ngôn ngữ", cfg.source_lang],
           ["Dịch", cfg.translate ? (cfg.ai_translate ? "AI (ChatGPT/Gemini)" : "Google") : "Không"]]}
         action={<Button size="lg" disabled={!inp || busy} onClick={start}>{busy ? <Loader2 className="animate-spin" /> : <Wand2 />} Tách SRT</Button>}
         recent={<RecentList title="Tách gần đây" jobs={recent} render={(j) => {

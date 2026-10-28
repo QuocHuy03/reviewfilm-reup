@@ -50,6 +50,39 @@ def _has_nvidia_gpu():
     except Exception:
         return False
 
+# Tên hiển thị cho người dùng (không lộ tên kỹ thuật) + dung lượng tải lần đầu (MB)
+ASR_LABELS = {'capcut': 'Online · nhanh nhất', 'tiny': 'Siêu nhanh', 'base': 'Nhanh', 'small': 'Cân bằng', 'medium': 'Chính xác',
+              'large': 'Chính xác nhất', 'large-v2': 'Chính xác cao', 'large-v3': 'Chính xác nhất'}
+_MODEL_MB = {'tiny': 75, 'base': 145, 'small': 484, 'medium': 1530, 'large': 3090, 'large-v2': 3090, 'large-v3': 3090}
+
+
+def asr_label(model):
+    return ASR_LABELS.get(model, model)
+
+
+def _report(p, text=None):
+    """Báo tiến độ nhận dạng (0–1) cho job — đặt bởi transcribe_audio(progress=…)."""
+    if _progress:
+        try:
+            _progress(max(0.0, min(1.0, p)), text)
+        except Exception:
+            pass
+
+
+def cuda_compute_type():
+    """Kiểu tính Whisper hợp với card: card mới (Volta trở lên) → float16; card đời cũ (GTX 10xx Pascal… không có float16
+    nhanh) → int8 (đo trên GTX 1060: nhanh gấp 5 lần CPU, ít VRAM). Trước đây luôn xin float16 → card cũ lỗi, lặng lẽ chạy CPU."""
+    try:
+        import ctranslate2
+        types = ctranslate2.get_supported_compute_types('cuda')
+    except Exception:
+        return 'float16'
+    for t in ('float16', 'int8_float16', 'int8', 'int8_float32', 'float32'):
+        if t in types:
+            return t
+    return 'float32'
+
+
 def _add_cuda_dll_dirs(log_fn=print):
     try:
         import torch
@@ -122,10 +155,12 @@ def _prompt_for(language):
 
 
 def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print, device='GPU (NVIDIA)', beam_size=5, should_stop=None,
-                     word_timestamps=False):
-    """word_timestamps=True (lồng tiếng): đầu / cuối đoạn bám đúng chữ đầu / chữ cuối, tách đoạn ở chỗ ngừng nói dài."""
-    global _should_stop, _word_ts
+                     word_timestamps=False, progress=None):
+    """word_timestamps=True (lồng tiếng): đầu / cuối đoạn bám đúng chữ đầu / chữ cuối, tách đoạn ở chỗ ngừng nói dài.
+    progress(p 0–1, text|None): tiến độ thật (tải mô hình theo MB, nhận dạng theo giây đã nghe / tổng thời lượng)."""
+    global _should_stop, _word_ts, _progress
     _should_stop = should_stop
+    _progress = progress
     _word_ts = bool(word_timestamps)
     _inject_ffmpeg_to_path()
     drive = os.path.splitdrive(os.path.abspath(temp_dir))[0]
@@ -155,10 +190,10 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
         try:
             return capcut_transcribe(audio_path, temp_dir, language, log_fn, should_stop, word_timestamps)
         except CapcutSttError as e:
-            log_fn(f'   [WARN] CapCut nhận dạng lỗi ({e}) — chuyển sang Whisper base...')
+            log_fn(f'   [WARN] Nhận dạng online lỗi ({e}) — chuyển sang nhận dạng trên máy (mức Nhanh)...')
             model = 'base'
 
-    log_fn(f"   Chạy Whisper model '{model}'...")
+    log_fn(f"   Nhận dạng giọng nói — mức '{asr_label(model)}'...")
     def _run_whisper():
         try:
             return _run_whisper_py(audio_path, model, language, log_fn, device, beam_size)
@@ -166,11 +201,11 @@ def transcribe_audio(video_path, model, temp_dir, language='auto', log_fn=print,
             log_fn('   [DỪNG] Đã huỷ khi đang nhận dạng giọng nói.')
             return None
         except Exception as e:
-            log_fn(f'   [WARN] In-process whisper lỗi ({e}), thử subprocess...')
+            log_fn(f'   [WARN] Bộ nhận dạng lỗi ({str(e)[:120]}) — thử chạy ở tiến trình riêng...')
             try:
                 return _run_whisper_subprocess(audio_path, model, language, log_fn, device, beam_size)
             except Exception as e2:
-                log_fn(f'   [LỖI] Không khởi động được Whisper: {e2}')
+                log_fn(f'   [LỖI] Không khởi động được bộ nhận dạng giọng nói: {e2}')
                 return None
 
     result = _run_whisper()
@@ -217,7 +252,7 @@ def _run_whisper_worker_once(audio_path, model, language, log_fn, device, beam_s
     if 'CPU' in str(device).upper():
         env['CUDA_VISIBLE_DEVICES'] = '-1'
         
-    log_fn(f'   (Chạy Whisper trong tiến trình riêng — chế độ: {device})')
+    log_fn(f'   (Nhận dạng giọng nói ở tiến trình riêng — {device})')
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace', env=env, creationflags=_HIDE)
     
     try:
@@ -236,11 +271,11 @@ def _run_whisper_worker_once(audio_path, model, language, log_fn, device, beam_s
             if data.get('ok'):
                 result = data.get('result')
             else:
-                log_fn(f"   [LỖI Whisper worker]: {data.get('error', '')}")
+                log_fn(f"   [LỖI] Bộ nhận dạng giọng nói: {data.get('error', '')}")
                 if data.get('tb'):
                     log_fn(data['tb'])
         else:
-            log_fn(f'   [LỖI] Whisper worker thoát đột ngột (mã lỗi {proc.returncode}).')
+            log_fn(f'   [LỖI] Bộ nhận dạng giọng nói thoát đột ngột (mã lỗi {proc.returncode}).')
     except Exception as e:
         log_fn(f'   [LỖI ĐỌC PHẢN HỒI WORKER]: {e}')
     
@@ -265,7 +300,7 @@ def _run_whisper_py(audio_path, model_name, language, log_fn, device, beam_size=
     except WhisperCancelled:
         raise
     except Exception as e:
-        log_fn(f'   [WARN] faster-whisper lỗi ({e}), thử openai-whisper...')
+        log_fn(f'   [WARN] Bộ nhận dạng chính lỗi ({str(e)[:120]}) — thử bộ dự phòng...')
         
     try:
         import whisper
@@ -286,25 +321,75 @@ def _run_whisper_py(audio_path, model_name, language, log_fn, device, beam_size=
         log_fn(f'   Đã nhận dạng {len(segments)} đoạn thoại')
         return {'language': detected_lang, 'segments': segments, 'full_text': full_text}
     except Exception as e:
-        log_fn(f'   [LỖI] Whisper: {e}')
+        log_fn(f'   [LỖI] Nhận dạng giọng nói: {e}')
         return None
 
 _MODEL_CACHE = {}          # (thư mục model, thiết bị, kiểu tính) → WhisperModel đã nạp — job sau khỏi nạp lại
 _should_stop = None        # callable do transcribe_audio đặt → True khi job bị huỷ
+_progress = None           # callable do transcribe_audio đặt → báo tiến độ (0–1, chữ)
 
 
 class WhisperCancelled(RuntimeError):
     pass
 
 
-def _collect(segments_gen):
-    """Đọc dần kết quả Whisper, dừng ngay khi job bị huỷ (trước đây phải chờ nhận dạng hết cả phim)."""
+def _collect(segments_gen, total=0.0, log_fn=None):
+    """Đọc dần kết quả nhận dạng: dừng ngay khi job bị huỷ, báo % theo giây đã nghe / tổng thời lượng
+    (trước đây đứng yên ở 10% tới khi nhận dạng xong cả phim → tưởng app treo)."""
+    import time as _t
     out = []
+    (last_t, last_log) = (0.0, -1)
     for seg in segments_gen:
         if _should_stop and _should_stop():
             raise WhisperCancelled('Đã huỷ khi đang nhận dạng giọng nói.')
         out.append(seg)
+        if total > 0:
+            p = min(1.0, float(getattr(seg, 'end', 0) or 0) / total)
+            now = _t.time()
+            if now - last_t > 0.7:
+                last_t = now
+                _report(p, f'Nhận dạng giọng nói · {int(p * 100)}%')
+            step = int(p * 4)                       # nhật ký mỗi 25%
+            if log_fn and step > last_log and 0 < step < 4:
+                last_log = step
+                log_fn(f'   Nhận dạng giọng nói: {step * 25}% ({len(out)} đoạn thoại)')
     return out
+
+
+def _download_with_progress(fn, folder, need_mb, log_fn):
+    """Tải mô hình ở luồng riêng, đo dung lượng thư mục mỗi giây → báo 'Tải mô hình · 120/484 MB' (không còn đứng im)."""
+    import threading
+    import time as _t
+    box = {}
+
+    def run():
+        try:
+            fn()
+        except BaseException as e:      # noqa: BLE001
+            box['e'] = e
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    last = -1
+    while th.is_alive():
+        th.join(1.0)
+        if _should_stop and _should_stop():
+            raise WhisperCancelled('Đã huỷ khi đang tải mô hình nhận dạng.')
+        mb = 0
+        for (root, _, files) in os.walk(folder):
+            for f in files:
+                try:
+                    mb += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+        mb //= 1048576
+        if need_mb:
+            _report(0.0, f'Tải mô hình nhận dạng · {min(mb, need_mb)}/{need_mb} MB')
+        step = int(mb / max(1, need_mb) * 4) if need_mb else 0
+        if step > last and 0 < step < 4:
+            last = step
+            log_fn(f'   Đã tải {mb}/{need_mb} MB')
+    if 'e' in box:
+        raise box['e']
 
 
 def _load_wav_16k(path):
@@ -340,8 +425,8 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
         if 'CPU' in str(device_pref).upper():
             log_fn('   Chạy ở chế độ CPU (int8) theo yêu cầu')
         elif _has_nvidia_gpu():
-            device, compute_type = 'cuda', 'float16'
-            log_fn('   Phát hiện GPU NVIDIA — dùng CUDA (float16) qua ctranslate2')
+            device, compute_type = 'cuda', cuda_compute_type()
+            log_fn(f'   Nhận dạng chạy trên GPU NVIDIA ({compute_type})')
             if not _add_cuda_dll_dirs(log_fn):
                 log_fn('   [WARN] Không tìm thấy cuBLAS/cuDNN DLL — lùi về CPU (int8) cho an toàn')
                 device, compute_type = 'cpu', 'int8'
@@ -362,15 +447,18 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
         local_dir = os.path.join(whisper_cache, f'fw-{model_name}')
         
         if not os.path.exists(os.path.join(local_dir, 'model.bin')):
-            log_fn(f"   Tải model '{model_name}' từ HuggingFace (lần đầu, sau đó dùng cache)...")
-            snapshot_download(hub_name, local_dir=local_dir, local_dir_use_symlinks=False)
+            need = _MODEL_MB.get(model_name, 0)
+            log_fn(f"   Tải mô hình nhận dạng giọng nói (mức '{asr_label(model_name)}'"
+                   + (f', ~{need} MB' if need else '') + ') — chỉ lần đầu, sau đó dùng lại...')
+            _download_with_progress(lambda: snapshot_download(hub_name, local_dir=local_dir, local_dir_use_symlinks=False),
+                                    local_dir, need, log_fn)
             
         key = (local_dir, device, compute_type)
         model = _MODEL_CACHE.get(key)
         if model is not None:
             log_fn(f"   Dùng lại model '{model_name}' đã nạp sẵn trong bộ nhớ")
         else:
-            log_fn(f'   Load faster-whisper từ: {local_dir}')
+            log_fn(f"   Nạp mô hình nhận dạng (mức '{asr_label(model_name)}')...")
         try:
             if model is None:
                 _MODEL_CACHE.clear()           # chỉ giữ 1 model — đổi model thì nhả model cũ cho đỡ RAM/VRAM
@@ -410,7 +498,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             if _should_stop and _should_stop():
                 raise WhisperCancelled('Đã huỷ trước khi nhận dạng.')
             segments_gen, info = model.transcribe(audio_in, **kwargs)
-            segments_list = _collect(segments_gen)
+            segments_list = _collect(segments_gen, float(getattr(info, 'duration', 0) or 0), log_fn)
         except WhisperCancelled:
             raise
         except Exception as run_err:
@@ -421,7 +509,7 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
                 device, compute_type = 'cpu', 'int8'
                 model = WhisperModel(local_dir, device=device, compute_type=compute_type, **_cpu_threads(device))
             segments_gen, info = model.transcribe(audio_in, **kwargs)
-            segments_list = _collect(segments_gen)
+            segments_list = _collect(segments_gen, float(getattr(info, 'duration', 0) or 0), log_fn)
 
         detected_lang = getattr(info, 'language', 'vi')
         log_fn(f'   Ngôn ngữ phát hiện: {detected_lang}')
@@ -436,11 +524,12 @@ def _run_faster_whisper(audio_path, model_name, language, log_fn, device_pref, b
             else:
                 segments.append({'start': float(seg.start), 'end': float(seg.end), 'text': text})
         full_text = ' '.join((s['text'] for s in segments))
-        log_fn(f'   Đã nhận dạng {len(segments)} đoạn thoại (faster-whisper)')
+        _report(1.0, 'Nhận dạng giọng nói · 100%')
+        log_fn(f'   Đã nhận dạng {len(segments)} đoạn thoại')
         return {'language': detected_lang, 'segments': segments, 'full_text': full_text}
     except Exception as e:
         tb = traceback.format_exc()
-        log_fn(f'   [DEBUG] faster-whisper traceback:\n{tb}')
+        log_fn(f'   [DEBUG] Chi tiết lỗi nhận dạng:\n{tb}')
         raise e
     finally:
         for n, lvl in _saved.items():

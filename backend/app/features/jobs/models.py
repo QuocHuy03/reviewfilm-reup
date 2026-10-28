@@ -46,6 +46,10 @@ class VideoJobRequest(SubtitleOptions):
     hardsub_source: bool = True                                    # Dịch phụ đề: video có phụ đề cứng → đọc phụ đề trên hình làm lời gốc (thay Whisper)
     dub_only_subbed: bool = True                                   # lồng tiếng: chỉ câu có phụ đề Trung trên hình (lời nhân vật)
     dub_separate: bool = True                                      # lồng tiếng: tách giọng gốc khỏi nhạc nền (bỏ hẳn giọng Trung, giữ nhạc)
+    keep_bg: Optional[bool] = None                                 # Review/Reup: tách giọng gốc, giữ nhạc nền + tiếng động (None = Reup bật, Review tắt)
+    bg_volume: Optional[float] = Field(None, ge=0, le=2)           # Review/Reup: mức nhạc nền gốc đã tách (None = Reup 0.9, Review 0.35)
+    loudness: Literal['youtube', 'off'] = 'youtube'                # chuẩn âm lượng video xuất: -14 LUFS (YouTube / TikTok) hoặc giữ nguyên
+    auto_sfx: bool = False                                         # Review: tự thêm hiệu ứng âm thanh (vút khi chuyển cảnh, bùm ở cao trào)
     dub_by_gender: bool = False                                    # lồng tiếng: câu giọng nữ (theo cao độ giọng gốc) đọc bằng voice_female
     voice_female: str = ''
     crop_box: list[float] = Field(default_factory=list)           # cắt khung hình gốc [x, y, w, h] theo % — rỗng = không cắt

@@ -1,4 +1,4 @@
-import { Film, FolderOpen, History, Loader2, RefreshCw, RotateCcw, Search, StepForward, Trash2 } from "lucide-react"
+import { FolderOpen, History, Loader2, RefreshCw, RotateCcw, Search, StepForward, Trash2 } from "lucide-react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { VideoThumb } from "@/components/VideoThumb"
 import { api, bridge, mediaUrl } from "@/lib/api"
 import { fmtDuration, fmtRelative } from "@/lib/format"
 import type { JobSummary } from "@/lib/types"
@@ -121,9 +122,14 @@ export function JobsPage() {
                 <TableRow key={j.id} className="cursor-pointer" onClick={() => (j.kind === "download" ? go("download") : openJob(j.id))}>
                   <TableCell className="max-w-0 pl-4">
                     <div className="flex items-center gap-2.5">
-                      {thumb
-                        ? <img src={`${mediaUrl(thumb.path)}&v=${thumb.v ?? 0}`} alt="" className="h-9 w-16 shrink-0 rounded object-cover" />
-                        : <span className="flex h-9 w-16 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground"><Film className="size-3.5" /></span>}
+                      {(() => {
+                        const vid = j.result.output_path && /\.(mp4|mkv|mov|webm)$/i.test(j.result.output_path) ? j.result.output_path : ""
+                        return (
+                          <span onClick={(e) => { if (vid) e.stopPropagation() }}><VideoThumb image={thumb ? `${mediaUrl(thumb.path)}&v=${thumb.v ?? 0}` : undefined} video={vid ? mediaUrl(vid) : undefined}
+                            className="h-11 w-[78px]" error={j.status === "error"} title={vid ? "Xem video" : undefined}
+                            onClick={vid ? () => bridge.open(vid) : undefined} /></span>
+                        )
+                      })()}
                       <div className="min-w-0">
                         <p className="truncate text-[13px]" title={j.title}>{jobFileName(j.title)}</p>
                         {j.error ? <p className="truncate text-[11px] text-destructive">{j.error}</p>

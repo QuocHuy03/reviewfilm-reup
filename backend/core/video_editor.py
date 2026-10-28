@@ -92,25 +92,13 @@ def _stretch_audio_to_duration(src, target_dur, out, max_ratio=1.18):
     cmd = [FFMPEG_EXE, '-y', '-i', src, '-filter:a', atempo, '-ac', '1', '-ar', '44100', '-acodec', 'pcm_s16le', out]
     r2 = subprocess.run(cmd, capture_output=True, creationflags=_HIDE)
     return r2.returncode == 0 and os.path.getsize(out) > 0
-_NVENC_AVAILABLE = None
 def _check_nvenc():
-    global _NVENC_AVAILABLE
-    if _NVENC_AVAILABLE is not None:
-        return _NVENC_AVAILABLE
-    try:
-        r = subprocess.run([FFMPEG_EXE, '-hide_banner', '-encoders'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, timeout=10)
-        _NVENC_AVAILABLE = 'h264_nvenc' in r.stdout
-        if _NVENC_AVAILABLE:
-            # Encoder co the duoc liet ke nhung driver qua cu -> thu encode 1 frame that
-            t = subprocess.run([FFMPEG_EXE, '-hide_banner', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=256x256:d=0.1', '-frames:v', '1', '-c:v', 'h264_nvenc', '-f', 'null', '-'], capture_output=True, text=True, encoding='utf-8', errors='replace', creationflags=_HIDE, timeout=20)
-            _NVENC_AVAILABLE = t.returncode == 0
-    except Exception:
-        _NVENC_AVAILABLE = False
-    return _NVENC_AVAILABLE
+    """GPU NVIDIA (NVENC) dùng được không — dò 1 lần ở core.encoder (đúng tham số, tôn trọng Cài đặt bật / tắt)."""
+    from core import encoder
+    return encoder.use_gpu()
 def _video_encode_args(use_nvenc):
-    if use_nvenc:
-        return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '24', '-pix_fmt', 'yuv420p']
-    return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p']
+    from core import encoder
+    return encoder.video_args('scene', gpu=use_nvenc)
 def _find_font():
     tool_dir = os.path.dirname(os.path.abspath(__file__))
     cache_font = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AutoReviewStudio', 'cache', 'fonts', 'DejaVuSans.ttf')
@@ -174,12 +162,107 @@ def enable_expr(spans, max_terms=50):
     return '+'.join(f'between(t\\,{a:.3f}\\,{b:.3f})' for (a, b) in cap_spans(spans, max_terms))
 
 
+def _union(a, b):
+    return [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+
+
+def _box_area(b):
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def group_boxes(items, max_groups=12):
+    """[(box [x1, y1, x2, y2], [(a, b), …])] → nhóm làm mờ chung 1 lớp lọc (ít bước lọc, dựng nhanh).
+    Chỉ gộp vùng gần như trùng chỗ (khung hợp ≤ 1.2 lần vùng lớn hơn) → vùng mờ đúng cỡ chữ. Còn quá max_groups nhóm
+    (vd cả phim hàng trăm câu phụ đề) thì gộp dần cặp tốn ít "diện tích × giây" che thừa nhất — câu phụ đề cùng dải
+    gộp trước, logo đứng suốt phim không bị nối với chữ khác. Trước gộp theo "cùng dải / cùng cột" → chữ khác nhau ở gần
+    nhau thành 1 khối to che suốt (góc trái 50% × 20% khung), và nhóm thứ 13 trở đi bị bỏ (chữ lộ ra)."""
+    groups = []
+    for (box, spans) in items:
+        for g in groups:
+            u = _union(g[0], box)
+            if _box_area(u) <= 1.2 * max(_box_area(g[0]), _box_area(box)):
+                (g[0], g[1]) = (u, g[1] + list(spans))
+                break
+        else:
+            groups.append([list(box), list(spans)])
+    if len(groups) > max_groups:
+        import numpy as np
+        bx = np.array([g[0] for g in groups], dtype=float)
+        du = np.array([max(0.05, sum(b - a for (a, b) in g[1])) for g in groups])
+        alive = np.ones(len(groups), bool)
+        while alive.sum() > max_groups:
+            ar = (bx[:, 2] - bx[:, 0]) * (bx[:, 3] - bx[:, 1])
+            ux = np.minimum.outer(bx[:, 0], bx[:, 0]); uy = np.minimum.outer(bx[:, 1], bx[:, 1])
+            uw = np.maximum.outer(bx[:, 2], bx[:, 2]) - ux; uh = np.maximum.outer(bx[:, 3], bx[:, 3]) - uy
+            cost = uw * uh * np.add.outer(du, du) - (ar * du)[:, None] - (ar * du)[None, :]
+            cost[~alive, :] = np.inf; cost[:, ~alive] = np.inf
+            np.fill_diagonal(cost, np.inf)
+            (i, j) = np.unravel_index(np.argmin(cost), cost.shape)
+            groups[i] = [_union(groups[i][0], groups[j][0]), groups[i][1] + groups[j][1]]
+            bx[i] = groups[i][0]
+            du[i] += du[j]
+            alive[j] = False
+        groups = [g for (g, ok) in zip(groups, alive) if ok]
+    return groups
+
+
+def _merge_spans(spans, gap=0.0):
+    out = []
+    for (a, b) in sorted(spans):
+        if out and a <= out[-1][1] + gap:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return out
+
+
+def _mask_blur_chain(items, src_size, sigma, style, max_spans, merge_gap):
+    """Làm mờ MỌI vùng chữ bằng 1 lớp mờ + mặt nạ: thu nhỏ khung 1/4 → làm mờ → mặt nạ (mỗi vùng 1 ô trắng, chỉ bật
+    đúng lúc vùng đó có chữ) → phóng lại, dán 1 lần. Mỗi vùng che đúng khung, đúng lúc — không phải gộp vùng thành khối to,
+    bao nhiêu vùng cũng gần như không thêm thời gian dựng (268 vùng: +3s / 40s 1080p; cách cắt-dán 16 nhóm cũ: +17s).
+    Mặt nạ phóng từ 1/4 → mép mờ mềm ~4px, ô nới thêm 1 điểm ảnh nhỏ mỗi phía cho kín chữ."""
+    (sw, sh) = (int(src_size[0]), int(src_size[1]))
+    down = 4 if max(sw, sh) >= 1000 else 2
+    boxes = {}                                   # cùng khung (vd logo quét được nhiều lần) → 1 ô, nhiều khoảng thời gian
+    for (box, spans) in items:
+        boxes.setdefault(tuple(round(v, 4) for v in box), []).extend(spans)
+    (parts, cur, all_spans, hs) = ([], '0:v', [], [])
+    erase = style == 'erase'
+    draws = []
+    for (k, ((x1, y1, x2, y2), spans)) in enumerate(boxes.items()):
+        merged = _merge_spans(spans, merge_gap)
+        all_spans += merged
+        en = enable_expr(merged, min(50, max_spans))
+        if erase:
+            # Xoá nhẹ: delogo lấp vùng chữ bằng điểm ảnh xung quanh, lớp mờ nhẹ phía sau làm mượt viền.
+            # delogo cần toạ độ px nằm hẳn trong khung (không chạm mép).
+            (px, py) = (max(1, int(x1 * sw)), max(1, int(y1 * sh)))
+            (pw, ph) = (max(4, min(int(x2 * sw), sw - 2) - px), max(4, min(int(y2 * sh), sh - 2) - py))
+            parts.append(f"[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}:enable='{en}'[tsd{k}]")
+            cur = f'tsd{k}'
+            hs.append(ph)
+        # toạ độ theo cỡ khung thật (iw/ih) — nới 1 điểm ảnh (khung nhỏ) mỗi phía; drawbox tự cắt phần lòi ra ngoài khung
+        draws.append(f"drawbox=x=iw*{x1:.4f}-1:y=ih*{y1:.4f}-1:w=iw*{x2 - x1:.4f}+3:h=ih*{y2 - y1:.4f}+3:c=white:t=fill:enable='{en}'")
+    if erase:                                    # vùng lớn mờ thêm chút cho hết vệt sọc của delogo
+        sigma = max(4, round(sorted(hs)[len(hs) // 2] * 0.09))
+    any_en = enable_expr(_merge_spans(all_spans, 0.5), min(50, max_spans))
+    parts.append(f'[{cur}]split=3[tsm][tsl][tsr]')
+    parts.append(f'[tsl]scale=trunc(iw/{down * 2})*2:trunc(ih/{down * 2})*2:flags=area,split[tsb][tsk]')
+    parts.append(f"[tsb]gblur=sigma={max(1.0, sigma / down):.2f}:steps=2:enable='{any_en}'[tsbb]")
+    parts.append('[tsk]format=gray,drawbox=c=black:t=fill,' + ','.join(draws) + '[tsmk]')
+    # phóng lại đúng cỡ khung gốc (lấy theo chính khung hình — video quay dọc có cờ xoay cũng khớp)
+    parts.append('[tsbb][tsmk]alphamerge[tsa0]')
+    parts.append('[tsa0][tsr]scale=rw:rh:flags=bilinear[tsa]')
+    parts.append(f"[tsm][tsa]overlay=0:0:enable='{any_en}'[tsout]")
+    return (';'.join(parts), 'tsout')
+
+
 def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, max_spans=40, merge_gap=0.0, style='blur', src_size=None):
     """Vùng chữ (box % hình gốc, giây video gốc) → chuỗi lọc làm mờ trên [0:v] của clip (t tính từ clip_start).
     Vùng cùng dải (vd mọi câu phụ đề ở đáy) gộp thành 1 lớp mờ với nhiều khoảng thời gian → ít bước lọc, dựng nhanh."""
     if not regions:
         return ('', '0:v')
-    groups = []        # [box, [(a, b), ...]]
+    items = []
     for r in regions:
         try:
             (x1, y1, x2, y2) = [max(0.0, min(1.0, float(v))) for v in r['box']]
@@ -188,22 +271,15 @@ def _src_text_blur_chain(regions, clip_start, src_dur, sigma=22, max_groups=12, 
             continue
         if b <= 0 or a >= src_dur or x2 - x1 < 0.01 or y2 - y1 < 0.01:
             continue
-        (a, b) = (max(0.0, a), min(src_dur, b))
-        for g in groups:
-            gb = g[0]
-            oy = min(y2, gb[3]) - max(y1, gb[1])
-            mh = min(y2 - y1, gb[3] - gb[1])
-            ox = min(x2, gb[2]) - max(x1, gb[0])
-            # cùng dải (chồng dọc ≥ 50%) — hoặc 2 dòng sát nhau cùng cột (vd watermark 2 dòng có ký tự "&" ở giữa không quét ra)
-            if (oy >= 0.5 * mh and ox > -0.05) or (oy > -0.6 * mh and ox > 0.5 * min(x2 - x1, gb[2] - gb[0])):
-                g[0] = [min(x1, gb[0]), min(y1, gb[1]), max(x2, gb[2]), max(y2, gb[3])]
-                g[1].append((a, b))
-                break
-        else:
-            groups.append([[x1, y1, x2, y2], [(a, b)]])
+        items.append(([x1, y1, x2, y2], [(max(0.0, a), min(src_dur, b))]))
+    if not items:
+        return ('', '0:v')
+    if src_size and src_size[0] > 8 and src_size[1] > 8:
+        return _mask_blur_chain(items, src_size, sigma, style, max_spans, merge_gap)
+    groups = group_boxes(items, max_groups)       # không đọc được cỡ video → cách cũ: cắt từng nhóm, làm mờ, dán lại
     erase = style == 'erase' and src_size and src_size[0] > 8 and src_size[1] > 8
     (parts, cur, blurs) = ([], '0:v', [])
-    for (i, ((x1, y1, x2, y2), spans)) in enumerate(groups[:max_groups]):
+    for (i, ((x1, y1, x2, y2), spans)) in enumerate(groups):
         merged = []                              # gộp khoảng sát nhau (cả phim một lượt có hàng trăm câu phụ đề)
         for (a, b) in sorted(spans):
             if merged and a <= merged[-1][1] + merge_gap:
@@ -247,10 +323,14 @@ def src_dims(path):
     """(rộng, cao) px của video gốc — nhớ theo file (xoá chữ kiểu delogo cần toạ độ px)."""
     if path not in _DIMS:
         try:
-            r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height',
-                                '-of', 'csv=p=0', path], capture_output=True, text=True, creationflags=_HIDE, timeout=20)
-            (w, h) = [int(v) for v in r.stdout.strip().split(',')[:2]]
-            _DIMS[path] = (w, h)
+            r = subprocess.run([FFPROBE_EXE, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+                                'stream=width,height:stream_side_data=rotation', '-of', 'json', path],
+                               capture_output=True, text=True, creationflags=_HIDE, timeout=20)
+            s = (json.loads(r.stdout or '{}').get('streams') or [{}])[0]
+            (w, h) = (int(s['width']), int(s['height']))
+            rot = next((int(float(d.get('rotation') or 0)) for d in s.get('side_data_list') or [] if 'rotation' in d), 0)
+            # video quay điện thoại có cờ xoay 90° → ffmpeg tự xoay khung khi đọc → rộng / cao đổi chỗ
+            _DIMS[path] = (h, w) if abs(rot) % 180 == 90 else (w, h)
         except Exception:
             _DIMS[path] = (0, 0)
     return _DIMS[path]
@@ -491,10 +571,8 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     # SRT ghi SAU khi dựng (đo độ dài clip thật, cộng intro, chia tốc độ video) — xem _write_synced_srt
     _srt_opts = (final_srt_path, kwargs.get('sub_max_chars_per_chunk', 56), kwargs.get('sub_max_lines', 2), sub_source_mode)
     use_nvenc = _check_nvenc()
-    if use_nvenc:
-        log_fn('   Phát hiện GPU NVIDIA NVENC — encode bằng GPU (nhanh gấp 5-10 lần)')
-    else:
-        log_fn('   Encode bằng CPU x264 (cài GPU NVIDIA để nhanh hơn)')
+    from core import encoder
+    log_fn('   ' + encoder.describe())
     clips_dir = os.path.join(temp_dir, 'clips')
     os.makedirs(clips_dir, exist_ok=True)
     sub_font_name = kwargs.get('sub_font_name', 'Segoe UI')
@@ -507,6 +585,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     # chuyển cảnh chỉ dùng lúc ghép → tách khỏi kwargs để đổi kiểu chuyển cảnh không phải dựng lại clip
     transition = str(kwargs.pop('transition', 'none') or 'none')
     transition_duration = kwargs.pop('transition_duration', 0.5)
+    auto_sfx = bool(kwargs.pop('auto_sfx', False))   # hiệu ứng âm thanh trộn sau khi ghép → không vào khoá clip
     from core import perf
     workers = perf.render_workers()              # theo ngân sách CPU chung (chế độ nhẹ máy → 1)
     if kwargs.get('low_memory_mode'):
@@ -630,6 +709,18 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
     if timeline_out is not None:
         timeline_out.extend({'i': s['_job_index'], 'out_start': s['out_start'], 'out_end': s['out_end']}
                             for (k, s) in enumerate(scenes) if k in results and s.get('_job_index') is not None)
+    if auto_sfx and not is_reup:
+        try:
+            from core import sfx
+            done = [scenes[k] for k in sorted(results)]
+            energies = sfx.scene_energy(kwargs.get('bg_audio') or source_video, done)
+            fx = sfx.plan(done, energies, _safe_duration(concat_output), intro=_intro_used[0] / (_applied_speed or 1.0))
+            if fx:
+                n_w = sum(1 for f in fx if f['kind'] == 'whoosh')
+                log_fn(f'   Hiệu ứng âm thanh tự động: {n_w} "vút" khi chuyển cảnh · {len(fx) - n_w} "bùm" ở cao trào')
+                music_clips = list(music_clips or []) + fx
+        except Exception as e:
+            log_fn(f'   [WARN] Không thêm được hiệu ứng âm thanh: {str(e)[:120]}')
     audio_src = concat_output
     if bgm_path and os.path.exists(bgm_path):
         log_fn('   Trộn nhạc nền (BGM)...')
@@ -873,6 +964,12 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     vf_post = vf_post.lstrip(',')
     has_audio = _has_audio(source_video)
     orig_vol = scene.get('orig_volume', original_volume)
+    # Giữ nhạc nền gốc (đã tách giọng): đoạn có lời Việt / câu gốc bị bỏ → dùng nhạc nền + tiếng động thay cho tiếng gốc
+    # (không còn giọng Trung lẫn vào). Đoạn để tiếng gốc 100% (khoảng trống không lời Việt) vẫn dùng tiếng gốc thật.
+    bg_audio = kwargs.get('bg_audio') or ''
+    use_bg = bool(bg_audio) and os.path.isfile(bg_audio) and float(orig_vol) < 0.999 and has_audio
+    if use_bg:
+        orig_vol = max(0.0, min(2.0, float(kwargs.get('bg_volume', 0.9))))
     mute_orig = float(orig_vol) <= 0.001 or not has_audio
     atempo_filter = ''
     if is_reup and pts_ratio != 1.0 and not mute_orig:
@@ -1040,13 +1137,20 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 cmd.append(watermark_path)
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     else:
-        af_src = f'''[0:a]volume={orig_vol}{atempo_filter},atrim=duration={tts_duration},asetpts=N/SR/TB[ao]'''
-        filter_complex = f'''{filter_complex_v};{af_src};[1:a]asetpts=N/SR/TB[vo];[vo]asplit=2[vo_sc][vo_mix];[ao][vo_sc]sidechaincompress=threshold=-35dB:ratio=20:attack=50:release=400[ao_ducked];[ao_ducked][vo_mix]amix=inputs=2:normalize=0:duration=longest,alimiter=limit=0.97:level=disabled,apad[a]'''
+        # nhạc nền đã tách là input sau watermark (watermark luôn là [2:v] nếu có)
+        a_in = f'{3 if has_wm else 2}:a' if use_bg else '0:a'
+        af_src = f'''[{a_in}]volume={orig_vol}{atempo_filter},atrim=duration={tts_duration},asetpts=N/SR/TB[ao]'''
+        # tiếng gốc còn giọng → nén mạnh khi có lời Việt (không nghe 2 giọng chồng); nhạc nền đã tách → chỉ hạ nhẹ ~6dB
+        # cho lời rõ mà nhạc vẫn liền mạch như phim lồng tiếng thật
+        duck = 'threshold=-30dB:ratio=3:attack=40:release=500' if use_bg else 'threshold=-35dB:ratio=20:attack=50:release=400'
+        filter_complex = f'''{filter_complex_v};{af_src};[1:a]asetpts=N/SR/TB[vo];[vo]asplit=2[vo_sc][vo_mix];[ao][vo_sc]sidechaincompress={duck}[ao_ducked];[ao_ducked][vo_mix]amix=inputs=2:normalize=0:duration=longest,alimiter=limit=0.97:level=disabled,apad[a]'''
         cmd = [FFMPEG_EXE, '-y', '-ss', str(clip_start), '-t', str(clip_duration), '-i', source_video, '-i', tts_path]
         if watermark_path:
             if os.path.exists(watermark_path):
                 cmd.append('-i')
                 cmd.append(watermark_path)
+        if use_bg:
+            cmd += ['-ss', str(clip_start), '-t', str(clip_duration), '-i', bg_audio]
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     r = run_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:

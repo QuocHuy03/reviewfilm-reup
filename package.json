@@ -1,6 +1,6 @@
 {
   "name": "reviewfilm",
-  "version": "2.8.3",
+  "version": "2.12.0",
   "private": true,
   "description": "ReviewFilm Studio — AI review phim, dịch & reup, phụ đề",
   "main": "electron/dist/main.js",
@@ -81,7 +81,8 @@
       {
         "provider": "github",
         "owner": "quochuy03",
-        "repo": "reviewfilm-public"
+        "repo": "reviewfilm-public",
+        "releaseType": "release"
       }
     ]
   }

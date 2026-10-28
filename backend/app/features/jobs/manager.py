@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.config import JOBS_DIR
+from core import cancel as _cancel
 
 MAX_LOGS = 4000
 # Emoji/ký hiệu trang trí bị lọc khỏi log (log của core, yt-dlp, Whisper...)
@@ -16,8 +17,14 @@ _EMOJI = re.compile('[' + ''.join(f'{chr(a)}-{chr(b)}' for a, b in _EMOJI_RANGES
 TERMINAL = ('done', 'error', 'cancelled')
 
 
-class JobCancelled(Exception):
-    pass
+# Bấm Dừng: ném ở bất kỳ đâu (core.cancel.check() trong luồng phụ / thư viện sâu, hoặc job.check()) đều được bắt như nhau
+JobCancelled = _cancel.Cancelled
+
+
+class JobFailed(RuntimeError):
+    """Lỗi đã biết, thông báo đủ rõ cho người dùng (vd link không tải được) — không ghi traceback vào nhật ký job."""
+
+FORCE_STOP_SECS = 8.0       # bấm Dừng mà bước đang chạy chưa nhả sau chừng này giây → chốt "Đã huỷ" luôn (JobManager._force_stop)
 
 
 class WorkSlot:
@@ -47,6 +54,7 @@ class WorkSlot:
                         raise JobCancelled()
                     self._cond.wait(timeout=0.5)
                 self._holders.add(job.id)
+                _cancel.set_active(job._cancel_fn)       # code ở mọi luồng biết job đang chạy đã bị bấm Dừng chưa
             finally:
                 self._waiters.remove(ticket)
                 self._cond.notify_all()
@@ -54,6 +62,7 @@ class WorkSlot:
     def release(self, job):
         with self._cond:
             self._holders.discard(job.id)
+            _cancel.clear_active(job._cancel_fn)
             self._cond.notify_all()
 
     def position(self, job_id):
@@ -106,6 +115,9 @@ class Job:
         self.checkpoint = {}            # trạng thái sau bước cuối đã xong — để tiếp tục khi lỗi (pipelines.py)
         self.draft = {}                 # bản nháp chỉnh sửa ở bước chờ (script/preview) — rời màn hình / tắt app không mất
         self.cancelled = False
+        self.abandoned = False          # đã chốt "Đã huỷ" khi bước cũ chưa nhả — mọi cập nhật muộn của luồng cũ bị bỏ
+        self._cancel_fn = lambda: self.cancelled
+        self._thread = None
         self._event = threading.Event()
         self._reply = None
         self._lock = threading.Lock()
@@ -114,6 +126,8 @@ class Job:
 
     # ---------- log / progress ----------
     def log(self, msg, tag=None):
+        if self.abandoned:              # luồng cũ (đã bị chốt huỷ) vẫn chạy nốt ngầm → không ghi thêm gây rối
+            return
         msg = _EMOJI.sub('', str(msg)).replace('  ', ' ') if _EMOJI.search(str(msg)) else str(msg)
         with self._lock:
             self.logs.append({'t': time.time(), 'msg': msg, 'tag': tag or _guess_tag(msg)})
@@ -125,6 +139,8 @@ class Job:
         self.save(throttle=True)        # ghi xuống đĩa tối đa mỗi 2s — app tắt đột ngột vẫn còn log
 
     def set_progress(self, value, stage=''):
+        if self.cancelled:              # đã bấm Dừng → giữ "Đang dừng / Đã huỷ", không nhảy sang bước khác
+            return
         self.progress = int(max(0, min(100, value)))
         if stage:
             self.stage = stage
@@ -339,6 +355,9 @@ class JobManager:
     def resume(self, job_id, runner):
         """Chạy tiếp job lỗi/đã huỷ từ bước sau checkpoint — cùng job, giữ log và kết quả cũ."""
         job = self.get(job_id)
+        if job._thread is not None and job._thread.is_alive():
+            raise ValueError('Bước cũ của job vẫn đang tự kết thúc — đợi vài giây rồi bấm Tiếp tục lại.')
+        job.abandoned = False
         if not job.resumable():
             raise ValueError('Job này không tiếp tục được (chưa xong bước nào, hoặc thư mục tạm đã bị xoá) — hãy chạy lại từ đầu.')
         job.cancelled = False
@@ -368,22 +387,36 @@ class JobManager:
                 job.log(f'[BẮT ĐẦU] {job.title}', 'info')
                 job.save()
                 runner(job)
+                if job.abandoned:                       # đã chốt 'Đã huỷ' lúc bước này còn chạy ngầm → không ghi đè
+                    return
                 job.status = 'done'
                 job.progress = 100
                 job.stage = 'Hoàn thành'
                 job.log(f'[HOÀN THÀNH] Xong sau {job.elapsed():.0f}s', 'ok')
             except JobCancelled:
-                job.status = 'cancelled'
-                job.stage = 'Đã huỷ'
-                job.log('[DỪNG] Job đã bị huỷ.', 'warn')
+                if not job.abandoned:
+                    job.status = 'cancelled'
+                    job.stage = 'Đã huỷ'
+                    job.log('[DỪNG] Job đã bị huỷ.', 'warn')
             except Exception as e:
                 import traceback
+                if job.cancelled:               # lỗi phát sinh vì bị huỷ giữa chừng (tiến trình con bị diệt…) → coi là huỷ, không báo lỗi
+                    if not job.abandoned:
+                        job.status = 'cancelled'
+                        job.stage = 'Đã huỷ'
+                        job.log('[DỪNG] Job đã bị huỷ.', 'warn')
+                    return
                 job.status = 'error'
                 job.error = str(e) or e.__class__.__name__
                 job.stage = 'Lỗi'
                 job.log(f'[LỖI] {job.error}', 'err')
-                job.log(traceback.format_exc(), 'err')
+                if not isinstance(e, JobFailed):
+                    job.log(traceback.format_exc(), 'err')
             finally:
+                if job.abandoned:                         # đã chốt huỷ & nhả lượt từ trước
+                    if holding:
+                        slot.release(job)
+                    return
                 if meter is not None:
                     try:
                         job.log('   ' + meter.summary() + ' (kể cả lúc chờ bạn duyệt)', 'info')
@@ -395,21 +428,50 @@ class JobManager:
                 job.waiting = None
                 job.save()
 
-        threading.Thread(target=_run, daemon=True, name=f'job-{job.id}').start()
+        job._thread = threading.Thread(target=_run, daemon=True, name=f'job-{job.id}')
+        job._thread.start()
         return job
 
     def cancel(self, job_id):
+        """Bấm Dừng: báo huỷ cho mọi bước (kể cả luồng phụ), diệt tiến trình con đang chạy (ffmpeg, VieNeu…), rồi canh
+        FORCE_STOP_SECS giây — bước nào không nhả kịp thì vẫn chốt 'Đã huỷ' ngay (không bao giờ phải tắt app)."""
         job = self.get(job_id)
+        if job.status in TERMINAL:
+            return job
         was_running = job.status == 'running'
         job.cancel()
-        if not was_running:
-            return job
+        if was_running:
+            job.stage = 'Đang dừng…'
+            job.save()
+            try:
+                from core.utils import kill_all_active_processes
+                threading.Thread(target=kill_all_active_processes, daemon=True).start()
+            except Exception:
+                pass
+        threading.Thread(target=self._force_stop, args=(job,), daemon=True, name=f'stop-{job.id}').start()
+        return job
+
+    def _force_stop(self, job, grace=None):
+        end = time.time() + (FORCE_STOP_SECS if grace is None else grace)
+        while time.time() < end:
+            if job.status in TERMINAL:
+                return
+            time.sleep(0.2)
+        if job.status in TERMINAL or not job.cancelled:
+            return
+        job.log('[DỪNG] Job đã bị huỷ — bước đang chạy dở sẽ tự kết thúc ngầm, không ảnh hưởng job khác.', 'warn')
+        job.abandoned = True
+        job.status = 'cancelled'
+        job.stage = 'Đã huỷ'
+        job.waiting = None
+        job.finished = time.time()
+        slot.release(job)                                 # nhả lượt → job sau chạy được ngay
         try:
             from core.utils import kill_all_active_processes
-            threading.Thread(target=kill_all_active_processes, daemon=True).start()
+            kill_all_active_processes()                   # tiến trình con mới sinh trong lúc chờ
         except Exception:
             pass
-        return job
+        job.save()
 
     def delete(self, job_id):
         job = self.get(job_id)

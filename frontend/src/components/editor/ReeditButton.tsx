@@ -34,7 +34,7 @@ export function ReeditButton({ job, label = "Mở lại hậu kỳ" }: { job: Jo
 
   return (
     <>
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)} title="Sửa tiếp & xuất lại — dùng lại kịch bản, không chạy lại Whisper / AI">
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)} title="Sửa tiếp & xuất lại — dùng lại kịch bản, không chạy lại nhận dạng / AI">
         <Wand2 /> {label}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -43,7 +43,7 @@ export function ReeditButton({ job, label = "Mở lại hậu kỳ" }: { job: Jo
             <DialogTitle>Mở lại hậu kỳ</DialogTitle>
             <DialogDescription>
               Dùng lại kịch bản {job.scenes.filter((s) => !s.excluded).length} cảnh của video này, đọc lại giọng rồi dừng ở bước
-              <b> Xem trước</b> để bạn sửa lời, đổi thứ tự, chỉnh nhạc và xuất lại. Không chạy lại Whisper / AI viết kịch bản.
+              <b> Xem trước</b> để bạn sửa lời, đổi thứ tự, chỉnh nhạc và xuất lại. Không chạy lại nhận dạng giọng / AI viết kịch bản.
               Video cũ giữ nguyên.
             </DialogDescription>
           </DialogHeader>
