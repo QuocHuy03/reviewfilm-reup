@@ -752,6 +752,8 @@ def _render_options(cfg, mixer):
     opts = {}
     if cfg.get('remove_old_sub') and cfg.get('cover_boxes'):
         opts.update(remove_old_sub=True, sub_cover_boxes=cfg['cover_boxes'])
+        if cfg.get('cover_style') == 'reflect':                  # vùng che vẽ tay: phản chiếu dải hình bên cạnh thay làm mờ
+            opts['box_style'] = 'reflect'
     if cfg.get('crop_box'):           # cắt khung hình gốc (vd bỏ dải phụ đề cũ) rồi phóng đầy khung / giữ viền đen
         opts.update(crop_box=cfg['crop_box'], crop_fill=bool(cfg.get('crop_fill', True)))
     if mixer:
@@ -765,9 +767,19 @@ def _render_options(cfg, mixer):
     if sfx_on if sfx_on is not None else cfg.get('auto_sfx'):   # Hậu kỳ chọn > lúc tạo job; chỉ Review dùng (Reup bỏ qua)
         opts['auto_sfx'] = True
     # Thương hiệu: logo/watermark, intro, outro (file không tồn tại thì bỏ qua)
-    if cfg.get('watermark_path') and os.path.isfile(cfg['watermark_path']):
-        opts.update(watermark_path=cfg['watermark_path'], watermark_corner=cfg.get('watermark_corner', 'Trên-Phải'),
+    has_logo = bool(cfg.get('watermark_path') and os.path.isfile(cfg['watermark_path']))
+    wm_text = str(cfg.get('watermark_text') or '').strip()
+    if has_logo or wm_text:
+        opts.update(watermark_corner=cfg.get('watermark_corner', 'Trên-Phải'),
                     watermark_size_pct=float(cfg.get('watermark_size_pct', 14)), watermark_opacity=float(cfg.get('watermark_opacity', 0.92)))
+        if has_logo:
+            opts['watermark_path'] = cfg['watermark_path']
+        if wm_text:
+            opts['watermark_text'] = wm_text
+        if cfg.get('watermark_motion', 'static') != 'static':     # 'static' không gửi → khoá clip cũ giữ nguyên
+            opts['watermark_motion'] = cfg['watermark_motion']
+    if cfg.get('frame_bg') == 'black':                           # mặc định nền mờ khi khác tỉ lệ
+        opts['frame_bg'] = 'black'
     for key in ('intro_path', 'outro_path'):
         if cfg.get(key) and os.path.isfile(cfg[key]):
             opts[key] = cfg[key]

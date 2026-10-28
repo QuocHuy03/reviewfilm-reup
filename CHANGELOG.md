@@ -12,6 +12,36 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-10-28
+
+### Added
+- **Khung dọc 9:16 nền mờ**: video ngang trong khung dọc có phần trên / dưới là chính video phóng to làm mờ (kiểu CapCut,
+  TikTok) thay vì viền đen. Muốn viền đen như cũ thì tắt "Nền mờ thay viền đen".
+- **Logo chuyển động + logo chữ**: logo có thể nhảy lần lượt 4 góc, trôi dọc mép hoặc nảy khắp khung, liền mạch suốt
+  video. Khó bị cắt / che khi người khác reup. Không có ảnh logo thì gõ tên kênh làm logo chữ.
+- **Che phụ đề cũ kiểu "Phản chiếu"**: lấy dải hình ngay trên vùng che, lật ngược rồi phủ lên. Trên nền trơn (trời,
+  tường, sàn) trông như không có chữ, đỡ khối mờ lộ liễu.
+- **Đọc chữ viết tắt**: giọng đọc tự đọc VN, TP.HCM, HLV, CLB… thành chữ đầy đủ (~980 từ, nguồn soe-vinorm, MIT). Câu
+  gửi sang giọng đọc được làm sạch: bỏ ký tự ẩn, gạch đầu dòng, dấu phẩy / chấm phẩy thừa cuối câu. Phụ đề giữ nguyên.
+
+### Fixed
+- **Đọc phụ đề cứng làm mất câu thoại lặp lại**: câu ngắn hay lặp (什么, 走吧…) xuất hiện quá 6 lần trong phim bị bỏ
+  nhầm. Giờ chỉ bỏ chữ đứng yên thật sự (tên kênh, tiêu đề nằm trong dải phụ đề). Phim đã đọc trước đây sẽ tự đọc lại 1 lần.
+
+### Changed
+- **Đọc phụ đề cứng nhanh gấp ~4 lần** (clip 5 phút: 96s → 22s), kết quả y hệt bản cũ: bật bộ nhớ đệm cho bộ đọc chữ và
+  đọc chữ song song với lúc giải mã khung hình.
+- **Clone giọng VieNeu nhanh hơn**: giọng mẫu chỉ phân tích 1 lần rồi lưu lại, các lần sau dùng luôn (đỡ ~12 giây mỗi
+  lần tạo giọng). Cùng 1 câu luôn đọc ra giống hệt nhau, tạo lại không bị đổi giọng.
+- **Tắt app là tắt hết tiến trình con**: ffmpeg, worker giọng đọc… không còn chạy ngầm giữ RAM / GPU sau khi app tắt
+  hoặc bị lỗi đóng đột ngột.
+- **Quét chữ Trung nhanh gấp ~2 lần nhờ GPU** (DirectML — NVIDIA / AMD / Intel): bước dò chữ chạy trên card đồ hoạ khi phải
+  quét nhiều khung (Reup / Dịch phụ đề quét cả phim: phim 30 phút ~7 phút → ~3.5 phút), kết quả giống hệt CPU. GPU lỗi →
+  tự quét tiếp phần còn lại bằng CPU. Bản CPU cũng bớt chiếm hết lõi máy.
+- **Dựng video Review nhanh hơn ~20%** (70 cảnh 1080p: 137s → 110s): âm thanh trung gian mã hoá bằng bộ AAC nhanh (chất
+  lượng 192k như cũ — đã đo), lượt cuối (chuẩn âm lượng) vẫn dùng bộ chất lượng cao nhất; bỏ 1 lượt chép khung hình thừa
+  mỗi clip.
+
 ## [2.12.0] - 2026-10-27
 
 ### Added
@@ -437,7 +467,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...HEAD
+[2.13.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.2...v2.12.0
 [2.11.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.1...v2.11.2
 [2.11.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.0...v2.11.1

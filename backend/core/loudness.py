@@ -63,6 +63,7 @@ def normalize_file(path, target='youtube', log=print):
           f":measured_LRA={m['input_lra']}:measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
     tmp = os.path.splitext(path)[0] + '.loudnorm' + os.path.splitext(path)[1]
     r = run_subprocess([FFMPEG_EXE, '-y', '-v', 'error', '-i', path, '-map', '0', '-c', 'copy', '-c:a', 'aac', '-b:a', '192k',
+                        '-aac_coder', 'twoloop',             # lượt mã hoá CUỐI ra file giao → bộ chất lượng cao nhất
                         '-af', af, '-ar', str(sr), '-ac', str(ch), '-movflags', '+faststart', tmp],
                        timeout=1800, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r is None or r.returncode != 0 or not os.path.isfile(tmp) or os.path.getsize(tmp) < 1000:

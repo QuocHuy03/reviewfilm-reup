@@ -97,10 +97,60 @@ def _resolve_voice(tts, voice_id):
     return None
 
 
+def _clone_voice(tts, ref, cache_dir, memo):
+    """File mẫu clone → giọng đã nhận dạng (speaker_emb + codes) dạng dict truyền thẳng vào infer(voice=...).
+    Nhận dạng mất ~12 s/lần (lọc ồn + trích đặc trưng) → lưu đĩa theo NỘI DUNG file, job sau / lần chạy lại dùng ngay.
+    Lỗi bất kỳ → None (gọi infer(ref_audio=...) như cũ)."""
+    if ref in memo:
+        return memo[ref]
+    voice = None
+    try:
+        import hashlib
+        import numpy as np
+        with open(ref, "rb") as f:
+            key = hashlib.blake2b(f.read(), digest_size=16).hexdigest()
+        path = os.path.join(cache_dir, f"{key}_d1.npz") if cache_dir else ""
+        if path and os.path.isfile(path):
+            try:
+                with np.load(path) as z:
+                    voice = {"speaker_emb": z["speaker_emb"], "codes": z["codes"]}
+            except Exception:
+                voice = None
+        if voice is None:
+            (emb, codes) = tts.encode_reference(ref)          # denoise=True như mặc định của infer
+            voice = {"speaker_emb": np.asarray(emb, dtype=np.float32), "codes": np.asarray(codes)}
+            if path:
+                try:
+                    os.makedirs(cache_dir, exist_ok=True)
+                    tmp = path + ".tmp.npz"
+                    np.savez(tmp, **voice)
+                    os.replace(tmp, path)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[VIENEU_WORKER] Không lưu được giọng mẫu ({e}) — đọc file mẫu trực tiếp", file=sys.stderr)
+        voice = None
+    memo[ref] = voice
+    return voice
+
+
+def _seed(text, voice_key):
+    """Cùng câu + cùng giọng → luôn cùng kết quả: đọc lại 1 câu ra y hệt lần trước (VieNeu lấy mẫu bằng np.random)."""
+    import hashlib
+    import numpy as np
+    s = int(hashlib.md5(f"{voice_key}|{text}".encode("utf-8")).hexdigest()[:8], 16)
+    np.random.seed(s)
+    try:
+        import random
+        random.seed(s)
+    except Exception:
+        pass
+
+
 # Dấu phiên bản worker — để smoke KHÔNG test nhầm bản cũ + khách/support biết đang
 # chạy bản nào. Hậu tố "-cpu" = bản ép device="cpu" (từ 07-05), phân biệt với binary
 # GPU-era 06-25 (md5 612f8278…) đang ở gói khách. Chỉ là nhãn — KHÔNG manifest/hash.
-BUILD_TAG = "VieNeu Worker 1.38-cpu"
+BUILD_TAG = "VieNeu Worker 1.39-cpu"
 
 
 def main():
@@ -176,7 +226,12 @@ def main():
     print(f"[VIENEU_WORKER] Đang tải model lên {device.upper()}, đợi chút...")
     sys.stdout.flush()
     try:
-        tts = Vieneu(device=device)
+        # app chia lô câu cho nhiều worker chạy song song → mỗi worker ít luồng (RF_VIENEU_THREADS); 0 = mặc định engine
+        try:
+            threads = max(0, int(os.environ.get("RF_VIENEU_THREADS") or 0))
+        except ValueError:
+            threads = 0
+        tts = Vieneu(device=device, threads=threads) if threads else Vieneu(device=device)
     except Exception as e:
         print(f"[VIENEU_WORKER] Lỗi khởi tạo: {e}", file=sys.stderr)
         sys.exit(1)
@@ -188,6 +243,10 @@ def main():
     total = len(batch)
     ok_count = 0
     voice_cache = {}
+    clone_memo = {}
+    # giọng mẫu đã nhận dạng lưu cạnh thư mục model (data/vieneu/ref_cache) — RF_VIENEU_REF_CACHE để đổi chỗ
+    ref_cache_dir = os.environ.get("RF_VIENEU_REF_CACHE") or (
+        os.path.join(os.path.dirname(os.path.abspath(hf_home)), "ref_cache") if hf_home and os.path.isdir(hf_home) else "")
 
     import gc
     try:                     # bản ONNX (cài qua nút "Tải model") không có torch — chỉ dọn VRAM khi có
@@ -215,11 +274,15 @@ def main():
             item_ref = item.get("ref") or ""
             item_voice = (item.get("voice") or "").lower()
             if item_ref and os.path.exists(item_ref):
-                audio = tts.infer(text, ref_audio=item_ref, apply_watermark=False, temperature=0.3, top_k=10)
+                cv = _clone_voice(tts, item_ref, ref_cache_dir, clone_memo)
+                _seed(text, item_ref)
+                audio = (tts.infer(text, voice=cv, apply_watermark=False, temperature=0.3, top_k=10) if cv else
+                         tts.infer(text, ref_audio=item_ref, apply_watermark=False, temperature=0.3, top_k=10))
             elif item_voice:
                 if item_voice not in voice_cache:
                     voice_cache[item_voice] = _resolve_voice(tts, item_voice)
                 vname = voice_cache[item_voice]
+                _seed(text, vname or "")
                 audio = tts.infer(text, voice=vname, apply_watermark=False) if vname else tts.infer(text, apply_watermark=False)
             elif is_clone:
                 # Nhiet do/top_k thap hon mac dinh (0.8/25) de bam sat giong mau hon —
@@ -227,11 +290,15 @@ def main():
                 # ro ret (lech ~25Hz) so voi mac dinh (lech ~45Hz). Mac dinh qua "sang tao"
                 # (sampling ngau nhien nhieu) lam giong clone bi "trung tinh hoa", nghe
                 # giong giong cac giong co san cua VieNeu hon la giong duoc nhan ban.
-                audio = tts.infer(text, ref_audio=ref_audio, apply_watermark=False,
-                                   temperature=0.3, top_k=10)
+                cv = _clone_voice(tts, ref_audio, ref_cache_dir, clone_memo)
+                _seed(text, ref_audio)
+                audio = (tts.infer(text, voice=cv, apply_watermark=False, temperature=0.3, top_k=10) if cv else
+                         tts.infer(text, ref_audio=ref_audio, apply_watermark=False, temperature=0.3, top_k=10))
             elif vn_voice_name:
+                _seed(text, vn_voice_name)
                 audio = tts.infer(text, voice=vn_voice_name, apply_watermark=False)
             else:
+                _seed(text, "")
                 audio = tts.infer(text, apply_watermark=False)
             
             tts.save(audio, out_path)

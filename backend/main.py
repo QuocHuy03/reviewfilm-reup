@@ -91,6 +91,11 @@ def main():
         perf.lower_priority()
     except Exception:
         pass
+    try:                                   # backend chết → Windows giết luôn ffmpeg / worker con (không để mồ côi giữ RAM, GPU)
+        from core import win_job
+        win_job.attach_kill_on_close()
+    except Exception:
+        pass
     port = 8765
     if '--port' in sys.argv:
         port = int(sys.argv[sys.argv.index('--port') + 1])

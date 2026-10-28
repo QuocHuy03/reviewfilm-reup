@@ -97,3 +97,45 @@ def test_scan_tracks_do_not_chain_different_text():
     boxes = sorted(tuple(round(v, 2) for v in tr['box']) for tr in tracks)
     assert (0.0, 0.0, 0.15, 0.06) in boxes and (0.0, 0.07, 0.45, 0.14) in boxes and len(tracks) == 3
     assert np.isclose(max(tr['last'] - tr['first'] for tr in tracks), 18)
+
+
+def _scan_setup(tmp, monkeypatch):
+    import time as _t
+    from core import vocal_sep
+    monkeypatch.setattr(text_cover, '_cache_path', lambda v, i: os.path.join(tmp, f'scan_{_t.time()}.json'))
+    monkeypatch.setattr(text_cover, 'GPU_MIN_FRAMES', 1)
+    monkeypatch.setattr(vocal_sep, '_gpu_enabled', lambda: True)
+    text_cover._GPU_BAD.clear()
+    return make_pattern_video(os.path.join(tmp, 'src.mp4'), [(0.10, 0.80, 0.90, 0.88)], dur=4.0)
+
+
+def test_scan_gpu_unavailable_falls_back_to_cpu(tmp, monkeypatch):
+    """Máy không chạy được DirectML (worker báo mã 3) → quét bằng CPU, ra kết quả như thường, 1 giờ tới không thử GPU nữa."""
+    src = _scan_setup(tmp, monkeypatch)
+    from core import vocal_sep
+    monkeypatch.setattr(vocal_sep, 'ensure_gpu_runtime', lambda log=print: os.path.join(tmp, 'khong_co_dml'))
+    logs = []
+    regs = text_cover.scan(src, None, 1.0, log_fn=lambda m, *a: logs.append(m))
+    assert isinstance(regs, list)
+    assert text_cover._GPU_BAD.get('until', 0) > 0
+    assert not any('lỗi' in m for m in logs), logs                # mã 3 = chuyển CPU im lặng, không báo lỗi
+
+
+def test_scan_gpu_partial_failure_resumes_on_cpu(tmp, monkeypatch):
+    """GPU lỗi giữa chừng sau khi đã quét 1 phần → CPU chỉ quét phần còn thiếu."""
+    src = _scan_setup(tmp, monkeypatch)
+    seen = []
+
+    def fake_gpu(video, todo, interval, geom, cache, log_fn, should_stop, progress, total):
+        import json as _j
+        _j.dump({'scanned': [[0.0, 2.0]], 'dets': []}, open(cache, 'w'))
+        return 'fail'
+    real = text_cover._detect
+
+    def spy(video, todo, *a, **k):
+        seen.append(todo)
+        return real(video, todo, *a, **k)
+    monkeypatch.setattr(text_cover, '_scan_gpu', fake_gpu)
+    monkeypatch.setattr(text_cover, '_detect', spy)
+    text_cover.scan(src, None, 1.0, log_fn=lambda *a: None)
+    assert seen and all(a >= 2.0 for (a, _) in seen[0]), seen

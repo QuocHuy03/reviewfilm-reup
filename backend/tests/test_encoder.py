@@ -28,3 +28,12 @@ def test_every_kind_has_both_backends():
         # cặp '-cờ giá trị' đầy đủ (ffmpeg không nhận cờ thiếu giá trị)
         for args in (encoder.video_args(kind, gpu=True), encoder.cpu_args(kind)):
             assert len(args) % 2 == 0 and all(x.startswith('-') for x in args[::2])
+
+
+def test_intermediate_aac_uses_fast_coder():
+    from core.utils import _budgeted, fast_aac
+    cmd = _budgeted(['ffmpeg', '-i', 'a.mp4', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', 'o.mp4'])
+    assert cmd[cmd.index('aac') + 1:cmd.index('aac') + 3] == ['-aac_coder', 'fast']
+    final = ['ffmpeg', '-i', 'a.mp4', '-c:a', 'aac', '-aac_coder', 'twoloop', 'o.mp4']   # lượt cuối tự chọn bộ chất lượng cao
+    assert fast_aac(final) == final
+    assert fast_aac(['ffmpeg', '-i', 'x', '-c', 'copy', '-bsf:a', 'aac_adtstoasc', 'o']) == ['ffmpeg', '-i', 'x', '-c', 'copy', '-bsf:a', 'aac_adtstoasc', 'o']

@@ -62,11 +62,28 @@ def kill_all_active_processes():
                 p.kill()
             except Exception:
                 pass
+def fast_aac(cmd):
+    """Mã hoá AAC trung gian bằng bộ "fast" (nhanh ~2.5–4 lần bộ mặc định "twoloop", ở 192k nghe không khác) — tiếng của
+    1 video qua 4–5 lượt mã hoá (clip → ghép → nhạc nền → hiệu ứng → chuẩn âm lượng), lượt twoloop ghép 3 phút tiếng mất
+    13s. Lệnh đã tự chọn bộ mã hoá (vd lượt cuối chuẩn âm lượng: twoloop) thì giữ nguyên."""
+    if '-aac_coder' in cmd:
+        return cmd
+    out = []
+    for (k, x) in enumerate(cmd):
+        out.append(x)
+        if x == 'aac' and k > 0 and str(cmd[k - 1]).startswith(('-c:a', '-acodec', '-codec:a')):
+            out += ['-aac_coder', 'fast']
+    return out
+
+
 def _budgeted(cmd):
-    """ffmpeg → giới hạn luồng theo ngân sách CPU chung (core/perf.py); lệnh khác giữ nguyên."""
+    """ffmpeg → giới hạn luồng theo ngân sách CPU chung (core/perf.py) + AAC trung gian mã hoá nhanh; lệnh khác giữ nguyên."""
     try:
         from core import perf
-        return perf.ffmpeg_threads(list(cmd), perf.current_parallel()) if isinstance(cmd, (list, tuple)) else cmd
+        if not isinstance(cmd, (list, tuple)):
+            return cmd
+        cmd = perf.ffmpeg_threads(list(cmd), perf.current_parallel())
+        return fast_aac(cmd) if str(cmd[0]).lower().replace('\\', '/').rsplit('/', 1)[-1].startswith('ffmpeg') else cmd
     except Exception:
         return cmd
 

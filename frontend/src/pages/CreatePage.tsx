@@ -59,10 +59,10 @@ const DEFAULT_CFG = {
   voice: "Edge TTS — Nữ Bắc (miễn phí)", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
-  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
+  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur" | "reflect", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
   script_edit: true, scene_preview: true, out_dir: "", bilingual: false, extra_aspect: "",
   auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080",
-  watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, intro_path: "", outro_path: "",
+  watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, watermark_text: "", watermark_motion: "static" as "static" | "hop" | "drift" | "bounce", frame_bg: "blur" as "blur" | "black", intro_path: "", outro_path: "",
   crop_on: false, crop_box: [0, 0, 100, 84] as number[], crop_fill: true, ...DEFAULT_TEXT_COVER,
   color_preset: "none", ken_burns: false, ken_burns_zoom: 0.08, vignette: false, transition: "none", transition_duration: 0.5,
   // âm thanh: giữ nhạc nền gốc (null = theo chế độ: Reup bật, Review tắt) · hiệu ứng âm thanh (Review) · chuẩn âm lượng xuất
@@ -550,12 +550,14 @@ export function CreatePage() {
               ) : (
               <Field label="Kiểu che chữ cũ / logo">
                 <Segmented size="sm" value={cfg.cover_style} onChange={(v) => set("cover_style", v)}
-                  items={[{ value: "blur", label: "Làm mờ (như Review)" }, { value: "erase", label: "Xoá nhẹ" }, { value: "clean", label: "Xoá sạch nét chữ" }]} />
+                  items={[{ value: "blur", label: "Làm mờ (như Review)" }, { value: "erase", label: "Xoá nhẹ" }, { value: "reflect", label: "Phản chiếu" }, { value: "clean", label: "Xoá sạch nét chữ" }]} />
                 <p className="mt-1 text-[11px] text-muted-foreground">
                   {cfg.cover_style === "clean"
                     ? "Xoá sạch nét chữ chỉ có ở chế độ Dịch phụ đề — chế độ này sẽ dùng Xoá nhẹ."
                     : cfg.cover_style === "erase"
                     ? "Lấp cả vùng chữ bằng hình xung quanh như xoá logo — nhanh, ít vết; chỉ che lúc có chữ."
+                    : cfg.cover_style === "reflect"
+                    ? "Lấy dải hình ngay trên vùng che, lật ngược rồi phủ lên — nền trơn (trời, tường, sàn) trông như không có chữ. Chữ Trung AI quét trong cảnh vẫn dùng Xoá nhẹ."
                     : "Như chế độ Review phim: làm mờ cố định cả dải phụ đề cũ (và vùng logo) suốt video, phụ đề Việt nằm trên dải mờ — đều, nhanh, chắc chắn không lộ chữ cũ."}
                 </p>
               </Field>
@@ -609,10 +611,23 @@ export function CreatePage() {
                 <Segmented value={cfg.target_resolution as "1920x1080" | "1280x720" | "1080x1920"} onChange={(v) => set("target_resolution", v)}
                   items={[{ value: "1920x1080", label: "16:9 · 1080p" }, { value: "1280x720", label: "16:9 · 720p" }, { value: "1080x1920", label: "9:16 · Shorts/TikTok" }]} />
               </Field>
+              {cfg.target_resolution === "1080x1920" && (
+                <ToggleRow label="Nền mờ thay viền đen" checked={cfg.frame_bg !== "black"} onChange={(v) => set("frame_bg", v ? "blur" : "black")}
+                  desc="Video ngang trong khung dọc: phần trên / dưới là chính video phóng to làm mờ (kiểu CapCut, TikTok) thay vì viền đen." />
+              )}
               <Field label="Logo / watermark (tuỳ chọn)" hint="Ảnh PNG nền trong suốt cho đẹp nhất.">
                 <PathInput value={cfg.watermark_path} onChange={(v) => set("watermark_path", v)} pick={bridge.pickImage} placeholder="Chọn ảnh logo" />
               </Field>
-              {cfg.watermark_path && (
+              <Field label="Logo chữ (tuỳ chọn)" hint="Tên kênh hiện như logo — không cần ảnh. Có cả ảnh thì hiện cả hai.">
+                <Input value={cfg.watermark_text} maxLength={60} onChange={(e) => set("watermark_text", e.target.value)} placeholder="Vd: @TenKenh" />
+              </Field>
+              {(cfg.watermark_path || cfg.watermark_text.trim()) && (
+                <Field label="Logo chuyển động" hint="Logo đứng yên dễ bị cắt / che khi người khác reup — logo di chuyển khó xoá hơn.">
+                  <Segmented size="sm" value={cfg.watermark_motion} onChange={(v) => set("watermark_motion", v)}
+                    items={[{ value: "static", label: "Đứng yên" }, { value: "hop", label: "Nhảy góc" }, { value: "drift", label: "Trôi dọc mép" }, { value: "bounce", label: "Nảy khắp khung" }]} />
+                </Field>
+              )}
+              {(cfg.watermark_path || cfg.watermark_text.trim()) && (
                 <div className="grid grid-cols-[auto_1fr_1fr] items-end gap-4">
                   <Field label="Góc">
                     <Segmented value={cfg.watermark_corner as "Trên-Trái" | "Trên-Phải" | "Dưới-Trái" | "Dưới-Phải"} onChange={(v) => set("watermark_corner", v)}
@@ -642,12 +657,16 @@ export function CreatePage() {
                 desc="Pipeline dừng lại để bạn sửa từng câu trong Studio." />
               <ToggleRow label="Nghe lại & xác nhận trước khi dựng video" checked={cfg.scene_preview} onChange={(v) => set("scene_preview", v)}
                 desc="Nghe từng câu, sửa & tạo lại giọng, bỏ câu không ưng, thêm nhạc nền." />
-              {mode === "vietsub" && (
-                <Field label="Khung hình xuất" hint="9:16 dọc: video ngang nằm giữa, trên / dưới viền đen.">
+              {mode === "vietsub" && (<>
+                <Field label="Khung hình xuất" hint={cfg.frame_bg === "black" ? "9:16 dọc: video ngang nằm giữa, trên / dưới viền đen." : "9:16 dọc: video ngang nằm giữa, trên / dưới là nền mờ."}>
                   <Segmented value={cfg.target_resolution as "1920x1080" | "1280x720" | "1080x1920"} onChange={(v) => set("target_resolution", v)}
                     items={[{ value: "1920x1080", label: "16:9 · 1080p" }, { value: "1280x720", label: "16:9 · 720p" }, { value: "1080x1920", label: "9:16 · Shorts/TikTok" }]} />
                 </Field>
-              )}
+                  {cfg.target_resolution === "1080x1920" && (
+                    <ToggleRow label="Nền mờ thay viền đen" checked={cfg.frame_bg !== "black"} onChange={(v) => set("frame_bg", v ? "blur" : "black")}
+                      desc="Phần trên / dưới là chính video phóng to làm mờ (kiểu CapCut, TikTok) thay vì viền đen." />
+                  )}
+              </>)}
               <ToggleRow label="Chuẩn âm lượng YouTube / TikTok" checked={cfg.loudness !== "off"} onChange={(v) => set("loudness", v ? "youtube" : "off")}
                 desc="Đưa độ to video xuất về -14 LUFS như nền tảng khuyến nghị — không bị nhỏ / to bất thường so với video khác." />
               <Field label="Thư mục xuất">
@@ -681,7 +700,7 @@ export function CreatePage() {
             ].filter(Boolean).join(" · ") || "Mặc định"}</dd>
             {mode === "vietsub" && <><dt className="text-muted-foreground">Lồng tiếng</dt><dd className="truncate text-right">{cfg.dub_voice ? (cfg.dub_by_gender && cfg.voice_female ? "Nam / nữ theo nhân vật" : cfg.voice) : "Không (giữ tiếng gốc)"}</dd></>}
             {mode === "vietsub" && <><dt className="text-muted-foreground">Che phụ đề cũ</dt><dd className="text-right">{cfg.remove_old_sub ? (cfg.sub_in_cover ? "Có · phụ đề Việt nằm giữa" : "Có") : "Không"}</dd></>}
-            {mode !== "vietsub" && <><dt className="text-muted-foreground">Hậu kỳ</dt><dd className="text-right">{[cfg.auto_post && "Tự hậu kỳ", cfg.auto_fix && "Tự sửa lỗi", cfg.auto_publish && "Bài đăng AI", !cfg.script_edit && !cfg.scene_preview && "Tự động hoàn toàn", cfg.watermark_path && "Logo", (cfg.intro_path || cfg.outro_path) && "Intro/Outro"].filter(Boolean).join(" · ") || "Thủ công"}</dd></>}
+            {mode !== "vietsub" && <><dt className="text-muted-foreground">Hậu kỳ</dt><dd className="text-right">{[cfg.auto_post && "Tự hậu kỳ", cfg.auto_fix && "Tự sửa lỗi", cfg.auto_publish && "Bài đăng AI", !cfg.script_edit && !cfg.scene_preview && "Tự động hoàn toàn", (cfg.watermark_path || cfg.watermark_text.trim()) && "Logo", (cfg.intro_path || cfg.outro_path) && "Intro/Outro"].filter(Boolean).join(" · ") || "Thủ công"}</dd></>}
           </dl>
         </div>
 

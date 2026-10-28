@@ -35,7 +35,7 @@ class VideoJobRequest(SubtitleOptions):
     cover_boxes: list[list[float]] = Field(default_factory=list)  # [x, y, w, h] theo %
     sub_in_cover: bool = False                                     # phụ đề mới căn giữa vùng che phụ đề cũ
     cover_fit_text: bool = False                                   # Dịch phụ đề: khung mờ ngang vừa theo độ dài chữ từng câu
-    cover_style: Literal['clean', 'erase', 'blur'] = 'erase'                # che chữ: xoá nhẹ (delogo, tự nhiên) | làm mờ
+    cover_style: Literal['clean', 'erase', 'blur', 'reflect'] = 'erase'     # che chữ: xoá nhẹ (delogo) | làm mờ | phản chiếu dải bên cạnh
     cover_quality: Literal['fast', 'clean'] = 'fast'               # Dịch phụ đề: 'fast' che đúng khung từng câu Trung lúc câu hiện
                                                                    # (1 lượt dựng) | 'clean' xoá sạch nét chữ từng khung (đẹp, rất chậm)
     auto_sub_box: bool = True                                      # AI tự căn vùng che phụ đề theo chỗ phụ đề cũ thật
@@ -69,6 +69,9 @@ class VideoJobRequest(SubtitleOptions):
     watermark_corner: str = 'Trên-Phải'
     watermark_size_pct: float = Field(14, ge=3, le=40)
     watermark_opacity: float = Field(0.92, ge=0.1, le=1)
+    watermark_text: str = Field('', max_length=60)                 # logo chữ (tên kênh) — không cần ảnh
+    watermark_motion: Literal['static', 'hop', 'drift', 'bounce'] = 'static'   # logo đứng góc / nhảy góc / trôi / nảy
+    frame_bg: Literal['blur', 'black'] = 'blur'                    # khác tỉ lệ (ngang → 9:16): nền mờ hay viền đen
     intro_path: str = ''
     outro_path: str = ''
     # Hiệu ứng hình & chuyển cảnh

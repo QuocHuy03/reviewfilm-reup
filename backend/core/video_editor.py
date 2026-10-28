@@ -363,10 +363,40 @@ def _text_region(text, font_path, fontsize, line_spacing, border, vid_w, vid_h, 
     return (even(x), even(y), max(2, even(bw)), max(2, even(bh)))
 
 
-def _crop_prefix(crop_box, fill, w, h):
+def fit_frame(w, h, bg='blur', src_size=None, tag='ff'):
+    """Co hình vào khung xuất w×h giữ tỉ lệ (đoạn filter nối tiếp được, dùng như 1 bộ lọc trong chuỗi).
+    Khác tỉ lệ (vd phim ngang → 9:16): bg='blur' → phần thừa là chính video phóng đầy + làm mờ + tối nhẹ (kiểu CapCut / TikTok);
+    bg='black' → viền đen như cũ. Cùng tỉ lệ (biết src_size) → chỉ co, khỏi tốn công làm nền."""
+    (w, h) = (int(w), int(h))
+    plain = f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'
+    if bg != 'blur':
+        return plain
+    try:
+        if src_size and abs(src_size[0] / src_size[1] - w / h) < 0.01 * (w / h):
+            return plain
+    except (TypeError, ValueError, ZeroDivisionError, IndexError):
+        pass
+    # nền: thu nhỏ NGAY về 1/8 rồi mới làm mờ, cuối cùng phóng lên — nhanh, nhìn như làm mờ ở cỡ thật
+    (bw, bh) = (max(2, w // 8), max(2, h // 8))
+    return (f'split[{tag}a][{tag}b];[{tag}b]scale={bw}:{bh}:force_original_aspect_ratio=increase:flags=fast_bilinear,crop={bw}:{bh},'
+            f'gblur=sigma=5,eq=brightness=-0.1:saturation=0.85,scale={w}:{h}:flags=bilinear,setsar=1[{tag}bg];'
+            f'[{tag}a]scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1[{tag}fg];'
+            f'[{tag}bg][{tag}fg]overlay=(W-w)/2:(H-h)/2,setsar=1')
+
+
+def _aspect_differs(video, resolution):
+    try:
+        (sw, sh) = src_dims(video) or (0, 0)
+        (w, h) = (int(v) for v in str(resolution).split('x'))
+        return bool(sw and sh) and abs(sw / sh - w / h) >= 0.01 * (w / h)
+    except Exception:
+        return False
+
+
+def _crop_prefix(crop_box, fill, w, h, bg='black'):
     """Cắt khung hình gốc trước khi đưa về khung xuất. crop_box = [x, y, rộng, cao] theo % hình GỐC.
-    fill=True: phóng phần đã cắt cho phủ kín khung (cắt bớt mép thừa nếu khác tỉ lệ); False: giữ trọn, thêm viền đen.
-    '' nếu không cắt / khung không hợp lệ."""
+    fill=True: phóng phần đã cắt cho phủ kín khung (cắt bớt mép thừa nếu khác tỉ lệ); False: giữ trọn, phần thừa theo bg
+    (viền đen / nền mờ — xem fit_frame). '' nếu không cắt / khung không hợp lệ."""
     try:
         (x, y, cw, ch) = [max(0.0, min(100.0, float(v))) / 100.0 for v in (crop_box or [])[:4]]
     except (TypeError, ValueError):
@@ -377,7 +407,7 @@ def _crop_prefix(crop_box, fill, w, h):
     crop = f'crop=trunc(iw*{cw:.4f}/2)*2:trunc(ih*{ch:.4f}/2)*2:trunc(iw*{x:.4f}/2)*2:trunc(ih*{y:.4f}/2)*2'
     if fill:
         return f'{crop},scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}'
-    return f'{crop},scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'
+    return f'{crop},{fit_frame(w, h, bg, tag="cp")}'
 
 
 def _standardize_clip(src_path, target_path, resolution, fps, log_fn):
@@ -599,7 +629,12 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                                'nvenc': use_nvenc, 'rm_sub': remove_old_sub, 'cover_h': sub_cover_height, 'wm': watermark_path,
                                'ai_sub': ai_sub_box, 'ai_logo': ai_logo_box, 'rm_logo': remove_old_logo, 'logo': [manual_logo_corner, manual_logo_size],
                                'wm_pos': [watermark_corner, watermark_size_pct, watermark_margin_x_pct, watermark_margin_y_pct, watermark_opacity],
-                               'blur': blur_boxes, 'kw': kwargs}, sort_keys=True, default=str)
+                               'blur': blur_boxes, 'kw': kwargs,
+                               # khác tỉ lệ → nền mờ thay viền đen (khoá mới chỉ khi hình thật sự đổi; cùng tỉ lệ giữ clip cũ)
+                               **({'fbg': kwargs.get('frame_bg') or 'blur'}
+                                  if _aspect_differs(source_video, target_resolution) or (kwargs.get('crop_box') and not kwargs.get('crop_fill', True))
+                                  else {})},
+                              sort_keys=True, default=str)
 
     def _clip_path(i, scene):
         # trường '_' là dữ liệu tạm (bỏ khỏi khoá) — TRỪ các trường ảnh hưởng hình dựng ra (zoom / vị trí / chia phụ đề tay)
@@ -878,8 +913,9 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
         # đúng lúc tắt tiếng, nghe cụt); hình thiếu thì bước tpad bên dưới giữ khung cuối
         tts_duration = max(tts_duration, clip_duration)
     (w, h) = resolution.split('x')
-    vf = _crop_prefix(kwargs.get('crop_box'), kwargs.get('crop_fill', True), w, h) or \
-        f'''scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'''
+    _bg = 'black' if kwargs.get('frame_bg') == 'black' else 'blur'      # khác tỉ lệ (ngang → 9:16): nền mờ, không viền đen
+    vf = _crop_prefix(kwargs.get('crop_box'), kwargs.get('crop_fill', True), w, h, _bg) or \
+        fit_frame(w, h, _bg, src_dims(source_video))
     vf += f',fps={fps}'
     # vf = chỉ co hình vào khung xuất (+ viền đen) — đúng hệ toạ độ của khung xem trước nơi người dùng kéo vùng che.
     # vf_post = mọi biến đổi hình KHÁC (zoom theo cảnh, đổi tốc độ, lật gương, màu, phóng 3%) — chạy SAU bước làm mờ,
@@ -1074,7 +1110,8 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     if reg:
                         _sub_blur.append((*reg, t_cur, t_end))
     _all_blur_boxes = list(blur_boxes or []) + _extra_blur_boxes
-    (blur_chain, blur_last) = _build_blur_chain('vbase', _all_blur_boxes, clip_start=clip_start, clip_end=clip_end)
+    (blur_chain, blur_last) = _build_blur_chain('vbase', _all_blur_boxes, clip_start=clip_start, clip_end=clip_end,
+                                                style='reflect' if kwargs.get('box_style') == 'reflect' else 'blur')
     has_wm = bool(watermark_path and os.path.exists(watermark_path))
     # Chữ Trung do AI quét (core/text_cover): làm mờ ngay trên hình GỐC, trước cắt/co/giãn → đúng chỗ, đúng lúc
     (src_chain, src_last) = _src_text_blur_chain(kwargs.get('text_regions'), clip_start, clip_duration, float(kwargs.get('text_blur_sigma') or 22),
@@ -1121,10 +1158,30 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     else:
         wm_x_expr = f'''W-w-{wm_margin_x_px}'''
         wm_y_expr = f"{wm_margin_y_px}"
+    # logo chạy (chống bị bắt reup): vị trí tính theo giờ trên VIDEO XUẤT (out_start + t) → liền mạch qua các clip
+    wm_motion = str(kwargs.get('watermark_motion') or 'static')
+    wm_t0 = float(scene.get('out_start') or 0.0)
+    if wm_motion != 'static':
+        (wm_x_expr, wm_y_expr) = watermark_xy(wm_motion, watermark_corner, wm_margin_x_px, wm_margin_y_px, wm_t0)
+    wm_text_f = ''
+    wm_text = str(kwargs.get('watermark_text') or '').strip()
+    if wm_text:
+        wm_txt_file = f'{out_path}.wmtxt'
+        with open(wm_txt_file, 'w', encoding='utf-8') as _wf:
+            _wf.write(wm_text)
+        subtitle_files.append(wm_txt_file)
+        (tx, ty) = watermark_xy(wm_motion, watermark_corner, wm_margin_x_px, wm_margin_y_px, wm_t0, text=True)
+        _wm_font = f"fontfile='{font_path.replace(chr(92), '/').replace(':', chr(92) + ':')}':" if font_path else ''
+        wm_text_f = (f"drawtext={_wm_font}textfile='{wm_txt_file.replace(chr(92), '/').replace(':', chr(92) + ':')}':"
+                     f"fontsize={max(14, int(int(h) * wm_size_pct * 0.3))}:fontcolor=white@{wm_opacity:.2f}:"
+                     f"borderw=2:bordercolor=black@{wm_opacity * 0.6:.2f}:x={tx}:y={ty}")
+    if wm_text_f:
+        fc += f'; [{last}]{wm_text_f}[vwt]'
+        last = 'vwt'
     if has_wm:
         fc += f'''; [2:v]scale={wm_width_px}:-1,colorchannelmixer=aa={wm_opacity:.3f}[wm]; [{last}][wm]overlay={wm_x_expr}:{wm_y_expr}[v]'''
     else:
-        fc += f'''; [{last}]copy[v]'''
+        fc += f'''; [{last}]null[v]'''
     filter_complex_v = fc
     map_v = '[v]'
     enc = _video_encode_args(use_nvenc)
@@ -1169,10 +1226,13 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             out_lbl_fb = f'''vsub_fb{si_fb}'''
             fc_fb += f'''; [{last_fb}]{sf_fb}[{out_lbl_fb}]'''
             last_fb = out_lbl_fb
+        if wm_text_f:
+            fc_fb += f'; [{last_fb}]{wm_text_f}[vwt_fb]'
+            last_fb = 'vwt_fb'
         if has_wm:
             fc_fb += f'''; [2:v]scale={wm_width_px}:-1,colorchannelmixer=aa={wm_opacity:.3f}[wm]; [{last_fb}][wm]overlay={wm_x_expr}:{wm_y_expr}[v]'''
         else:
-            fc_fb += f'''; [{last_fb}]copy[v]'''
+            fc_fb += f'''; [{last_fb}]null[v]'''
         filter_complex_fb = fc_fb + '; [1:a]apad[a]'
         cmd_fb = [FFMPEG_EXE, '-y', '-ss', str(clip_start), '-t', str(clip_duration), '-i', source_video, '-i', tts_path]
         if watermark_path:
@@ -1187,6 +1247,34 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             return False
     _cleanup_files(subtitle_files)
     return os.path.exists(out_path) and os.path.getsize(out_path) > 0
+WM_HOP_SEC = 15.0        # logo nhảy góc: đổi góc mỗi 15s
+
+
+def watermark_xy(motion, corner, mx, my, t0=0.0, text=False):
+    """Biểu thức (x, y) cho logo. motion: static (đứng góc) · hop (nhảy lần lượt 4 góc) · drift (trôi chậm dọc mép trên / dưới)
+    · bounce (nảy khắp khung kiểu DVD). Thời gian T = t0 + t (giây trên video xuất). text=True → cho drawtext (w/h = khung,
+    text_w/text_h = chữ); False → cho overlay (W/H = khung, w/h = logo). Dấu phẩy nằm trong '' (an toàn trong filter graph)."""
+    (FW, FH, ow, oh) = ('w', 'h', 'text_w', 'text_h') if text else ('W', 'H', 'w', 'h')
+    T = f'(t+{float(t0):.3f})'
+    (left, right, top, bottom) = (f'{mx}', f'{FW}-{ow}-{mx}', f'{my}', f'{FH}-{oh}-{my}')
+    order = ['Trên-Trái', 'Trên-Phải', 'Dưới-Phải', 'Dưới-Trái']
+    c0 = order.index(corner) if corner in order else 1
+    is_left = c0 in (0, 3)
+    is_top = c0 in (0, 1)
+    if motion == 'hop':
+        k = f'mod(floor({T}/{WM_HOP_SEC})+{c0},4)'
+        return (f"'if(between({k},1,2),{right},{left})'", f"'if(gte({k},2),{bottom},{top})'")
+    if motion == 'drift':
+        rx = f'max(1,{FW}-{ow}-2*{mx})'
+        return (f"'{mx}+{rx}*(0.5-0.5*cos(2*PI*{T}/40))'", top if is_top else bottom)
+    if motion == 'bounce':
+        (rx, ry) = (f'max(1,{FW}-{ow}-2*{mx})', f'max(1,{FH}-{oh}-2*{my})')
+        # sóng tam giác |mod(v·T + lệch, 2R) − R|: lệch = R → bắt đầu ở mép trái / trên, lệch = 0 → mép phải / dưới
+        return (f"'{mx}+abs(mod({T}*{FW}*0.05+{rx}*{1 if is_left else 0},2*{rx})-{rx})'",
+                f"'{my}+abs(mod({T}*{FH}*0.04+{ry}*{1 if is_top else 0},2*{ry})-{ry})'")
+    return (left if is_left else right, top if is_top else bottom)
+
+
 def _cleanup_files(paths):
     for sf in paths:
         try:
@@ -1350,7 +1438,9 @@ def _concat_clips(clips, output_path, temp_dir, log_fn):
             log_fn(f'''   [LỖI] Concat: {r2.stderr[slice(None, 300, None)]}''')
             return False
     return os.path.exists(output_path)
-def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None):
+def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None, style='blur'):
+    """Che các vùng người dùng vẽ (phụ đề cũ…). style 'blur': làm mờ mạnh · 'reflect': lấy dải hình ngay TRÊN vùng (sát
+    mép trên khung thì lấy dải dưới), lật dọc rồi dán đè + mờ nhẹ → nền trơn (trời, tường, sàn) trông như không có gì."""
     if not boxes:
         return ('', in_label)
     parts = []
@@ -1399,7 +1489,11 @@ def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None):
         ox = f'''trunc(W*{x1:.4f}/2)*2'''
         oy = f'''trunc(H*{y1:.4f}/2)*2'''
         parts.append(f'''[{cur}]split[{a}][{c}]''')
-        parts.append(f'''[{c}]crop={cw}:{ch}:{cx}:{cy},gblur=sigma=20:steps=3[{c}b]''')
+        if style == 'reflect':
+            ry = f'''if(gte({cy}\\,oh)\\,{cy}-oh\\,min(ih-oh\\,{cy}+oh))'''
+            parts.append(f'''[{c}]crop={cw}:{ch}:{cx}:{ry},vflip,gblur=sigma=2.5:steps=2[{c}b]''')
+        else:
+            parts.append(f'''[{c}]crop={cw}:{ch}:{cx}:{cy},gblur=sigma=20:steps=3[{c}b]''')
         parts.append(f'''[{a}][{c}b]overlay={ox}:{oy}{enable_clause}[{nxt}]''')
         cur = nxt
         idx += 1

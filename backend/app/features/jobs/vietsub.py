@@ -87,9 +87,13 @@ def _boxes_chain(cur, items, w, h, tag='bx', mask_dir=None):
     parts.append(f'[{cur}]split[{tag}m][{tag}s]')
     parts.append(f'[{tag}s]split={n}' + ''.join(f'[{tag}s{k}]' for k in range(n)) if n > 1 else f'[{tag}s]null[{tag}s0]')
     prev = f'{tag}m'
-    for (k, ((px, py, pw, ph, en, sigma), _)) in enumerate(geoms):
+    for (k, ((px, py, pw, ph, en, sigma), style)) in enumerate(geoms):
         # gblur cũng chỉ chạy lúc vùng cần che (không thì làm mờ đủ N vùng trên MỌI khung hình)
-        if mask_dir:
+        if style == 'reflect':
+            # dải hình ngay trên vùng (sát mép trên thì dải dưới), lật dọc + mờ nhẹ → nền trơn trông như không có chữ
+            sy = py - ph if py >= ph else max(0, min(h - ph, py + ph))
+            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{sy},vflip,gblur=sigma=2.5:steps=2{en}[{tag}c{k}]')
+        elif mask_dir:
             # mép mềm: làm mờ vùng nới rộng, ghép kênh alpha từ mặt nạ (1 khung, ffmpeg tự lặp lại) → ô mờ tan dần vào hình
             (ex, ey, ew, eh, gl, gt, gr, gb) = _feather_rect(px, py, pw, ph, w, h)
             name = f'{tag}mask{k}.png'
@@ -1636,11 +1640,14 @@ def run_vietsub_pipeline(job):
         from core.video_editor import src_dims
         (src_chain, cur) = _src_text_blur_chain(regions if cfg.get('auto_cover_text') and not cleaned else [], 0.0, dur or 1e9,
                                                 float(cfg.get('text_blur_strength') or 22),
-                                                max_groups=16, max_spans=3000, merge_gap=0.8, style=cstyle, src_size=src_dims(video))
-        crop = _crop_prefix(cfg.get('crop_box'), cfg.get('crop_fill', True), w, h)
-        fit = crop or f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black'
+                                                max_groups=16, max_spans=3000, merge_gap=0.8, src_size=src_dims(video),
+                                                style='erase' if cstyle == 'reflect' else cstyle)   # chữ rải rác trong cảnh: phản chiếu không hợp
+        from core.video_editor import fit_frame
+        fbg = 'black' if cfg.get('frame_bg') == 'black' else 'blur'
+        crop = _crop_prefix(cfg.get('crop_box'), cfg.get('crop_fill', True), w, h, fbg)
+        fit = crop or fit_frame(w, h, fbg, src_dims(video))
         graph = [src_chain] if src_chain else []
-        graph.append(f'[{cur}]{fit},setsar=1[vfit]')     # khác tỉ lệ (vd ngang → 9:16): video giữa khung, trên / dưới viền đen
+        graph.append(f'[{cur}]{fit},setsar=1[vfit]')     # khác tỉ lệ (vd ngang → 9:16): video giữa khung, trên / dưới nền mờ
         boxes = [b for b in (cfg.get('cover_boxes') or []) if isinstance(b, (list, tuple)) and len(b) >= 4] if cfg.get('remove_old_sub') else []
         cur = 'vfit'
         band_covered = False
@@ -1801,7 +1808,7 @@ def run_vietsub_pipeline(job):
             job.log(f'   Xuất thêm bản {"dọc 9:16" if variant[1] > variant[0] else "ngang 16:9"} ({variant[0]}x{variant[1]}) cùng lượt dựng'
                     + (' · phụ đề song ngữ' if orig_cues else ''), 'info')
         job.log(f'[6] Dựng video: {len(cues)} dòng phụ đề' + (f', che {len(regions)} vùng chữ Trung' if regions and cfg.get('auto_cover_text') else '') +
-                (', đã xoá sạch nét chữ cũ' if cleaned else ', che phụ đề cũ (' + ('xoá nhẹ' if cstyle == 'erase' else 'làm mờ') + ')' if band_covered else '') + (', lồng tiếng Việt' if voice_wav else ''), 'info')
+                (', đã xoá sạch nét chữ cũ' if cleaned else ', che phụ đề cũ (' + ({'erase': 'xoá nhẹ', 'reflect': 'phản chiếu'}.get(cstyle, 'làm mờ')) + ')' if band_covered else '') + (', lồng tiếng Việt' if voice_wav else ''), 'info')
         acodec = (['-c:a', 'copy'] if not voice_wav and _audio_codec(video) in ('aac', 'mp3') else ['-c:a', 'aac', '-b:a', '192k'])
         from core import encoder
 

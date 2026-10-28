@@ -13,6 +13,7 @@ import time
 import re
 import requests
 from .utils import FFPROBE_EXE, FFMPEG_EXE, _HIDE, register_process, unregister_process
+from .tts_text import prepare_tts_text
 _LOCAL_GPU_LOCK = threading.Lock()
 FPTAI_VOICES = {'banmai': 'Nu, mien Bac', 'lannhi': 'Nu, mien Nam', 'leminh': 'Nam, mien Bac', 'myan': 'Nu, mien Trung', 'thuminh': 'Nu, mien Bac', 'giahuy': 'Nam, mien Trung', 'linhsan': 'Nu, mien Nam', 'ngoclam': 'Nu, mien Trung', 'minhquang': 'Nam, mien Nam', 'banmaiace': 'Nu, mien Bac (Ace)', 'thuminhace': 'Nu, mien Bac (Ace)', 'ngoclamace': 'Nu, mien Trung (Ace)', 'linhsanace': 'Nu, mien Nam (Ace)', 'minhquangace': 'Nam, mien Nam (Ace)'}
 FPTAI_ENHANCE_VOICES = {'lannhi'}
@@ -225,9 +226,7 @@ def _generate_tts_raw(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_k
         # người gọi đã ghi chỉ số cảnh (vd tự hậu kỳ gửi lô cảnh [3, 7]) → giữ nguyên, ghi đè thì giọng gắn nhầm cảnh
         s.setdefault('_original_index', idx)
         if 'voiceover' in s:
-            clean_text = (s['voiceover'] or '').replace('||', ' ')
-            clean_text = re.sub('\\s+', ' ', clean_text).strip()
-            s['voiceover_for_tts'] = replace_numbers_with_words(clean_text)
+            s['voiceover_for_tts'] = prepare_tts_text(s['voiceover'])   # làm sạch + chữ viết tắt + số → chữ
     if not fptai_key:
         fptai_key = os.getenv('FPT_API_KEY', '').strip()
     nonempty = [s for s in scenes if (s.get('voiceover') or '').strip()]
@@ -720,8 +719,7 @@ def generate_vieneu_cast(scenes, temp_dir, log_fn=print, gpu_timeout=600):
         return []
     for (i, s) in enumerate(scenes):
         s.setdefault('_original_index', i)
-        clean_text = re.sub('\\s+', ' ', (s['voiceover'] or '').replace('||', ' ')).strip()
-        s['voiceover_for_tts'] = replace_numbers_with_words(clean_text)   # như generate_tts_per_scene (đọc số bằng chữ)
+        s['voiceover_for_tts'] = prepare_tts_text(s['voiceover'])   # như generate_tts_per_scene
     n_voice = len({s['_vn_voice'] for s in scenes})
     if not _acquire_gpu_lock(log_fn, gpu_timeout, '   [GPU] Đang chờ GPU giải phóng (tiến trình khác đang xử lý)...'):
         return []

@@ -8,7 +8,7 @@ import difflib
 import re
 import subprocess
 
-from .text_cover import CJK, _engine, _probe
+from .text_cover import CJK, _probe
 from .utils import FFMPEG_EXE, _HIDE
 
 BAND_W = 960                       # bề ngang dải phụ đề khi đọc — đủ nét cho chữ Hán nhỏ
@@ -70,7 +70,7 @@ def _cache_file(video, band, step):
     import os
     from app.config import DATA_DIR
     st = os.stat(video)
-    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 2])
+    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 3])
     d = os.path.join(DATA_DIR, 'cache', 'hardsub')
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, hashlib.md5(key.encode()).hexdigest() + '.json')
@@ -102,8 +102,40 @@ def extract(video, band, step=0.2, log=print, should_stop=None, progress=None):
     return cues
 
 
+def _threads():
+    """Luồng cho bộ đọc chữ: ~8 là nhanh nhất (16 chậm hơn; chia nhiều bộ 1 luồng chạy song song cũng chậm hơn — đã đo),
+    trong ngân sách CPU chung của app (chế độ nhẹ máy tự giảm)."""
+    from . import perf
+    return max(1, min(8, perf.budget()))
+
+
+def _reader(threads):
+    """Bộ nhận dạng chữ của RapidOCR, nhưng BẬT vùng nhớ đệm của onnxruntime (RapidOCR tắt sẵn): ảnh dòng chữ mỗi lần một cỡ
+    → không có vùng đệm thì mỗi lần đọc phải xin / trả bộ nhớ hệ điều hành → chậm ~8 lần (286 → 37 ms / khung, đã đo)."""
+    from rapidocr_onnxruntime import RapidOCR
+    ocr = RapidOCR(intra_op_num_threads=threads)
+    rec = ocr.text_rec
+    try:
+        import onnxruntime as ort
+        old = rec.session.session
+        so = ort.SessionOptions()
+        so.log_severity_level = 4
+        so.enable_cpu_mem_arena = True
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.intra_op_num_threads = threads
+        rec.session.session = ort.InferenceSession(old._model_path, sess_options=so, providers=['CPUExecutionProvider'])
+    except Exception:
+        pass                                       # bản RapidOCR / onnxruntime khác → dùng bộ đọc mặc định (chỉ chậm hơn)
+
+    def read(crops):
+        (res, _) = rec(crops)
+        return _clean(''.join(txt for (txt, sc) in res if sc > 0.5))
+    return read
+
+
 def _extract(video, band, step, log, should_stop, progress):
     import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
     (sw, sh, dur) = _probe(video)
     if not sw or not sh or not dur:
         return []
@@ -114,14 +146,22 @@ def _extract(video, band, step, log, should_stop, progress):
     cmd = [FFMPEG_EXE, '-v', 'error', '-i', video, '-vf', f'fps=1/{step},crop={cw}:{ch}:{x1}:{y1},scale={W}:{H}',
            '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-']
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=_HIDE)
-    ocr = _engine()
     total = int(dur / step) + 1
-    log(f'   Đọc phụ đề cứng: {total} khung ({1 / step:g} khung/giây, dải phụ đề {band[1] * 100:.0f}–{band[3] * 100:.0f}% chiều cao)...')
-    frames = []                        # (t, text)
-    (prev_sig, prev_text, n_ocr, k) = (None, '', 0, 0)
+    log(f'   Đọc phụ đề cứng: {total} khung ({1 / step:g} khung/giây, dải phụ đề {band[1] * 100:.0f}–{band[3] * 100:.0f}% '
+        f'chiều cao)...')
+    # Khung đổi câu → gửi sang luồng đọc chữ, trong lúc đó giải mã / so nét khung tiếp (2 việc chạy chồng nhau). Việc "có cần
+    # đọc không" chỉ dựa vào nét chữ (không cần chữ của khung trước) nên kết quả y hệt đọc lần lượt; khung "không đổi" lấy chữ
+    # khung trước khi ghép lại theo thứ tự.
+    frames = []                        # (t, chữ | Future | None = như khung trước, box)
+    pending = []
+    (prev_sig, n_ocr, k, cancelled) = (None, 0, 0, False)
+    read = _reader(_threads())
+    n_workers = 1
+    pool = ThreadPoolExecutor(max_workers=n_workers)
     try:
         while True:
             if should_stop and should_stop():
+                cancelled = True
                 proc.kill()
                 return []
             raw = proc.stdout.read(W * H * 3)
@@ -135,14 +175,15 @@ def _extract(video, band, step, log, should_stop, progress):
             if int(pix.sum()) < 60:
                 text = ''                       # không có nét chữ phụ đề
             elif prev_sig is not None and float(np.abs(sig - prev_sig).mean()) < 0.006:
-                text = prev_text                # dải phụ đề không đổi → cùng câu, khỏi đọc lại
+                text = None                     # dải phụ đề không đổi → cùng câu, khỏi đọc lại
             else:
                 crops = _line_crops(img, pix)
                 n_ocr += 1
-                (rec, _) = ocr.text_rec(crops) if crops else ([], 0)
-                text = _clean(''.join(txt for (txt, sc) in rec if sc > 0.5))
+                text = pool.submit(read, crops) if crops else ''
+                if crops:
+                    pending.append(text)
             box = None
-            if text:                                 # khung bao nét chữ của câu (để che đúng chỗ nếu xoá nét còn sót)
+            if text != '':                           # khung bao nét chữ của câu (để che đúng chỗ nếu xoá nét còn sót)
                 rows = np.where(pix.sum(axis=1) >= 3)[0]
                 cols = np.where(pix.sum(axis=0) > 0)[0]
                 if len(rows) and len(cols):
@@ -150,7 +191,10 @@ def _extract(video, band, step, log, should_stop, progress):
                     box = (band[0] + cols[0] / W * bw_, band[1] + rows[0] / H * bh_,
                            band[0] + (cols[-1] + 1) / W * bw_, band[1] + (rows[-1] + 1) / H * bh_)
             frames.append((t, text, box))
-            (prev_sig, prev_text) = (sig, text)
+            prev_sig = sig
+            if len(pending) > n_workers * 4:            # hàng chờ đọc không dồn quá dài (giữ RAM ảnh cắt, báo tiến độ đúng)
+                pending.pop(0).result()
+                pending = [f for f in pending if not f.done()]
             if progress and k % 50 == 0:
                 progress(min(100, int(k * 100 / total)))
     finally:
@@ -161,10 +205,35 @@ def _extract(video, band, step, log, should_stop, progress):
             proc.wait(timeout=10)
         except Exception:
             pass
+        pool.shutdown(wait=True, cancel_futures=cancelled)
     if proc.returncode not in (0, None) or k * step < dur - max(2.0, 3 * step):
         log(f'   [WARN] Đọc phụ đề cứng dừng giữa chừng ({k * step:.0f}/{dur:.0f}s) — bỏ kết quả, chuyển sang nghe giọng nói', 'warn')
         return []
-    # gộp khung liên tiếp cùng câu → dòng phụ đề
+    resolved = []
+    prev_text = ''
+    for (t, text, box) in frames:
+        if text is None:
+            text = prev_text
+        elif not isinstance(text, str):
+            text = text.result()
+        resolved.append((t, text, box))
+        prev_text = text
+    out = _build_cues(resolved, step, k * step)
+    log(f'   Đọc phụ đề cứng xong: {len(out)} câu (OCR {n_ocr} lần / {len(frames)} khung)', 'ok')
+    return out
+
+
+MAX_CUE = 20.0          # 1 lần hiện > 20s liền → chữ đứng yên (tên kênh, tiêu đề), không phải 1 câu thoại
+STATIC_SHARE = 0.15     # 1 dòng chữ hiện tổng cộng ≥ 15% thời lượng (và ≥ 30s) → chữ cố định chen giữa các câu thoại
+STATIC_MIN_SEC = 30.0
+LONG_REPEAT = (6, 6.0)  # lặp ≥ 6 lần VÀ mỗi lần (trung vị) ≥ 6s → chú thích / tiêu đề lặp lại; câu thoại hiện 1–3s
+
+
+def _build_cues(frames, step, scanned):
+    """frames = [(t, chữ, box)] theo thứ tự thời gian → gộp khung liên tiếp cùng câu thành dòng phụ đề, bỏ chữ cố định.
+    Câu thoại ngắn hay lặp ("什么", "走吧"…) được GIỮ dù lặp bao nhiêu lần: chỉ bỏ dòng hiện quá lâu (1 lần > 20s), dòng tổng
+    thời gian chiếm phần lớn video, hoặc dòng lặp nhiều lần mà lần nào cũng dài."""
+    import statistics
     cues = []
     for (t, text, box) in frames:
         if not text:
@@ -178,13 +247,13 @@ def _extract(video, band, step, log, should_stop, progress):
                                                           max(c['box'][2], box[2]), max(c['box'][3], box[3]))
         else:
             cues.append({'start': t, 'end': t + step, 'text': text, 'votes': {text: 1}, 'box': box})
-    # chữ đứng yên quá lâu (watermark / tiêu đề nằm trong dải) hoặc lặp lại khắp phim → không phải lời thoại
-    seen = {}
+    lens = {}
     for c in cues:
         c['text'] = max(c['votes'], key=c['votes'].get)       # bản đọc gặp nhiều nhất (OCR khung lẻ hay sai 1–2 chữ)
-        seen[c['text']] = seen.get(c['text'], 0) + 1
-    out = [{'start': round(c['start'], 2), 'end': round(c['end'], 2), 'text': c['text'],
-            **({'box': [round(float(v), 4) for v in c['box']]} if c.get('box') else {})} for c in cues
-           if c['end'] - c['start'] >= 0.3 and c['end'] - c['start'] <= 20 and seen[c['text']] <= 6]
-    log(f'   Đọc phụ đề cứng xong: {len(out)} câu (OCR {n_ocr} lần / {len(frames)} khung)', 'ok')
-    return out
+        lens.setdefault(c['text'], []).append(c['end'] - c['start'])
+    static = {txt for (txt, ls) in lens.items()
+              if (len(ls) >= 2 and sum(ls) >= max(STATIC_MIN_SEC, STATIC_SHARE * scanned))
+              or (len(ls) >= LONG_REPEAT[0] and statistics.median(ls) >= LONG_REPEAT[1])}
+    return [{'start': round(c['start'], 2), 'end': round(c['end'], 2), 'text': c['text'],
+             **({'box': [round(float(v), 4) for v in c['box']]} if c.get('box') else {})} for c in cues
+            if 0.3 <= c['end'] - c['start'] <= MAX_CUE and c['text'] not in static]

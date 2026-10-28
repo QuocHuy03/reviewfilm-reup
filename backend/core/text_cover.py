@@ -24,7 +24,7 @@ def _engine():
     with _ocr_lock:
         if _ocr is None:
             from rapidocr_onnxruntime import RapidOCR
-            _ocr = RapidOCR()
+            _ocr = RapidOCR(intra_op_num_threads=8)     # mặc định mở mọi lõi (máy 56 luồng) — 8 nhanh bằng, đỡ tranh CPU
         return _ocr
 
 
@@ -127,32 +127,88 @@ def _tracks(dets, interval):
     return tracks
 
 
-def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progress=None):
-    """→ [{'box': [x1, y1, x2, y2] (0-1, hình gốc), 't_start', 't_end' (giây video gốc)}]."""
-    import numpy as np
-    (sw, sh, dur) = _probe(video)
-    if not sw or not sh or dur <= 0:
-        log_fn('   [WARN] Quét chữ: không đọc được thông tin video — bỏ qua')
-        return []
-    # căn theo lưới khoảng quét → các lần gọi khác nhau lấy mẫu đúng cùng mốc giây, dùng lại được cache
-    ranges = _merge_ranges([(int(a // interval) * interval, (int(b // interval) + 1) * interval) for (a, b) in (ranges or [(0.0, dur)])], dur)
-    cache = _cache_path(video, interval)
-    (scanned, dets) = ([], [])                      # dets: (t, box)
+def _load_cache(cache):
+    """→ (các đoạn đã quét, [(giây, box)])."""
     try:
         with open(cache, encoding='utf-8') as f:
             c = json.load(f)
-        (scanned, dets) = (c.get('scanned') or [], [(d[0], d[1:5]) for d in c.get('dets') or []])
+        return (c.get('scanned') or [], [(d[0], d[1:5]) for d in c.get('dets') or []])
     except (OSError, ValueError):
-        pass
-    todo_ranges = _subtract(ranges, scanned, interval)
-    if not todo_ranges:
-        log_fn('   Quét chữ Trung: dùng lại kết quả đã quét')
-    W = SCAN_WIDTH
-    H = max(2, int(round(sh * W / sw / 2)) * 2)
-    total = sum(int((b - a) / interval) + 1 for (a, b) in todo_ranges)
-    if total:
-        log_fn(f'   Quét chữ Trung trên video: ~{total} khung hình (mỗi {interval:g} giây)...')
-    ocr = _engine() if total else None
+        return ([], [])
+
+
+# ── dò chữ bằng GPU (DirectML) trong tiến trình riêng ──
+# Đo GTX 1060: 144 ms/khung so với 380–420 ms CPU, hộp chữ khớp 100%. Phim 30 phút quét mỗi 2 giây (900 khung):
+# ~6 phút → ~2 phút. Khởi động worker mất vài giây → chỉ dùng khi phải quét nhiều khung.
+GPU_MIN_FRAMES = 40
+_GPU_BAD = {}
+
+
+def _gpu_ok():
+    import sys
+    import time
+    if sys.platform != 'win32' or _GPU_BAD.get('until', 0) > time.time():
+        return False
+    from core import vocal_sep                   # cùng công tắc "Dùng GPU" và cùng bộ onnxruntime-directml với tách giọng
+    return vocal_sep._gpu_enabled()
+
+
+def _scan_gpu(video, todo_ranges, interval, geom, cache, log_fn, should_stop, progress, total):
+    """Chạy _detect trong worker GPU → 'ok' | 'cancel' | 'fail' (nơi gọi quét tiếp phần còn thiếu bằng CPU)."""
+    import sys
+    import time
+    from core import vocal_sep
+    from core.utils import register_process, unregister_process
+    rt = vocal_sep.ensure_gpu_runtime(log_fn)
+    if not rt:
+        _GPU_BAD['until'] = time.time() + 3600
+        return 'fail'
+    worker = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'workers', 'text_scan_worker.py')
+    job = json.dumps({'video': video, 'ranges': todo_ranges, 'interval': interval, 'geom': list(geom), 'cache': cache, 'total': total})
+    p = subprocess.Popen([sys.executable, worker], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding='utf-8', errors='replace', env={**os.environ, 'RF_ORT_DIR': rt, 'PYTHONIOENCODING': 'utf-8'},
+                         creationflags=_HIDE)
+    register_process(p)
+    err = []
+    threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True).start()
+    try:
+        p.stdin.write(job)
+        p.stdin.close()
+        for line in p.stdout:
+            if should_stop and should_stop():
+                p.kill()
+                return 'cancel'
+            line = line.rstrip('\n')
+            if line.startswith('PROV '):
+                if line[5:] == 'DmlExecutionProvider':
+                    log_fn('   Dò chữ bằng GPU (DirectML)')
+            elif line.startswith('PROG '):
+                try:
+                    (d, _) = line[5:].split('/')
+                    if progress:
+                        progress(int(d), total)
+                except ValueError:
+                    pass
+            elif line.startswith('LOG '):
+                log_fn(line[4:])
+        p.wait()
+    finally:
+        unregister_process(p)
+    if should_stop and should_stop():
+        return 'cancel'
+    if p.returncode == 0:
+        return 'ok'
+    _GPU_BAD['until'] = time.time() + 3600         # GPU không chạy được → 1 giờ tới quét bằng CPU, khỏi thử lại
+    if p.returncode != 3:                          # 3 = card không hỗ trợ DirectML (im lặng chuyển CPU)
+        log_fn(f"   [WARN] Dò chữ bằng GPU lỗi ({''.join(err).strip()[-160:]}) — quét tiếp bằng CPU", 'warn')
+    return 'fail'
+
+
+def _detect(video, todo_ranges, interval, geom, cache, scanned, dets, ocr, log_fn, should_stop, progress, total):
+    """Lấy mẫu khung hình các đoạn chưa quét → dò dòng chữ, đọc chữ dòng mới; ghi cache sau mỗi đoạn.
+    → (scanned, dets) hoặc None nếu bị huỷ. Chạy ở tiến trình chính (CPU) hoặc trong worker GPU."""
+    import numpy as np
+    (W, H, dur) = geom
     bands = []         # [box, t_last] dải đã xác nhận là chữ Trung
     done = 0
     for (a, b) in todo_ranges:
@@ -164,8 +220,7 @@ def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progr
             while True:
                 if should_stop and should_stop():
                     proc.kill()
-                    log_fn('   Quét chữ: đã huỷ')
-                    return []
+                    return None
                 raw = proc.stdout.read(W * H * 3)
                 if len(raw) < W * H * 3:
                     break
@@ -208,6 +263,42 @@ def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progr
                 json.dump({'scanned': scanned, 'dets': [[round(t, 2), *[round(float(v), 4) for v in bx]] for (t, bx) in dets]}, f)
         except OSError:
             pass
+    return (scanned, dets)
+
+
+def scan(video, ranges=None, interval=1.0, log_fn=print, should_stop=None, progress=None):
+    """→ [{'box': [x1, y1, x2, y2] (0-1, hình gốc), 't_start', 't_end' (giây video gốc)}]."""
+    import numpy as np
+    (sw, sh, dur) = _probe(video)
+    if not sw or not sh or dur <= 0:
+        log_fn('   [WARN] Quét chữ: không đọc được thông tin video — bỏ qua')
+        return []
+    # căn theo lưới khoảng quét → các lần gọi khác nhau lấy mẫu đúng cùng mốc giây, dùng lại được cache
+    ranges = _merge_ranges([(int(a // interval) * interval, (int(b // interval) + 1) * interval) for (a, b) in (ranges or [(0.0, dur)])], dur)
+    cache = _cache_path(video, interval)
+    (scanned, dets) = _load_cache(cache)            # dets: (t, box)
+    todo_ranges = _subtract(ranges, scanned, interval)
+    if not todo_ranges:
+        log_fn('   Quét chữ Trung: dùng lại kết quả đã quét')
+    W = SCAN_WIDTH
+    H = max(2, int(round(sh * W / sw / 2)) * 2)
+    total = sum(int((b - a) / interval) + 1 for (a, b) in todo_ranges)
+    if total:
+        log_fn(f'   Quét chữ Trung trên video: ~{total} khung hình (mỗi {interval:g} giây)...')
+    if total >= GPU_MIN_FRAMES and _gpu_ok():
+        st = _scan_gpu(video, todo_ranges, interval, (W, H, dur), cache, log_fn, should_stop, progress, total)
+        if st == 'cancel':
+            log_fn('   Quét chữ: đã huỷ')
+            return []
+        (scanned, dets) = _load_cache(cache)          # GPU ghi cache theo từng đoạn — lỗi giữa chừng vẫn giữ phần đã quét
+        todo_ranges = _subtract(ranges, scanned, interval) if st != 'ok' else []
+    if todo_ranges:
+        total = sum(int((b - a) / interval) + 1 for (a, b) in todo_ranges)
+        res = _detect(video, todo_ranges, interval, (W, H, dur), cache, scanned, dets, _engine(), log_fn, should_stop, progress, total)
+        if res is None:
+            log_fn('   Quét chữ: đã huỷ')
+            return []
+        (scanned, dets) = res
     # chỉ lấy chữ trong các đoạn cần (cache có thể chứa đoạn khác của cùng video)
     dets = [(t, bx) for (t, bx) in dets if bx[3] - bx[1] <= 0.16 and any(a - interval <= t <= b + interval for (a, b) in ranges)]
     tracks = _tracks(dets, interval)
