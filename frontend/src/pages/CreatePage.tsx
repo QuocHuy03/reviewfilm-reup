@@ -23,6 +23,7 @@ import { FxPicker, fxSummary } from "@/components/FxPicker"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/components/ConfirmHost"
 import { ASR_LABELS, asrLabel } from "@/lib/asr"
+import { LANGS, langName, voiceFits } from "@/lib/langs"
 
 type Mode = "review" | "reup" | "vietsub"
 type Source = "file" | "batch"
@@ -56,7 +57,7 @@ export function SimpleSelect({ value, onChange, items, placeholder, labels }: {
 const DEFAULT_CFG = {
   source_lang: "Tự động", whisper_model: "base", device: "GPU (NVIDIA)", minutes: 0, film_context: "",
   scene_accurate: false, ai_translate: true, video_speed: "1.0x (mặc định)", mirror_video: false,
-  voice: "Edge TTS — Nữ Bắc (miễn phí)", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
+  voice: "Edge TTS — Nữ Bắc (miễn phí)", target_lang: "vi", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
   remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur" | "reflect", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
@@ -291,6 +292,25 @@ export function CreatePage() {
 
   if (!options) return null
 
+  // Ngôn ngữ lồng tiếng & phụ đề: đổi ngôn ngữ → giọng đang chọn không đọc được tiếng đó thì tự chọn giọng hợp (miễn phí, cùng giới)
+  const pickVoice = (lang: string, cur: string, female: boolean) => {
+    if (voices.some((v) => v.label === cur && voiceFits(v, lang))) return cur
+    const ok = voices.filter((v) => v.available && v.tier === "free" && voiceFits(v, lang))
+    return (ok.find((v) => v.gender === (female ? "female" : "male") && v.group === "CapCut") ?? ok.find((v) => v.gender === (female ? "female" : "male")) ?? ok[0])?.label ?? cur
+  }
+  const setLang = (lang: string) => setCfg((c) => ({ ...c, target_lang: lang, voice: pickVoice(lang, c.voice, !c.dub_by_gender),
+    voice_female: c.voice_female ? pickVoice(lang, c.voice_female, true) : c.voice_female, multi_voice: lang === "vi" ? c.multi_voice : false }))
+  const langField = (
+    <Field label="Ngôn ngữ lồng tiếng & phụ đề" hint={cfg.target_lang === "vi" ? "Mặc định tiếng Việt." : `AI viết / dịch lời đọc và phụ đề sang ${langName(cfg.target_lang)}, đọc bằng giọng ${langName(cfg.target_lang)}.`}>
+      <Select value={cfg.target_lang} onValueChange={setLang}>
+        <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+        <SelectContent className="max-h-80">
+          {LANGS.map((l) => <SelectItem key={l.code} value={l.code}>{l.name} · {voices.filter((v) => voiceFits(v, l.code)).length} giọng</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </Field>
+  )
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px] gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
       {/* ---------- Form ---------- */}
@@ -449,7 +469,8 @@ export function CreatePage() {
             )}
 
             {tab === "voice" && mode === "vietsub" && (
-              <Section title="Lồng tiếng Việt" icon={<Mic2 />} desc="Đọc đúng lúc từng câu thoại gốc — không kéo giãn hình, không chồng tiếng">
+              <Section title={cfg.target_lang === "vi" ? "Lồng tiếng Việt" : `Lồng tiếng — ${langName(cfg.target_lang)}`} icon={<Mic2 />} desc="Đọc đúng lúc từng câu thoại gốc — không kéo giãn hình, không chồng tiếng">
+                {langField}
                 {!cfg.dub_voice && (
                   <p className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                     Đang tắt lồng tiếng — chỉ ghép phụ đề, giữ tiếng gốc.
@@ -463,12 +484,12 @@ export function CreatePage() {
                   <div className={cn("grid gap-4", cfg.dub_by_gender && "xl:grid-cols-2")}>
                     <div className="flex min-w-0 flex-col gap-1.5">
                       <span className="text-xs font-medium text-muted-foreground">{cfg.dub_by_gender ? "Giọng nhân vật nam" : "Giọng đọc"}</span>
-                      <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} />
+                      <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} lang={cfg.target_lang} />
                     </div>
                     {cfg.dub_by_gender && (
                       <div className="flex min-w-0 flex-col gap-1.5">
                         <span className="text-xs font-medium text-muted-foreground">Giọng nhân vật nữ</span>
-                        <VoiceSelect value={cfg.voice_female} onChange={(v) => set("voice_female", v)} fx={vfx} />
+                        <VoiceSelect value={cfg.voice_female} onChange={(v) => set("voice_female", v)} fx={vfx} lang={cfg.target_lang} />
                       </div>
                     )}
                   </div>
@@ -498,14 +519,15 @@ export function CreatePage() {
             )}
             {tab === "voice" && mode !== "vietsub" && (
               <Section title="Giọng đọc" icon={<Mic2 />} desc="CapCut & Edge TTS miễn phí · FPT.AI cao cấp · VieNeu offline">
-              <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} />
+              {langField}
+              <VoiceSelect value={cfg.voice} onChange={(v) => set("voice", v)} fx={vfx} lang={cfg.target_lang} />
               {(usesVieneu || cfg.multi_voice) && <VieneuFx value={vfx} onChange={(p) => setCfg((c) => ({ ...c, ...p }))} />}
                 <div className="grid grid-cols-2 gap-3">
                 <Field label="Tốc độ video & giọng">
                   <SimpleSelect value={cfg.video_speed} onChange={(v) => set("video_speed", v)} items={options.speeds} />
                 </Field>
                 </div>
-              {mode === "review" && (
+              {mode === "review" && cfg.target_lang === "vi" && (
                 <ToggleRow label="Phân vai nhiều giọng" checked={cfg.multi_voice} onChange={(v) => set("multi_voice", v)}
                   desc="AI nhận diện nhân vật, mỗi vai một giọng VieNeu (cần đăng nhập ChatGPT hoặc Gemini)." />
               )}
@@ -682,7 +704,7 @@ export function CreatePage() {
       <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto pb-6">
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="mb-3 text-xs font-medium text-muted-foreground">Xem trước khung hình</p>
-          <SubtitlePreview style={cfg.burn_subtitles ? style : undefined} marginPct={cfg.sub_margin_pct} centerPct={subCenter}
+          <SubtitlePreview style={cfg.burn_subtitles ? style : undefined} marginPct={cfg.sub_margin_pct} centerPct={subCenter} vertical={cfg.target_resolution === "1080x1920"}
             text={cfg.burn_subtitles ? "Đây là dòng phụ đề mẫu cho video của bạn" : ""}
             poster={isLocalFile ? mediaUrl(inp) : undefined} />
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">

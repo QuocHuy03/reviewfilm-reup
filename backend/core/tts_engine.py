@@ -19,12 +19,21 @@ FPTAI_VOICES = {'banmai': 'Nu, mien Bac', 'lannhi': 'Nu, mien Nam', 'leminh': 'N
 FPTAI_ENHANCE_VOICES = {'lannhi'}
 _FPTAI_ENHANCE_AF = 'highpass=f=75,equalizer=f=300:t=q:w=1.2:g=-1.5,equalizer=f=2500:t=q:w=1.0:g=2,treble=g=5:f=4000,acompressor=threshold=-18dB:ratio=2.5:attack=8:release=120:makeup=2,loudnorm=I=-16:TP=-1.5:LRA=9,atempo=1.08'
 EDGE_VOICES = {'vi-VN-HoaiMyNeural': 'Nu - Edge TTS mien phi', 'vi-VN-NamMinhNeural': 'Nam - Edge TTS mien phi'}
+from . import langs as _langs
+for (_c, _row) in _langs.LANGS.items():          # Edge TTS mọi ngôn ngữ lồng tiếng (miễn phí, dự phòng cho CapCut)
+    EDGE_VOICES.setdefault(_row[2], f'Nu - Edge TTS {_c}')
+    EDGE_VOICES.setdefault(_row[3], f'Nam - Edge TTS {_c}')
 _FEMALE_VOICE_HINTS = ('lena', 'banmai', 'mia', 'rachel', 'nova', 'shimmer', 'ngoc-lan', 'ngoclan', 'my-duyen', 'myduyen', 'truc-ly', 'trucly', 'ngoc-linh', 'ngoclinh', 'hoaimy', '21m00tcm4tlvdq8ikwam', 'mai-anh', 'thuy-dung', 'ngoc-huyen', 'ngoc-tran', 'doan-trang', 'thuc-doan', 'quynh-anh', 'kim-thanh')
-def _get_fallback_edge_voice(voice):
-    voice = ((voice or '')).lower()
-    if any((h in voice for h in _FEMALE_VOICE_HINTS)):
-        return 'vi-VN-HoaiMyNeural'
-    return 'vi-VN-NamMinhNeural'
+def _get_fallback_edge_voice(voice, lang=None):
+    """Giọng Edge dự phòng cùng giới. lang: ngôn ngữ lời đọc (None → theo ngôn ngữ của giọng; VieNeu/FPT → tiếng Việt)."""
+    lang = _langs.norm(lang) if lang else _langs.voice_lang(voice)
+    female = any((h in ((voice or '')).lower() for h in _FEMALE_VOICE_HINTS))
+    if lang not in ('vi', 'multi'):
+        if (voice or '').startswith('capcut-'):
+            from core.capcut_tts import MALE
+            female = voice[len('capcut-'):] not in MALE
+        return _langs.edge_voice(lang, male=not female)
+    return 'vi-VN-HoaiMyNeural' if female else 'vi-VN-NamMinhNeural'
 VIENEU_VOICES = {'binh-an': 'Nam - Bình An (VieNeu điềm đạm)', 'xuan-vinh': 'Xuân Vĩnh (Nam · miền Bắc · tự nhiên)', 'ngoc-lan': 'Nữ - Ngọc Lan (VieNeu dịu dàng)', 'my-duyen': 'Mỹ Duyên (Nữ · miền Nam · kể chuyện)', 'truc-ly': 'Trúc Ly (Nữ · miền Bắc · tự nhiên)', 'ngoc-linh': 'Ngọc Linh (Nữ · miền Bắc · kể chuyện)', 'gia-bao': 'Nam - Gia Bảo (VieNeu mượt mà)', 'thai-son': 'Thái Sơn (Nam · miền Nam · kể chuyện)', 'duc-tri': 'Đức Trí (Nam · miền Nam · kể chuyện)', 'trong-huu': 'Nam - Trọng Hữu (VieNeu uyên bác)', 'clone': 'Nhân bản giọng riêng (VieNeu - cần 3-5s audio mẫu)', 'vieneu3-chien-thang': 'VieNeu3 - Chiến Thắng', 'vieneu3-hung-ba': 'VieNeu3 - Hùng Bá', 'vieneu3-lam-le': 'VieNeu3 - Lâm Lê', 'vieneu3-ly-long-tieng': 'VieNeu3 - Lý Long Tiếng', 'vieneu3-phat-phap': 'VieNeu3 - Pháp Phật', 'vieneu3-review-toptop': 'VieNeu3 - Review Toptop', 'vieneu3-trinh-le': 'VieNeu3 - Trịnh Lê', 'vieneu3-trung-dung': 'VieNeu3 - Trung Dũng', 'vieneu3-yen-tin-tuc': 'VieNeu3 - Yến Tin Tức', 'vieneu3-ban-mai': 'VieNeu3 - Ban Mai', 'vieneu3-bac-quynh-anh': 'VieNeu3 - Quỳnh Anh (Giọng Bắc)', 'vieneu3-bac-thao-chi': 'VieNeu3 - Thảo Chi (Giọng Bắc)', 'vieneu3-bac-thanh-tung': 'VieNeu3 - Thanh Tùng (Giọng Bắc)', 'vieneu3-bac-nam-khanh': 'VieNeu3 - Nam Khánh (Giọng Bắc)', 'vieneu3-quang-cao': 'VieNeu3 - Quảng Cáo Nội Lực', 'vieneu3-he-thong': 'VieNeu3 - Hệ Thống', 'vieneu3-lena': 'VieNeu3 - Lena', 'vieneu3-mc-truyen-hinh': 'VieNeu3 - MC Truyền Hình', 'vieneu3-mia': 'VieNeu3 - Mia', 'vieneu3-minh-quang': 'VieNeu3 - Minh Quang', 'vieneu3-nam': 'VieNeu3 - Nam', 'vieneu3-nguyen': 'VieNeu3 - Nguyên', 'vieneu3-thu-minh': 'VieNeu3 - Thu Minh', 'vieneu3-nam-tram-am': 'VieNeu3 - Nam Trầm Ấm', 'vieneu3-nam-cham-rai': 'VieNeu3 - Nam Chậm Rãi', 'vieneu3-nam-nhanh-nhen': 'VieNeu3 - Nam Nhanh Nhẹn', 'vieneu3-nam-truyen-cam': 'VieNeu3 - Nam Truyền Cảm', 'vieneu3-nu-diem-dam': 'VieNeu3 - Nữ Điềm Đạm', 'vieneu3-nu-cham-rai': 'VieNeu3 - Nữ Chậm Rãi', 'vieneu3-nu-luu-loat': 'VieNeu3 - Nữ Lưu Loát', 'vieneu3-nu-nhan-nha': 'VieNeu3 - Nữ Nhàn Nhã', 'vieneu3-nu-nhe-nhang': 'VieNeu3 - Nữ Nhẹ Nhàng', 'adam-bua': 'Adam bựa (Nam · miền Bắc · tự nhiên)', 'thien-minh': 'Thiện Minh (Nam · miền Bắc · kể chuyện)', 'mai-anh': 'Mai Anh (Nữ · miền Bắc · tin tức)', 'hai-dang': 'Hải Đăng (Nam · miền Bắc · tự nhiên)', 'thuy-dung': 'Thùy Dung (Nữ · miền Nam · tin tức)', 'thien-tam-duc': 'Thiền Tâm Đức (Nam · miền Bắc · kể chuyện)', 'ngoc-huyen': 'Ngọc Huyền (Nữ · miền Bắc · tự nhiên)', 'quang-son': 'Quang Sơn (Nam · miền Trung · tự nhiên)', 'ngoc-tran': 'Ngọc Trân (Nữ · miền Trung · tự nhiên)', 'minh-duc': 'Minh Đức (Nam · miền Bắc · tin tức)', 'pham-tuyen': 'Phạm Tuyên (Nam · miền Bắc · tự nhiên)', 'thanh-binh': 'Thanh Bình (Nam · miền Bắc · kể chuyện)', 'doan-trang': 'Đoan Trang (Nữ · miền Bắc · tự nhiên)', 'thuc-doan': 'Thục Đoan (Nữ · miền Nam · kể chuyện)', 'minh-triet': 'Minh Triết (Nam · miền Nam · tin tức)', 'quynh-anh': 'Quỳnh Anh (Nữ · miền Bắc · kể chuyện)', 'kim-thanh': 'Kim Thanh (Nữ · miền Nam · kể chuyện)', 'adam': 'Adam (Nam · miền Nam · tự nhiên)', 'quoc-tuan': 'Quốc Tuấn (Nam · miền Bắc · tự nhiên)'}
 _VIENEU3_BUILTIN_REF = {'vieneu3-chien-thang': 'chien-thang.wav', 'vieneu3-hung-ba': 'hung-ba.wav', 'vieneu3-lam-le': 'lam-le.wav', 'vieneu3-ly-long-tieng': 'ly-long-tieng.wav', 'vieneu3-phat-phap': 'phat-phap.wav', 'vieneu3-review-toptop': 'review-toptop.wav', 'vieneu3-trinh-le': 'trinh-le.wav', 'vieneu3-trung-dung': 'trung-dung.wav', 'vieneu3-yen-tin-tuc': 'yen-tin-tuc.wav', 'vieneu3-ban-mai': 'ban-mai.wav', 'vieneu3-bac-quynh-anh': 'bac-quynh-anh.wav', 'vieneu3-bac-thao-chi': 'bac-thao-chi.wav', 'vieneu3-bac-thanh-tung': 'bac-thanh-tung.wav', 'vieneu3-bac-nam-khanh': 'bac-nam-khanh.wav', 'vieneu3-quang-cao': 'quang-cao.wav', 'vieneu3-he-thong': 'he-thong.wav', 'vieneu3-lena': 'lena.wav', 'vieneu3-mc-truyen-hinh': 'mc-truyen-hinh.wav', 'vieneu3-mia': 'mia.wav', 'vieneu3-minh-quang': 'minh-quang.wav', 'vieneu3-nam': 'nam.wav', 'vieneu3-nguyen': 'nguyen.wav', 'vieneu3-thu-minh': 'thu-minh.wav', 'vieneu3-nam-tram-am': 'nam-tram-am.wav', 'vieneu3-nam-cham-rai': 'nam-cham-rai.wav', 'vieneu3-nam-nhanh-nhen': 'nam-nhanh-nhen.wav', 'vieneu3-nam-truyen-cam': 'nam-truyen-cam.wav', 'vieneu3-nu-diem-dam': 'nu-diem-dam.wav', 'vieneu3-nu-cham-rai': 'nu-cham-rai.wav', 'vieneu3-nu-luu-loat': 'nu-luu-loat.wav', 'vieneu3-nu-nhan-nha': 'nu-nhan-nha.wav', 'vieneu3-nu-nhe-nhang': 'nu-nhe-nhang.wav'}
 _VI_ONES = ['không', 'một', 'hai', 'ba', 'bốn', 'năm', 'sáu', 'bảy', 'tám', 'chín']
@@ -222,11 +231,12 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
 
 def _generate_tts_raw(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **_unused):
     os.makedirs(temp_dir, exist_ok=True)
+    _lang = _langs.voice_lang(voice)
     for (idx, s) in enumerate(scenes):
         # người gọi đã ghi chỉ số cảnh (vd tự hậu kỳ gửi lô cảnh [3, 7]) → giữ nguyên, ghi đè thì giọng gắn nhầm cảnh
         s.setdefault('_original_index', idx)
         if 'voiceover' in s:
-            s['voiceover_for_tts'] = prepare_tts_text(s['voiceover'])   # làm sạch + chữ viết tắt + số → chữ
+            s['voiceover_for_tts'] = prepare_tts_text(s['voiceover'], _lang)   # làm sạch + chữ viết tắt + số → chữ (tiếng Việt)
     if not fptai_key:
         fptai_key = os.getenv('FPT_API_KEY', '').strip()
     nonempty = [s for s in scenes if (s.get('voiceover') or '').strip()]
@@ -890,7 +900,7 @@ def _render_vieneu_sequential(scenes, vn_voice, ref_audio_path, log_fn, temp_dir
         log_fn('   [WARN] VieNeu tỷ lệ thất bại cao — chuyển toàn bộ sang Edge TTS...')
         return _full_edge_fallback()
     return out_scenes
-def _render_gtts_fallback(scenes, log_fn, temp_dir):
+def _render_gtts_fallback(scenes, log_fn, temp_dir, lang='vi'):
     try:
         from gtts import gTTS
     except ImportError:
@@ -909,7 +919,7 @@ def _render_gtts_fallback(scenes, log_fn, temp_dir):
             continue
         out_path = os.path.join(temp_dir, f'''vo_{i:04d}_gtts.mp3''')
         try:
-            tts = gTTS(text=text, lang='vi', slow=False)
+            tts = gTTS(text=text, lang=_langs.google_code(lang), slow=False)
             tts.save(out_path)
             dur = _audio_duration(out_path)
             if dur < 0.1:

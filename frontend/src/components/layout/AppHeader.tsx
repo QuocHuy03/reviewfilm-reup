@@ -37,7 +37,7 @@ export function AppHeader({ activeJob }: { activeJob: JobSummary | null }) {
 
       {activeJob && (
         <button onClick={() => openJob(activeJob.id)} title="Mở job đang chạy"
-          className="no-drag group flex h-8 max-w-[300px] items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-2.5 text-xs text-primary hover:bg-primary/15">
+          className="no-drag group flex h-8 max-w-[300px] min-w-0 items-center gap-2 whitespace-nowrap rounded-md border border-primary/40 bg-primary/10 px-2.5 text-xs text-primary hover:bg-primary/15">
           {activeJob.status === "waiting" ? <PauseCircle className="size-3.5" /> : <Loader2 className="size-3.5 animate-spin" />}
           <span className="truncate">{activeJob.status === "waiting" ? "Chờ bạn xác nhận" : activeJob.stage || "Đang xử lý"}</span>
           <span className="tabular font-semibold">{activeJob.progress}%</span>
@@ -46,15 +46,16 @@ export function AppHeader({ activeJob }: { activeJob: JobSummary | null }) {
 
       {/* Chỉ báo backend chỉ hiện khi có vấn đề */}
       {!backendReady && (
-        <span className="no-drag flex h-8 items-center gap-1.5 rounded-md border border-warning/50 bg-warning/10 px-2.5 text-[11px] text-warning">
-          <Unplug className="size-3.5" /> Đang kết nối backend…
+        <span className="no-drag flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-warning/50 bg-warning/10 px-2.5 text-[11px] whitespace-nowrap text-warning"
+          title="Đang kết nối tới bộ xử lý của app (backend) — vài giây là xong">
+          <Unplug className="size-3.5" /> Đang kết nối…
         </span>
       )}
 
       <SystemMeters />
       <button onClick={toggleAssistant} title="Trợ lý AI" aria-label="Trợ lý AI"
-        className="no-drag flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground">
-        <Sparkles className="size-3.5" /> <span className="hidden lg:inline">Trợ lý AI</span>
+        className="no-drag flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 text-xs whitespace-nowrap text-muted-foreground transition hover:bg-muted hover:text-foreground">
+        <Sparkles className="size-3.5" /> <span className="hidden 2xl:inline">Trợ lý AI</span>
       </button>
       {window.rf && <LicenseMenu />}
       <ThemeToggle />

@@ -140,6 +140,8 @@ export type Voice = {
   /** false: máy chưa đủ điều kiện (thiếu key / Model Pack) — khi tạo giọng sẽ tự đổi sang Edge TTS */
   available: boolean
   need: string
+  /** ngôn ngữ giọng đọc ("vi", "en", … · "multi" = CapCut đa ngôn ngữ) */
+  lang?: string
 }
 
 export type SubStyle = {

@@ -5,6 +5,7 @@ Approach SCENE-FIRST: su dung Gemini plot_beats timestamps truc tiep lam clip_st
 sau do viet thuyet minh KHOP voi tung canh -> giai quyet van de hinh/giong khong sync.
 """
 import re
+from core import langs
 TTS_WPM = 230
 MAX_SCENES = 90
 MIN_SCENE_SECONDS = 10.0
@@ -27,7 +28,54 @@ def _origin_name_rule(origin):
     if o in ('au-my', 'au_my', 'aumy'):
         return 'Phim AU-MY → giu nguyen ten goc (John, Anna...), KHONG phien am Han Viet.'
     return 'CHUA RO xuat xu → GIU NGUYEN ten romanized goc, CHI phien am Han Viet khi CHAC CHAN la phim Trung Quoc. Ten tieng Anh/Han/Nhat/Thai luon giu nguyen — KHONG bien thanh am Han Viet.'
-def write_review_script(analysis, transcript, video_duration, api_key='', target_minutes=12, script_mode='review_phim', log_fn=print, troll_tone=True, user_context='', gemini_key='', openai_key='', quality='standard', deepseek_key='', film_context=''):
+def _origin_name_rule_other(origin):
+    """Quy tắc tên nhân vật khi lời thuyết minh KHÔNG phải tiếng Việt — không có chuyện Hán Việt."""
+    o = ((origin or '')).strip().lower()
+    by = {'trung': 'Phim TRUNG QUỐC → tên nhân vật viết theo pinyin chuẩn (Zhang San, Lin Jie…) hoặc tên quen thuộc với khán giả ngôn ngữ đích.',
+          'han': 'Phim HÀN QUỐC → tên romanized kiểu Hàn (Kim Min Jae, Lee Soo Jin…), KỂ CẢ khi thoại gốc là tiếng Trung (phim lồng tiếng).',
+          'nhat': 'Phim NHẬT → tên romanized Nhật (Tanaka, Sakura…).',
+          'thai': 'Phim THÁI LAN → tên romanized Thái (Somchai, Ploy…).'}
+    if o in ('au-my', 'au_my', 'aumy'):
+        return 'Phim ÂU-MỸ → giữ nguyên tên gốc (John, Anna…).'
+    return by.get(o, 'CHƯA RÕ xuất xứ → giữ nguyên tên romanized gốc; KHÔNG BAO GIỜ phiên âm Hán Việt.')
+
+
+def _rate_unit(target_lang='vi'):
+    from core.dub_translate import rate
+    return rate(target_lang)[1]
+
+
+def _wpm(target_lang='vi'):
+    """Tốc độ đọc dùng để chia ngân sách kịch bản (đơn vị / phút): tiếng Việt TTS_WPM từ/phút như cũ; ngôn ngữ khác quy
+    từ dub_translate.rate (từ hoặc ký tự / giây) với cùng hệ số "đọc chậm" như tiếng Việt (TTS_WPM / 4.3 từ/giây)."""
+    t = langs.norm(target_lang)
+    if t == 'vi':
+        return TTS_WPM
+    from core.dub_translate import WPS, rate
+    return max(60, int(round(rate(t)[0] * TTS_WPM / WPS)))
+
+
+def _units(text, target_lang='vi'):
+    """Độ dài lời: số từ (tiếng Việt: text.split() như cũ) hoặc số ký tự chữ với Trung / Nhật / Thái."""
+    if langs.norm(target_lang) == 'vi':
+        return len((text or '').split())
+    from core.dub_translate import text_units
+    return text_units(text, target_lang)
+
+
+def _unit_vi(target_lang='vi'):
+    return 'ký tự' if _rate_unit(target_lang) == 'chars' else 'từ'
+
+
+def _film_glossary_key(title, user_context, target_lang='vi'):
+    from .translator import _film_key as _fk
+    key = _fk(title or '', user_context)
+    t = langs.norm(target_lang)
+    return key if t == 'vi' else f'{key}__{t}'
+
+
+def write_review_script(analysis, transcript, video_duration, api_key='', target_minutes=12, script_mode='review_phim', log_fn=print, troll_tone=True, user_context='', gemini_key='', openai_key='', quality='standard', deepseek_key='', film_context='', target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     if deepseek_key:
         if not api_key:
             api_key = deepseek_key
@@ -51,7 +99,7 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
         segs = ((transcript or {})).get('segments', [])
         if segs:
             _lookup_text += ' ' + ' '.join((s.get('text', '') for s in segs[slice(None, 40, None)]))
-        _known = _fkt(_lookup_text)
+        _known = _fkt(_lookup_text) if target_lang == 'vi' else []      # từ điển tên phim / nhân vật tiếng Việt
         if _known:
             analysis = dict(analysis)
             (vi_t, src_t) = _known[0]
@@ -66,8 +114,8 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
     except Exception:
         pass
     try:
-        from .translator import _film_key as _fk, _load_film_glossary as _lfg
-        _rk = _fk(analysis.get('_vi_title') or '', user_context)
+        from .translator import _load_film_glossary as _lfg
+        _rk = _film_glossary_key(analysis.get('_vi_title') or '', user_context, target_lang)
         analysis['_film_key'] = _rk
         _persist = _lfg(_rk)
         if _persist:
@@ -86,16 +134,16 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
     log_fn(f'''   Đã xây dựng {len(scenes_meta)} cảnh từ timestamp của Gemini''')
     scenes_meta = _enrich_scenes_with_transcript(scenes_meta, transcript)
     log_fn('   Đã gán lời thoại gốc vào các cảnh (tăng độ khớp hình - giọng)')
-    words_per_scene = max(12, int(TTS_WPM * target_minutes / max(1, len(scenes_meta))))
+    words_per_scene = max(12, int(_wpm(target_lang) * target_minutes / max(1, len(scenes_meta))))
     total_words = words_per_scene * len(scenes_meta)
-    log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} từ -> tổng ~{total_words} từ (~{target_minutes} phút)''')
+    log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} {_unit_vi(target_lang)} -> tổng ~{total_words} {_unit_vi(target_lang)} (~{target_minutes} phút)''')
     if words_per_scene < 15:
         log_fn(f'''   [WARN][BL-P1-05] Số từ mỗi cảnh rất thấp ({words_per_scene} < 15) - phim dài/nhiều cảnh so với {target_minutes} phút đã chọn, lời đọc có thể bị cụt. Cân nhắc tăng số phút review.''')
     log_fn(f'''   Gửi yêu cầu viết kịch bản liền mạch tới {engines[0][0]}...''')
-    narrations = _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn, script_mode=script_mode, troll_tone=troll_tone, quality=quality)
+    narrations = _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn, script_mode=script_mode, troll_tone=troll_tone, quality=quality, target_lang=target_lang)
     if not narrations:
         log_fn('   [WARN] Kịch bản dạng marked thất bại, thử dự phòng dạng văn bản thường...')
-        narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality)
+        narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality, target_lang=target_lang)
     if not narrations:
         narrations = [_real_desc(s) for s in scenes_meta]
         if sum(1 for t in narrations if t) < max(1, len(scenes_meta) // 2):
@@ -109,7 +157,7 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
             continue
         limit = meta.get('_word_limit', 0)
         safety_limit = int(limit * 1.05) if limit > 0 else 150
-        text = _trim_to_word_limit(text, safety_limit)
+        text = _trim_to_word_limit(text, safety_limit, target_lang)
         sub = text
         final_scenes.append({'voiceover': text, 'clip_start': meta['clip_start'], 'clip_end': meta['clip_end'], 'subtitle': sub, 'description': meta.get('description', '')})
     import re as _re
@@ -122,8 +170,8 @@ def write_review_script(analysis, transcript, video_duration, api_key='', target
             pass  # số → chữ để bước tạo giọng làm (voiceover_for_tts); lời & phụ đề giữ chữ số
     if digits_found:
         log_fn(f'''   {digits_found} cảnh có chữ số — phụ đề giữ chữ số, giọng đọc tự đọc thành chữ''')
-    _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn)
-    est_min = sum((len(s['voiceover'].split()) for s in final_scenes)) / TTS_WPM
+    _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn, target_lang)
+    est_min = sum((_units(s['voiceover'], target_lang) for s in final_scenes)) / _wpm(target_lang)
     log_fn(f'''   Kịch bản hoàn chỉnh: {len(final_scenes)} cảnh, ~{est_min:.1f} phút TTS''')
     try:
         from .translator import _save_film_glossary as _sfg
@@ -222,7 +270,39 @@ def _real_desc(meta):
 
 
 _SENT_END_RE = re.compile('(?:\\.{3}|…|[.!?])["\\\'”’»]?(?=\\s|$)')
-def _trim_to_word_limit(text, max_words):
+_CJK_SENT_END_RE = re.compile('[。！？!?…]["\'”’」』»]?')
+
+
+def _trim_to_char_limit(text, max_chars):
+    """Như _trim_to_word_limit nhưng đếm KÝ TỰ chữ (Trung / Nhật / Thái — không có dấu cách giữa từ)."""
+    if max_chars <= 0:
+        return text
+    (cnt, cut) = (0, None)
+    for (i, ch) in enumerate(text):
+        if ch.isalnum():
+            cnt += 1
+            if cnt > max_chars:
+                cut = i
+                break
+    if cut is None:
+        return text
+    kept = text[:cut].rstrip()
+    min_keep = int(max_chars * 0.65)
+    count = lambda x: sum(1 for c in x if c.isalnum())
+    last = None
+    for last in _CJK_SENT_END_RE.finditer(kept):
+        pass
+    if last is not None and count(kept[:last.end()]) >= min_keep:
+        return kept[:last.end()].strip()
+    c = max(kept.rfind(x) for x in ('，', '、', '；', ',', ';'))
+    if c > 0 and count(kept[:c]) >= min_keep:
+        return kept[:c].rstrip() + '…'
+    return kept + '…'
+
+
+def _trim_to_word_limit(text, max_words, target_lang='vi'):
+    if langs.norm(target_lang) != 'vi' and _rate_unit(target_lang) == 'chars':
+        return _trim_to_char_limit(text, max_words)
     words = text.split()
     if len(words) <= max_words:
         return text
@@ -247,12 +327,13 @@ def _trim_to_word_limit(text, max_words):
     if kept.endswith(('.', '!', '?', '…')):
         return kept
     return kept + '…'
-def _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn=print):
+def _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn=print, target_lang='vi'):
     if not final_scenes:
         return
+    TTS_WPM = _wpm(target_lang)          # tiếng Việt: hằng số TTS_WPM như cũ
     global_budget = int(target_minutes * TTS_WPM * 1.2)
     def _wc(s):
-        return len(s.get('voiceover', '').split())
+        return _units(s.get('voiceover', ''), target_lang)
     total = sum((_wc(s) for s in final_scenes))
     if total <= global_budget:
         return
@@ -268,7 +349,7 @@ def _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, lo
         new_limit = max(floor, wc - (total - global_budget))
         if new_limit >= wc:
             new_limit = wc - 1
-        s['voiceover'] = _trim_to_word_limit(s['voiceover'], new_limit)
+        s['voiceover'] = _trim_to_word_limit(s['voiceover'], new_limit, target_lang)
         if 'subtitle' in s:
             s['subtitle'] = s['voiceover']
         total = sum((_wc(x) for x in final_scenes))
@@ -282,10 +363,11 @@ _SCRIPT_WPS = 230 / 60          # tốc độ đọc chậm nhất (Edge) — gi
 _SCRIPT_FILL = 0.92
 
 
-def _per_scene_word_targets(scenes_meta, total_words, floor=12):
+def _per_scene_word_targets(scenes_meta, total_words, floor=12, target_lang='vi'):
     """Chia tổng số từ cho các cảnh: mỗi cảnh không quá sức chứa của hình (giây × tốc độ đọc), phần dư dồn sang cảnh
     hình dài (hình thừa sẽ được tự cắt cho khớp lời) — tổng vẫn ≈ ngân sách theo số phút người dùng chọn."""
-    caps = [max(floor, int(max(2.0, s['clip_end'] - s['clip_start']) * _SCRIPT_WPS * _SCRIPT_FILL)) for s in scenes_meta]
+    wps = _SCRIPT_WPS if langs.norm(target_lang) == 'vi' else _wpm(target_lang) / 60
+    caps = [max(floor, int(max(2.0, s['clip_end'] - s['clip_start']) * wps * _SCRIPT_FILL)) for s in scenes_meta]
     if sum(caps) <= total_words:
         return caps
     (lo, hi) = (floor, max(caps))
@@ -298,9 +380,10 @@ def _per_scene_word_targets(scenes_meta, total_words, floor=12):
     return [min(c, lo) for c in caps]
 
 
-def _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn=print, script_mode='review_phim', troll_tone=True, quality='standard'):
+def _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn=print, script_mode='review_phim', troll_tone=True, quality='standard', target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     style_directive = SCRIPT_MODE_PRESETS.get(script_mode, SCRIPT_MODE_PRESETS['review_phim'])
-    targets = _per_scene_word_targets(scenes_meta, total_words)
+    targets = _per_scene_word_targets(scenes_meta, total_words, target_lang=target_lang)
     short = sum(1 for t in targets if t < words_per_scene * 0.85)
     if short:
         log_fn(f'   Số từ theo độ dài hình: {short} cảnh hình ngắn được viết gọn hơn (tránh lời dài hơn hình)')
@@ -309,7 +392,7 @@ def _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_w
         s['_word_target'] = targets[idx]
         s['_word_limit'] = int(targets[idx] * 1.15) + 2
         dial = s.get('_transcript', '')
-        head = f'''Cảnh {idx + 1} (viết ~{targets[idx]} từ)'''
+        head = f'''Cảnh {idx + 1} (viết ~{targets[idx]} {_unit_vi(target_lang)})'''
         if dial:
             scenes_text_list.append(f'''{head}: {s['description']} [Thoại gốc: {dial}]''')
         else:
@@ -321,6 +404,8 @@ def _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_w
     _uc = ((analysis.get('_user_context') or '')).strip()
     _uc_block = f'''*** BỐI CẢNH NGƯỜI DÙNG CUNG CẤP — ƯU TIÊN TUYỆT ĐỐI, TIN TƯỞNG HOÀN TOÀN ***\n{_uc}\n→ Dùng đúng tên phim, tên/vai trò nhân vật và xuất xứ như người dùng mô tả.\n\n''' if _uc else ''
     prompt = f'''Bạn là nhà biên kịch và bình luận phim chuyên nghiệp cho các kênh YouTube Movie Recap hàng đầu Việt Nam.\nMục tiêu là kể lại ĐÚNG những gì đang diễn ra trong cảnh, theo sát cốt truyện thực tế — dễ hiểu, mạch lạc, KHÔNG văn vẻ/thơ ca/triết lý vẽ vời, KHÔNG tự bịa thêm cảm xúc hay chi tiết không có trong cảnh.\n\n{_uc_block}PHONG CÁCH DIỄN ĐẠT CHỦ ĐẠO:\n{style_directive}\n{tone_str}QUY TẮC TÊN RIÊNG & BIỆT DANH (CỰC KỲ QUAN TRỌNG — TUYỆT ĐỐI KHÔNG DÙNG HÁN-VIỆT):\n1. TÊN PHIM: dịch nghĩa sang tiếng Việt tự nhiên hoặc giữ tên tiếng Anh/gốc. TUYỆT ĐỐI KHÔNG dùng tên phiên âm Hán-Việt (ví dụ KHÔNG \'Quỷ Xuy Đăng\', KHÔNG \'Khánh Dư Niên\' — hãy dùng \'Ma Thổi Đèn\', \'Niềm Vui Cuộc Sống\').\n2. TÊN NHÂN VẬT: {_origin_name_rule(analysis.get('origin', ''))} TUYỆT ĐỐI KHÔNG phiên âm Hán-Việt tên người (KHÔNG \'Tiểu Phi\', \'Trương Tam\'...).\n   ĐẶC BIỆT - PHIM LỒNG TIẾNG TRUNG: nếu nhân vật có tên dạng \'Xiao X\' (Xiao Min, Xiao Piao, Xiao Ba...) — đây là tên Trung của phim Hàn/Nhật/Thái lồng tiếng. Nếu BIẾT tên thật thì dùng tên romanized (Hàn/Nhật/Thái). Nếu KHÔNG biết tên thật: KHÔNG giữ pinyin \'Xiao X\' và KHÔNG Hán-Việt hóa, mà GÁN MỘT VAI TRÒ/BIỆT DANH THUẦN VIỆT cố định theo vai trò nhân vật (ví dụ \'cậu học trò quậy\', \'cô bé lớp trưởng\', \'gã đầu gấu\', \'ông trùm\') và DÙNG NHẤT QUÁN suốt cả phim.\n''' + (('   BẢNG TÊN/VAI TRÒ CHÍNH XÁC (BẮT BUỘC DÙNG ĐÚNG, NHẤT QUÁN):\n' + ''.join((f'''   - \'{e['src']}\' → \'{e['vi']}\'\n''' for e in analysis['_char_glossary'][slice(None, 8, None)]))) if analysis.get('_char_glossary') else '') + f'''3.Có thể tự tạo biệt danh hài hước, dí dỏm cho nhân vật phụ dựa vào ngoại hình hoặc hành động (ví dụ: \'anh mắt lác\', \'chị đại tóc đỏ\', \'gã đầu hói\'...) — nhưng phải dùng NHẤT QUÁN một biệt danh cho một nhân vật. Nếu không có đặc điểm nổi bật thì thôi.\n\nTHÔNG TIN CHUNG VỀ BỘ PHIM:\n- Tên phim (DÙNG CHÍNH XÁC TÊN NÀY): {analysis.get('_vi_title') or '?'}''' + (f''' (tên gốc: {analysis['_vi_title_src']})''' if analysis.get('_vi_title_src') else '') + f'''\n- Xuất xứ: {analysis.get('origin', 'chưa rõ')}\n- Thể loại: {analysis.get('genre', '?')}\n- Nhân vật chính: {', '.join((str(c) for c in analysis.get('main_characters', [])[slice(None, 4, None)]))}\n- Bối cảnh: {analysis.get('setting', '')}\n- Tóm tắt cốt truyện hoàn chỉnh: {analysis.get('summary', '')}\n\nDANH SÁCH {len(scenes_meta)} CẢNH PHIM THEO TRÌNH TỰ THỜI GIAN:\n{scenes_text}\n\nNHIỆM VỤ:\nHãy viết một kịch bản thuyết minh kể chuyện phim (Movie Recap) hoàn chỉnh, liền mạch, thống nhất từ đầu đến cuối dài khoảng {total_words} từ.\nBắt buộc chia kịch bản thành đúng {len(scenes_meta)} phần tương ứng với {len(scenes_meta)} cảnh ở trên.\nĐầu mỗi phần phải bắt đầu bằng nhãn [Cảnh N] (ví dụ: [Cảnh 1], [Cảnh 2]...).\n\nYÊU CẦU CHẤT LƯỢNG KỊCH BẢN (TIÊU CHUẨN 9-10/10 ĐIỂM):\n1. BÁM SÁT HÌNH ẢNH VÀ NỘI DUNG PHIM (QUAN TRỌNG NHẤT): Mỗi [Cảnh N] PHẢI kể đúng nội dung/hình ảnh của Cảnh N trong danh sách trên — vì lời đọc sẽ phát ĐÈ LÊN đúng đoạn video đó. Người xem nhìn thấy gì trên màn hình thì lời đọc phải nói về thứ đó. TUYỆT ĐỐI KHÔNG bịa ra sự kiện, cốt truyện sai lệch hoàn toàn với phim gốc, không phóng tác lung tung làm lệch nội dung chính của phim. Phải bám sát mô tả cảnh và phụ đề thoại gốc đi kèm.\n   ƯU TIÊN ĐỘ CHÍNH XÁC HƠN CHẤT VĂN: kể thẳng, đúng việc đang xảy ra. KHÔNG thêm câu cảm thán/suy ngẫm/đánh giá hoa mỹ không bắt nguồn từ chính cảnh đó (TRÁNH kiểu: \'một chiến thắng nhỏ nhưng vô cùng quan trọng\', \'công lý dường như quá xa xỉ\' — đây là bình luận tự bịa, không phải mô tả cảnh).\n2. VĂN PHONG TỰ NHIÊN, KHÔNG SÁO RỖNG: Viết như người Việt kể chuyện đời thường, rõ ràng dễ hiểu. TUYỆT ĐỐI TRÁNH văn vẻ rườm rà, ẩn dụ triết lý lê thê (TRÁNH kiểu: \'bóng tối không chỉ là sự vắng mặt của ánh sáng, mà còn là nơi ẩn náu của những bí mật chết người\'). Câu chữ gọn gàng, đi thẳng vào sự việc đang diễn ra.\n3. NHẤT QUÁN TÊN/CÁCH GỌI NHÂN VẬT: Một nhân vật chỉ gọi bằng MỘT tên/vai trò cố định xuyên suốt. KHÔNG được khi gọi \'người mẹ\' lúc lại gọi \'cô gái trẻ\' cho cùng một người. Nếu không rõ tên thì gọi theo vai trò cố định (người mẹ, đứa con, ông chủ...) và giữ nguyên đến hết.\n4. TUYỆT ĐỐI KHÔNG chép nguyên câu thoại nhân vật vào lời thuyết minh (TRÁNH: \'Anh nói: Mày là cái gì?\'). Thay vào đó, diễn giải sự kiện theo góc nhìn narrator (NÊN: \'Người đàn ông lạ mặt bất ngờ xuất hiện, khiến cả đám không kịp phản ứng\').\n5. HOOK Ở CẢNH 1: Cảnh đầu mở màn bằng một câu dẫn cuốn hút, tóm gọn mâu thuẫn chính của phim — nhưng vẫn phải đúng với hình ảnh đang chiếu ở cảnh đầu. NGOẠI LỆ: nếu mô tả cảnh đầu chỉ là logo hãng phim/màn hình thông tin sản xuất/màn đen (có ghi \'(logo/intro sản xuất)\') thì TUYỆT ĐỐI KHÔNG thuyết minh về màn hình đó — hãy viết thẳng câu hook giới thiệu mâu thuẫn chính của phim.\n6. LIÊN KẾT MƯỢT MÀ NHƯNG TIẾT CHẾ: Lời cảnh N và N+1 nối logic tự nhiên, ưu tiên nối bằng chính nội dung sự kiện (vd: nhắc lại hệ quả của cảnh trước). CHỈ dùng cụm mở kiểu \'Không ngờ rằng...\', \'Đúng lúc này...\', \'Hóa ra...\' khi thực sự hợp lý, KHÔNG dùng liên tục ở nhiều cảnh kế tiếp (tối đa 1/3 số cảnh) vì sẽ gây sáo rỗng, lặp khuôn.\n7. SỐ LƯỢNG TỪ MỖI CẢNH — BẮT BUỘC TUÂN THỦ CHẶT: Mỗi cảnh có ghi số từ riêng ở danh sách trên ('viết ~N từ') — PHẢI viết đúng khoảng N từ (lệch tối đa ±10%), vì lời đọc phát đè đúng đoạn hình dài tương ứng: cảnh hình ngắn thì viết gọn, cảnh hình dài thì kể kỹ hơn. Đây là giới hạn CỨNG — viết quá số từ này sẽ làm TỔNG thời lượng video vượt xa thời lượng khách yêu cầu ({total_words} từ cho toàn bộ {len(scenes_meta)} cảnh). Ưu tiên câu ngắn gọn, đúng trọng tâm, đi thẳng vào sự việc thay vì mô tả chi tiết dài dòng để giữ đúng giới hạn này.\n8. ĐẢM BẢO kết thúc kịch bản (cảnh cuối) có lời chốt ấn tượng, giữ khoảnh lặng cảm xúc hoặc câu hỏi suy ngẫm, kèm 1 câu kêu gọi đăng ký kênh tự nhiên.\n9. TUYỆT ĐỐI KHÔNG DÙNG CHỮ SỐ (0-9): Kịch bản sẽ được đọc bằng phần mềm giọng nói (TTS) — nếu có chữ số, giọng đọc sẽ bị lỗi. Thay mọi chữ số bằng chữ tiếng Việt. Ví dụ: thay \'2026\' → \'hai nghìn không trăm hai mươi sáu\', \'3 người\' → \'ba người\', \'100 năm\' → \'một trăm năm\', \'tập 12\' → \'tập mười hai\', \'thế kỷ 19\' → \'thế kỷ mười chín\'. Đây là yêu cầu bắt buộc, không có ngoại lệ.\n10. GIỮ ĐÚNG TRÌNH TỰ NHÂN-QUẢ, KHÔNG ĐẢO/GỘP CẢNH XA NHAU: Cảnh N chỉ được nhắc lại/liên hệ với cảnh N-1 (cảnh LIỀN TRƯỚC nó) — TUYỆT ĐỐI KHÔNG suy đoán, gộp hay đảo trình tự sự kiện của các cảnh xa hơn (N-2, N-3...) vào cảnh N, kể cả khi cố tạo liên kết mượt mà. Nếu không chắc điều gì xảy ra trước/sau, chỉ kể đúng nội dung của cảnh N như mô tả, không suy diễn quan hệ nhân-quả với cảnh xa.\n\nChỉ trả về phần kịch bản thuyết minh bắt đầu từ [Cảnh 1], không thêm lời giới thiệu hay đính kèm nào khác.'''
+    if target_lang != 'vi':
+        prompt = _unified_prompt_other(scenes_meta, analysis, scenes_text, total_words, style_directive, troll_tone, target_lang)
     max_tokens = min(64000, len(scenes_meta) * 150 + 1000)
     content = ''
     for (idx, (eng, key)) in enumerate(engines):
@@ -333,6 +418,52 @@ def _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_w
     if not content:
         return None
     return _parse_marked_script(content, len(scenes_meta), log_fn, scenes_meta=scenes_meta)
+def _unified_prompt_other(scenes_meta, analysis, scenes_text, total_words, style_directive, troll_tone, target_lang):
+    """Lời nhắc viết kịch bản review khi lời thuyết minh KHÔNG phải tiếng Việt: hướng dẫn vẫn tiếng Việt, kịch bản viết bằng
+    ngôn ngữ đích; vẫn chia nhãn [Cảnh N] (bộ đọc kịch bản tách cảnh theo đúng nhãn này)."""
+    t = langs.norm(target_lang)
+    lang = f"{langs.name_en(t)} ({langs.name_vi(t).replace('Tiếng', 'tiếng', 1)})"
+    unit = _unit_vi(t)
+    n = len(scenes_meta)
+    tone = ('Giọng văn hơi troll, vui vẻ, hóm hỉnh, pha chút châm biếm hài hước.\n' if troll_tone
+            else 'Giọng văn nghiêm túc, kịch tính, lôi cuốn, bám sát cảm xúc thực tế và bối cảnh phim.\n')
+    uc = (analysis.get('_user_context') or '').strip()
+    uc_block = f'*** BỐI CẢNH NGƯỜI DÙNG CUNG CẤP — ƯU TIÊN TUYỆT ĐỐI ***\n{uc}\n→ Dùng đúng tên phim, tên/vai trò nhân vật và xuất xứ như người dùng mô tả.\n\n' if uc else ''
+    gl = analysis.get('_char_glossary') or []
+    gl_block = ('   BẢNG TÊN/VAI TRÒ (BẮT BUỘC DÙNG ĐÚNG, NHẤT QUÁN):\n' + ''.join(f"   - '{e['src']}' → '{e['vi']}'\n" for e in gl[:8])) if gl else ''
+    title = analysis.get('_vi_title') or analysis.get('title_guess') or '?'
+    return (f'Bạn là nhà biên kịch và bình luận phim chuyên nghiệp cho các kênh YouTube Movie Recap hàng đầu dành cho khán giả nói {lang}.\n'
+            f'NGÔN NGỮ ĐẦU RA: TOÀN BỘ lời thuyết minh PHẢI viết bằng {lang} tự nhiên như người bản xứ — KHÔNG viết tiếng Việt '
+            f'(hướng dẫn dưới đây bằng tiếng Việt, nhưng câu trả lời là {lang}).\n'
+            'Mục tiêu là kể lại ĐÚNG những gì đang diễn ra trong cảnh, theo sát cốt truyện thực tế — dễ hiểu, mạch lạc, KHÔNG văn vẻ/triết lý vẽ vời, '
+            'KHÔNG tự bịa thêm cảm xúc hay chi tiết không có trong cảnh.\n\n'
+            f'{uc_block}PHONG CÁCH DIỄN ĐẠT CHỦ ĐẠO (áp dụng cho {lang}):\n{style_directive}\n{tone}\n'
+            'QUY TẮC TÊN RIÊNG:\n'
+            f'1. TÊN PHIM: dùng tên chính thức / quen thuộc với khán giả {lang}; không có thì dùng tên tiếng Anh hoặc tên gốc.\n'
+            f'2. TÊN NHÂN VẬT: {_origin_name_rule_other(analysis.get("origin", ""))} Nếu không biết tên thật thì gọi theo VAI TRÒ ngắn gọn bằng {lang} và dùng NHẤT QUÁN suốt phim.\n'
+            f'{gl_block}\n'
+            'THÔNG TIN CHUNG VỀ BỘ PHIM (có thể đang viết bằng tiếng Việt — chỉ để tham khảo):\n'
+            f'- Tên phim (tham khảo): {title}' + (f" (tên gốc: {analysis['_vi_title_src']})" if analysis.get('_vi_title_src') else '') + '\n'
+            f"- Xuất xứ: {analysis.get('origin', 'chưa rõ')}\n- Thể loại: {analysis.get('genre', '?')}\n"
+            f"- Nhân vật chính: {', '.join(str(c) for c in analysis.get('main_characters', [])[:4])}\n"
+            f"- Bối cảnh: {analysis.get('setting', '')}\n- Tóm tắt cốt truyện: {analysis.get('summary', '')}\n\n"
+            f'DANH SÁCH {n} CẢNH PHIM THEO TRÌNH TỰ THỜI GIAN:\n{scenes_text}\n\n'
+            'NHIỆM VỤ:\n'
+            f'Viết một kịch bản thuyết minh kể chuyện phim (Movie Recap) BẰNG {lang}, liền mạch từ đầu đến cuối, dài khoảng {total_words} {unit}.\n'
+            f'Bắt buộc chia kịch bản thành đúng {n} phần tương ứng {n} cảnh ở trên. Đầu mỗi phần phải là nhãn [Cảnh N] '
+            '(viết ĐÚNG chữ "Cảnh" và chữ số, ví dụ [Cảnh 1], [Cảnh 2]… — KHÔNG dịch nhãn này).\n\n'
+            'YÊU CẦU:\n'
+            '1. Mỗi [Cảnh N] PHẢI kể đúng nội dung/hình ảnh của Cảnh N (lời đọc phát đè đúng đoạn video đó). Không bịa sự kiện.\n'
+            f'2. Văn phong tự nhiên, gọn, như người bản xứ nói {lang} kể chuyện; tránh sáo rỗng, ẩn dụ dài dòng.\n'
+            '3. Một nhân vật chỉ gọi bằng MỘT tên/vai trò cố định xuyên suốt.\n'
+            '4. Không chép nguyên câu thoại nhân vật — diễn giải theo góc nhìn người kể.\n'
+            '5. Cảnh 1 mở bằng câu hook cuốn hút đúng với mâu thuẫn chính (nếu cảnh đầu là logo/intro sản xuất thì viết thẳng câu hook).\n'
+            f"6. ĐỘ DÀI MỖI CẢNH — BẮT BUỘC: mỗi cảnh ghi 'viết ~N {unit}' — viết đúng khoảng N {unit} {lang} (lệch tối đa ±10%).\n"
+            '7. Cảnh cuối có lời chốt ấn tượng kèm 1 câu kêu gọi đăng ký kênh tự nhiên.\n'
+            '8. Giữ đúng trình tự nhân-quả; cảnh N chỉ nối với cảnh N-1, không gộp/đảo các cảnh xa.\n\n'
+            f'Chỉ trả về phần kịch bản bằng {lang} bắt đầu từ [Cảnh 1], không thêm lời giới thiệu hay đính kèm nào khác.')
+
+
 # Dấu cảnh: "[Cảnh 3]", "[Cảnh 3 – Mở đầu]", "**Cảnh 3**", "Cảnh 3:" ở đầu dòng.
 # Số cảnh có thể là chữ số hoặc viết bằng chữ ("[Cảnh ba]", "[Cảnh mười hai]") — AI web hay viết kiểu sau.
 _VN_UNITS = {'không': 0, 'một': 1, 'mốt': 1, 'hai': 2, 'ba': 3, 'bốn': 4, 'tư': 4, 'năm': 5, 'lăm': 5,
@@ -427,13 +558,26 @@ def _parse_marked_script(content, num_scenes, log_fn=print, scenes_meta=None):
     if n_dropped:
         log_fn(f'''   [WARN] {n_dropped} cảnh không có lời thuyết minh lẫn mô tả dự phòng -> bị bỏ qua khỏi video (an toàn hơn là lấy nhầm nội dung cảnh khác).''')
     return final_narrations
-def _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn=print, quality='standard'):
+def _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn=print, quality='standard', target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     total_words = words_per_scene * len(scenes_meta)
     beats_text = '\n'.join((f'''- [Cảnh {i + 1}]: {_real_desc(s) or '(chưa có mô tả — kể tiếp mạch truyện)'}''' for (i, s) in enumerate(scenes_meta)))
     _vi_title = analysis.get('_vi_title') or '?'
     _src_title = analysis.get('_vi_title_src', '')
     title_line = f'''Tên phim (DÙNG ĐÚNG TÊN NÀY): {_vi_title}''' + (f''' ({_src_title})''' if _src_title else '')
     prompt = f'''Bạn là biên kịch viết kịch bản review phim (Movie Recap) cho kênh YouTube Việt Nam.\n{title_line}\nThể loại: {analysis.get('genre', '?')}. Tóm tắt cốt truyện: {analysis.get('summary', '')}\nCác mốc sự kiện chính:\n{beats_text}\n\nNHIỆM VỤ: Viết một bài thuyết minh kể chuyện phim bằng tiếng Việt dài khoảng {total_words} từ, liền mạch, dễ hiểu, giải thích rõ động cơ nhân vật và các tình tiết cốt truyện từ đầu đến cuối phim. Tránh miêu tả hình ảnh thô sơ.\nQUY TẮC TÊN PHIM: dùng tên tiếng Việt phổ biến (ví dụ \'Ma Thổi Đèn\', \'Chân Hoàn Truyện\').\nQUY TẮC TÊN NHÂN VẬT: {_origin_name_rule(analysis.get('origin', ''))}\nQUAN TRỌNG: TUYỆT ĐỐI KHÔNG dùng chữ số (0-9). Viết tất cả số bằng chữ tiếng Việt (ví dụ: \'ba người\', \'hai nghìn hai mươi sáu\', \'một trăm năm\').\nĐỊNH DẠNG BẮT BUỘC: chia bài thành đúng {len(scenes_meta)} đoạn theo thứ tự các mốc trên, MỖI đoạn mở đầu bằng nhãn [Cảnh N] (N = 1…{len(scenes_meta)}) rồi tới lời thuyết minh của đúng mốc đó. Không bỏ nhãn, không gộp 2 mốc vào 1 đoạn.\nChỉ trả về văn bản thuần (các đoạn có nhãn), không markdown, không JSON.'''
+    if target_lang != 'vi':
+        lang = f"{langs.name_en(target_lang)} ({langs.name_vi(target_lang).replace('Tiếng', 'tiếng', 1)})"
+        prompt = (f'Bạn là biên kịch viết kịch bản review phim (Movie Recap) cho kênh YouTube dành cho khán giả nói {lang}.\n'
+                  f'Tên phim (tham khảo, dùng tên quen thuộc với khán giả {lang}): {_vi_title}' + (f' ({_src_title})' if _src_title else '') + '\n'
+                  f"Thể loại: {analysis.get('genre', '?')}. Tóm tắt cốt truyện: {analysis.get('summary', '')}\n"
+                  f'Các mốc sự kiện chính:\n{beats_text}\n\n'
+                  f'NHIỆM VỤ: Viết một bài thuyết minh kể chuyện phim BẰNG {lang} (KHÔNG viết tiếng Việt) dài khoảng {total_words} {_unit_vi(target_lang)}, '
+                  'liền mạch, dễ hiểu, giải thích rõ động cơ nhân vật và tình tiết từ đầu đến cuối phim.\n'
+                  f"QUY TẮC TÊN NHÂN VẬT: {_origin_name_rule_other(analysis.get('origin', ''))}\n"
+                  f'ĐỊNH DẠNG BẮT BUỘC: chia bài thành đúng {len(scenes_meta)} đoạn theo thứ tự các mốc trên, MỖI đoạn mở đầu bằng nhãn [Cảnh N] '
+                  f'(N = 1…{len(scenes_meta)}, viết đúng chữ "Cảnh" — KHÔNG dịch nhãn) rồi tới lời thuyết minh bằng {lang} của đúng mốc đó. '
+                  'Không bỏ nhãn, không gộp 2 mốc vào 1 đoạn.\nChỉ trả về văn bản thuần (các đoạn có nhãn), không markdown, không JSON.')
     fallback_max_tokens = min(64000, len(scenes_meta) * 150 + 1000)
     text = ''
     for (eng, key) in engines:
@@ -482,14 +626,15 @@ def _clean_json_newlines(s):
             continue
         result.append(c)
     return ''.join(result)
-def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print):
+def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print, target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     try:
         from .translator import _find_known_titles as _fkt, _get_char_glossary_for_film as _gcgf
         _lookup_text = analysis.get('title_guess', '') + ' ' + analysis.get('summary', '') + ' ' + analysis.get('_user_context', '')
         segs = ((transcript or {})).get('segments', [])
         if segs:
             _lookup_text += ' ' + ' '.join((s.get('text', '') for s in segs[slice(None, 40, None)]))
-        _known = _fkt(_lookup_text)
+        _known = _fkt(_lookup_text) if target_lang == 'vi' else []      # từ điển tên phim / nhân vật tiếng Việt
         if _known:
             (vi_t, src_t) = _known[0]
             if not analysis.get('_vi_title'):
@@ -503,8 +648,8 @@ def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print):
     except Exception:
         pass
     try:
-        from .translator import _film_key as _fk, _load_film_glossary as _lfg
-        _rk = _fk(analysis.get('_vi_title') or '', analysis.get('_user_context', ''))
+        from .translator import _load_film_glossary as _lfg
+        _rk = _film_glossary_key(analysis.get('_vi_title') or '', analysis.get('_user_context', ''), target_lang)
         analysis['_film_key'] = _rk
         _persist = _lfg(_rk)
         if _persist:
@@ -519,19 +664,20 @@ def _prepare_review_analysis(analysis, transcript, api_key, log_fn=print):
             log_fn(f'''   → Nạp {len(_persist)} tên/vai trò đã chốt từ tập trước (review)''')
     except Exception:
         pass
-def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, engines, script_mode, troll_tone, quality, log_fn=print):
+def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, engines, script_mode, troll_tone, quality, log_fn=print, target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     scenes_meta = _enrich_scenes_with_transcript(scenes_meta, transcript)
     log_fn('   Đã gán lời thoại gốc vào các cảnh (tăng độ khớp hình - giọng)')
-    words_per_scene = max(12, int(TTS_WPM * target_minutes / max(1, len(scenes_meta))))
+    words_per_scene = max(12, int(_wpm(target_lang) * target_minutes / max(1, len(scenes_meta))))
     total_words = words_per_scene * len(scenes_meta)
-    log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} từ -> tổng ~{total_words} từ (~{target_minutes} phút)''')
+    log_fn(f'''   Mỗi cảnh cần ~{words_per_scene} {_unit_vi(target_lang)} -> tổng ~{total_words} {_unit_vi(target_lang)} (~{target_minutes} phút)''')
     if words_per_scene < 15:
         log_fn(f'''   [WARN][BL-P1-05] Số từ mỗi cảnh rất thấp ({words_per_scene} < 15) - phim dài/nhiều cảnh so với {target_minutes} phút đã chọn, lời đọc có thể bị cụt. Cân nhắc tăng số phút review.''')
     log_fn(f'''   Gửi yêu cầu viết kịch bản liền mạch tới {engines[0][0]}...''')
-    narrations = _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn, script_mode=script_mode, troll_tone=troll_tone, quality=quality)
+    narrations = _write_unified_marked_script(scenes_meta, analysis, words_per_scene, total_words, engines, log_fn, script_mode=script_mode, troll_tone=troll_tone, quality=quality, target_lang=target_lang)
     if not narrations:
         log_fn('   [WARN] Kịch bản dạng marked thất bại, thử dự phòng dạng văn bản thường...')
-        narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality)
+        narrations = _fallback_plain_text(scenes_meta, analysis, words_per_scene, engines, log_fn, quality=quality, target_lang=target_lang)
     if not narrations:
         narrations = [_real_desc(s) for s in scenes_meta]
         if sum(1 for t in narrations if t) < max(1, len(scenes_meta) // 2):
@@ -545,7 +691,7 @@ def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, eng
             continue
         limit = meta.get('_word_limit', 0)
         safety_limit = int(limit * 1.05) if limit > 0 else 150
-        text = _trim_to_word_limit(text, safety_limit)
+        text = _trim_to_word_limit(text, safety_limit, target_lang)
         final_scenes.append({'voiceover': text, 'clip_start': meta['clip_start'], 'clip_end': meta['clip_end'], 'subtitle': text,
                              'description': _real_desc(meta)})   # giữ mô tả cảnh cho AI hậu kỳ (không có thì AI dễ bịa)
     import re as _re
@@ -558,8 +704,8 @@ def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, eng
             pass  # số → chữ để bước tạo giọng làm (voiceover_for_tts); lời & phụ đề giữ chữ số
     if digits_found:
         log_fn(f'''   {digits_found} cảnh có chữ số — phụ đề giữ chữ số, giọng đọc tự đọc thành chữ''')
-    _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn)
-    est_min = sum((len(s['voiceover'].split()) for s in final_scenes)) / TTS_WPM
+    _enforce_total_word_budget(final_scenes, target_minutes, words_per_scene, log_fn, target_lang)
+    est_min = sum((_units(s['voiceover'], target_lang) for s in final_scenes)) / _wpm(target_lang)
     log_fn(f'''   Kịch bản hoàn chỉnh: {len(final_scenes)} cảnh, ~{est_min:.1f} phút TTS''')
     try:
         from .translator import _save_film_glossary as _sfg
@@ -567,7 +713,8 @@ def _finish_review_script(scenes_meta, analysis, transcript, target_minutes, eng
     except Exception:
         pass
     return {'scenes': final_scenes, 'num_scene_chapters': len(scenes_meta)}
-def write_review_script_v2(analysis, transcript, video_duration, video_path, api_key='', target_minutes=12, script_mode='review_phim', log_fn=print, troll_tone=True, user_context='', gemini_key='', openai_key='', quality='standard', deepseek_key='', film_context='', temp_dir=''):
+def write_review_script_v2(analysis, transcript, video_duration, video_path, api_key='', target_minutes=12, script_mode='review_phim', log_fn=print, troll_tone=True, user_context='', gemini_key='', openai_key='', quality='standard', deepseek_key='', film_context='', temp_dir='', target_lang='vi'):
+    target_lang = langs.norm(target_lang)
     if deepseek_key:
         if not api_key:
             api_key = deepseek_key
@@ -584,7 +731,7 @@ def write_review_script_v2(analysis, transcript, video_duration, video_path, api
         return
     analysis = dict(analysis)
     analysis['_user_context'] = ((user_context or '')).strip()
-    _prepare_review_analysis(analysis, transcript, api_key, log_fn)
+    _prepare_review_analysis(analysis, transcript, api_key, log_fn, target_lang)
     from .scene_detector import detect_scene_cuts
     from .story_analyzer import build_scene_plan, analyze_scenes_with_vision
     real_cuts = detect_scene_cuts(video_path, log_fn=log_fn)
@@ -598,8 +745,9 @@ def write_review_script_v2(analysis, transcript, video_duration, video_path, api
     # đúng phần hình SẼ CHIẾU để lời kể nói đúng chuyện đang hiện trên hình (trước rải khắp chương → kể chuyện ở giây
     # 8–17 của chương nhưng hình đó không bao giờ được chiếu)
     try:
-        for (s, w) in zip(scenes_meta, _per_scene_word_targets(scenes_meta, int(TTS_WPM * target_minutes))):
-            s['_shown_span'] = round(min(s['clip_end'] - s['clip_start'], max(4.0, w / _SCRIPT_WPS * 1.15)), 2)
+        _wps = _SCRIPT_WPS if target_lang == 'vi' else _wpm(target_lang) / 60
+        for (s, w) in zip(scenes_meta, _per_scene_word_targets(scenes_meta, int(_wpm(target_lang) * target_minutes), target_lang=target_lang)):
+            s['_shown_span'] = round(min(s['clip_end'] - s['clip_start'], max(4.0, w / _wps * 1.15)), 2)
     except Exception as e:
         log_fn(f'   [WARN] Không ước được phần hình mỗi chương ({e}) — Vision xem cả chương')
     _map_tmp_dir = temp_dir or __import__('tempfile').gettempdir()
@@ -609,7 +757,7 @@ def write_review_script_v2(analysis, transcript, video_duration, video_path, api
         log_fn(f'''   [Map-Reduce] Đã cập nhật mô tả chính xác từng chương (~{len(outline.split())} từ) — giữ nguyên tóm tắt mạch lạc của phân tích tổng.''')
     else:
         log_fn('   [WARN] Map-Reduce Vision AI không thành công ở chương nào -> giữ tóm tắt cũ.')
-    result = _finish_review_script(scenes_meta, analysis, transcript, target_minutes, engines, script_mode, troll_tone, quality, log_fn)
+    result = _finish_review_script(scenes_meta, analysis, transcript, target_minutes, engines, script_mode, troll_tone, quality, log_fn, target_lang=target_lang)
     if isinstance(result, dict):
         result['num_cut_points'] = len(real_cuts or [])
         result['num_scene_chapters'] = len(scenes_meta)

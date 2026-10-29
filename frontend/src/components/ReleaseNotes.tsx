@@ -14,24 +14,34 @@ const GROUP_TONE: Record<string, string> = {
   Added: "text-success", Changed: "text-primary", Fixed: "text-warning", Removed: "text-destructive",
 }
 
-/** Nội dung một mục CHANGELOG (### Nhóm + - dòng) → danh sách có nhóm. */
+/** Chữ một dòng: `code` → chữ thường, **đậm** → in đậm. */
+function Rich({ text }: { text: string }) {
+  const parts = text.replace(/`([^`]+)`/g, "$1").split(/\*\*([^*]+)\*\*/g)
+  return <>{parts.map((p, i) => (i % 2 ? <b key={i} className="font-semibold text-foreground">{p}</b> : p))}</>
+}
+
+/** Nội dung một mục CHANGELOG (### Nhóm + - dòng, dòng dài viết tiếp ở dòng thụt lề bên dưới) → danh sách có nhóm. */
 function NoteBody({ body }: { body: string }) {
   const groups: { name: string; items: string[] }[] = []
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim()
+    if (!line) continue
     if (line.startsWith("### ")) groups.push({ name: line.slice(4).trim(), items: [] })
     else if (line.startsWith("- ")) {
       if (!groups.length) groups.push({ name: "", items: [] })
-      groups[groups.length - 1].items.push(line.slice(2).replace(/`([^`]+)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1"))
+      groups[groups.length - 1].items.push(line.slice(2))
+    } else if (groups.length && groups[groups.length - 1].items.length) {
+      const items = groups[groups.length - 1].items
+      items[items.length - 1] += " " + line          // dòng nối tiếp của mục trước (CHANGELOG ngắt dòng ~120 ký tự)
     }
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {groups.map((g, i) => (
         <div key={i}>
-          {g.name && <p className={`mb-1 text-xs font-semibold ${GROUP_TONE[g.name] ?? ""}`}>{GROUP_LABEL[g.name] ?? g.name}</p>}
-          <ul className="flex list-disc flex-col gap-1 pl-4 text-[13px] text-muted-foreground">
-            {g.items.map((it, j) => <li key={j}>{it}</li>)}
+          {g.name && <p className={`mb-1.5 text-sm font-semibold ${GROUP_TONE[g.name] ?? ""}`}>{GROUP_LABEL[g.name] ?? g.name}</p>}
+          <ul className="flex list-disc flex-col gap-1.5 pl-5 text-[13.5px] leading-relaxed text-muted-foreground">
+            {g.items.map((it, j) => <li key={j}><Rich text={it} /></li>)}
           </ul>
         </div>
       ))}
@@ -60,14 +70,14 @@ export function WhatsNewDialog() {
   if (!current || !info) return null
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Sparkles className="size-4 text-primary" /> Có gì mới trong v{current.version}</DialogTitle>
           <DialogDescription>
             Đã cập nhật từ v{info.previousVersion}{current.date ? ` · phát hành ${current.date}` : ""}
           </DialogDescription>
         </DialogHeader>
-        <div className="max-h-[55vh] overflow-y-auto pr-1"><NoteBody body={current.body} /></div>
+        <div className="max-h-[70vh] overflow-y-auto pr-2"><NoteBody body={current.body} /></div>
         <DialogFooter><Button onClick={() => setOpen(false)}>Đã hiểu</Button></DialogFooter>
       </DialogContent>
     </Dialog>

@@ -186,7 +186,7 @@ def auto_fix(job, qa, *, video_duration, render, synth, write_srt, log):
         # Reup: KHÔNG dời mốc câu thoại gốc (bước dựng tự mượn khoảng lặng / tăng tốc giọng — video_editor.reup_fit);
         # cách sửa duy nhất là AI viết lời gọn lại cho vừa khoảng tới câu sau
         if problems:
-            new_text = rewrite_to_length(scenes, problems, log)
+            new_text = rewrite_to_length(scenes, problems, log, target_lang=job.config.get('target_lang') or 'vi')
             spoken = sum(_respeak(job, scenes, i, vo, synth, f'fix{rnd}_{i}') for (i, vo) in new_text.items())
             rewritten |= set(problems)
             if spoken:

@@ -65,7 +65,10 @@ def clean_for_tts(text):
     return s if s else raw.strip()
 
 
-def prepare_tts_text(text):
-    """Làm sạch + đọc chữ viết tắt + đọc số bằng chữ → chuỗi gửi bộ đọc."""
+def prepare_tts_text(text, lang='vi'):
+    """Làm sạch + (tiếng Việt) đọc chữ viết tắt + đọc số bằng chữ → chuỗi gửi bộ đọc.
+    Ngôn ngữ khác: chỉ làm sạch — bộ đọc nước ngoài tự đọc số / viết tắt theo tiếng của nó."""
+    if lang != 'vi':
+        return clean_for_tts(text)
     from .tts_engine import replace_numbers_with_words
     return replace_numbers_with_words(expand_abbreviations(clean_for_tts(text)))

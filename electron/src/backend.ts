@@ -9,23 +9,42 @@ import { ensurePython, type PythonStatus } from "./python"
 const log = logger("backend")
 let proc: ChildProcess | null = null
 let starting: Promise<void> | null = null
-export let backendPort = 8765
+// Cổng ưu tiên: số ít app khác dùng (8765 hay bị tool khác chiếm — 2 app bật cùng lúc giành cổng → backend không lên được)
+export const PREFERRED_PORT = 47651
+export let backendPort = PREFERRED_PORT
 
-export function pickPort(preferred = 8765): Promise<number> {
+/** Cổng trống bất kỳ do hệ điều hành cấp. */
+function freePort(): Promise<number> {
   return new Promise((resolve) => {
-    const srv = net.createServer()
-    srv.once("error", () => {
-      const s2 = net.createServer()
-      s2.listen(0, "127.0.0.1", () => { const p = (s2.address() as net.AddressInfo).port; s2.close(() => resolve(p)) })
-    })
-    srv.listen(preferred, "127.0.0.1", () => srv.close(() => resolve(preferred)))
-  }).then((p) => (backendPort = p as number))
+    const s = net.createServer()
+    s.listen(0, "127.0.0.1", () => { const p = (s.address() as net.AddressInfo).port; s.close(() => resolve(p)) })
+  })
 }
+
+export function pickPort(preferred = PREFERRED_PORT): Promise<number> {
+  return new Promise<number>((resolve) => {
+    const srv = net.createServer()
+    srv.once("error", () => { void freePort().then(resolve) })
+    srv.listen(preferred, "127.0.0.1", () => srv.close(() => resolve(preferred)))
+  }).then((p) => (backendPort = p))
+}
+
+// Backend thoát ngay lúc mới chạy (vd cổng vừa bị app khác giành giữa lúc chọn cổng và lúc mở) → chọn cổng khác, chạy lại
+const EARLY_EXIT_MS = 30_000
+const MAX_RESTARTS = 3
+let restarts = 0
+let stopping = false
+let lastArgs: { extraEnv: Record<string, string>; report: (s: PythonStatus) => void } | null = null
+let onRestart: ((port: number) => void) | null = null
+/** main.ts: backend đổi cổng → tải lại giao diện để dùng cổng mới. */
+export function onBackendRestart(cb: (port: number) => void) { onRestart = cb }
 
 /** Khởi động backend một lần (gọi lặp lại an toàn). `extraEnv` do main.ts truyền thêm. */
 export function startBackend(extraEnv: Record<string, string>, report: (s: PythonStatus) => void): Promise<void> {
   if (proc) return Promise.resolve()
   if (starting) return starting
+  lastArgs = { extraEnv, report }
+  stopping = false
   starting = (async () => {
     let python: string
     try {
@@ -52,15 +71,25 @@ export function startBackend(extraEnv: Record<string, string>, report: (s: Pytho
       report({ phase: "error", message: "Không khởi động được backend", detail: e.message })
       proc = null
     })
+    const startedAt = Date.now()
     proc.on("exit", (code) => {
       log.info(`backend thoát, mã ${code}`)
       proc = null
+      if (stopping || code === 0 || Date.now() - startedAt > EARLY_EXIT_MS || restarts >= MAX_RESTARTS || !lastArgs) return
+      restarts++
+      void freePort().then((p) => {
+        backendPort = p
+        log.warn(`backend không lên được (mã ${code}) — thử lại ở cổng ${p} (lần ${restarts}/${MAX_RESTARTS})`)
+        const a = lastArgs!
+        return startBackend(a.extraEnv, a.report).then(() => onRestart?.(p))
+      }).catch((e) => log.error("khởi động lại backend lỗi:", e))
     })
   })().finally(() => { starting = null })
   return starting
 }
 
 export function stopBackend() {
+  stopping = true
   if (!proc?.pid) return
   if (process.platform === "win32") spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true })
   else proc.kill()

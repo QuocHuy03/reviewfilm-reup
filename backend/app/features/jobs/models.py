@@ -16,6 +16,7 @@ class VideoJobRequest(SubtitleOptions):
     mode: Literal['review', 'reup', 'vietsub'] = 'review'
     out_dir: str = ''
     source_lang: str = 'Tự động'
+    target_lang: str = 'vi'        # ngôn ngữ lời đọc + phụ đề xuất (core/langs.py) — 'vi' = như cũ
     whisper_model: str = 'base'
     device: str = 'GPU (NVIDIA)'
     minutes: int = Field(0, ge=0, le=60)                           # độ dài review (phút); 0 = tự động theo độ dài video
@@ -91,6 +92,7 @@ class SrtJobRequest(BaseModel):
     device: str = 'GPU (NVIDIA)'
     sub_layout: str = '2 dòng gọn (khuyên dùng)'
     translate: bool = True
+    target_lang: str = 'vi'        # dịch phụ đề sang ngôn ngữ này (core/langs.py)
     ai_translate: bool = False
     film_context: str = ''
 

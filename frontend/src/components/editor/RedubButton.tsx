@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { ToggleRow } from "@/components/common"
 import { VieneuFx, VoiceSelect, isVieneu } from "@/components/VoiceSelect"
+import { langName } from "@/lib/langs"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Slider } from "@/components/ui/slider"
@@ -14,6 +15,7 @@ import type { JobDetail } from "@/lib/types"
 export function RedubButton({ job }: { job: JobDetail }) {
   const { openJob, voices } = useStore()
   const [open, setOpen] = useState(false)
+  const tl = String(job.config.target_lang ?? "vi")
   const [voice, setVoice] = useState(String(job.config.voice ?? ""))
   const [byGender, setByGender] = useState(!!job.config.dub_by_gender)
   const [female, setFemale] = useState(String(job.config.voice_female ?? ""))
@@ -52,7 +54,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>{dubbed ? "Lồng tiếng lại" : "Lồng tiếng Việt"}</DialogTitle>
+            <DialogTitle>{dubbed ? "Lồng tiếng lại" : tl === "vi" ? "Lồng tiếng Việt" : `Lồng tiếng — ${langName(tl)}`}</DialogTitle>
             <DialogDescription>
               Dùng lại bản dịch {job.scenes.length} dòng của video này (không chạy lại nhận dạng / dịch, video cũ giữ nguyên).
               Các bước: phân tích nhân vật → dừng ở <b>Duyệt kịch bản theo vai</b> để bạn kiểm tra ai nói câu nào & chọn giọng từng nhân vật → rồi mới lồng tiếng.
@@ -64,12 +66,12 @@ export function RedubButton({ job }: { job: JobDetail }) {
             <div className={byGender ? "grid gap-4 sm:grid-cols-2" : "flex flex-col gap-2"}>
               <div className="flex flex-col gap-1.5">
                 <p className="text-xs font-medium text-muted-foreground">{byGender ? "Giọng cho nhân vật nam" : "Giọng đọc"}</p>
-                <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} fx={fx} />
+                <VoiceSelect value={voice} onChange={(v) => changeBase(voice, v, setVoice)} fx={fx} lang={tl} />
               </div>
               {byGender && (
                 <div className="flex flex-col gap-1.5">
                   <p className="text-xs font-medium text-muted-foreground">Giọng cho nhân vật nữ</p>
-                  <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} fx={fx} />
+                  <VoiceSelect value={female} onChange={(v) => changeBase(female, v, setFemale)} fx={fx} lang={tl} />
                 </div>
               )}
             </div>
@@ -91,7 +93,7 @@ export function RedubButton({ job }: { job: JobDetail }) {
                       <span className="text-xs text-muted-foreground">{c.count} câu</span>
                     </div>
                     {c.samples[0] && <p className="truncate text-xs italic text-muted-foreground" title={c.samples.join("\n")}>“{c.samples[0]}”</p>}
-                    <VoiceSelect value={voiceOf(c)} onChange={(v) => setCv((m) => ({ ...m, [String(c.id)]: v }))} fx={fx} />
+                    <VoiceSelect value={voiceOf(c)} onChange={(v) => setCv((m) => ({ ...m, [String(c.id)]: v }))} fx={fx} lang={tl} />
                   </div>
                 ))}
                 </div>

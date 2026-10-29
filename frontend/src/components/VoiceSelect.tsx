@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrig
 import { useStore } from "@/app/store"
 import { stopAllAudio, useAudio } from "@/hooks/useAudio"
 import { api, mediaUrl } from "@/lib/api"
+import { langName, voiceFits } from "@/lib/langs"
 
 type VoiceFx = { vieneu_rate: number; vieneu_pitch: number }
 
@@ -79,8 +80,10 @@ export function VieneuFx({ value, onChange }: { value: VoiceFx; onChange: (p: Pa
   )
 }
 
-export function VoiceSelect({ value, onChange, fx }: { value: string; onChange: (v: string) => void; fx?: VoiceFx }) {
-  const { voices } = useStore()
+export function VoiceSelect({ value, onChange, fx, lang = "vi" }: { value: string; onChange: (v: string) => void; fx?: VoiceFx; lang?: string }) {
+  const { voices: all } = useStore()
+  // chỉ giọng đọc được ngôn ngữ lồng tiếng đang chọn (giọng đang chọn luôn giữ trong danh sách)
+  const voices = all.filter((v) => voiceFits(v, lang) || v.label === value)
   const { play, playing } = useAudio()
   const [testing, setTesting] = useState(false)
   const [testUrl, setTestUrl] = useState("")           // file "Tạo thử" gần nhất của ô này
@@ -128,7 +131,7 @@ export function VoiceSelect({ value, onChange, fx }: { value: string; onChange: 
         <SelectTrigger className="w-full"><SelectValue placeholder="Chọn giọng đọc" /></SelectTrigger>
         <SelectContent className="max-h-80">
           <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-[11px] text-muted-foreground">
-            <VnFlag /> {voices.length} giọng tiếng Việt · {ready.length} dùng được ngay
+            {lang === "vi" && <VnFlag />} {voices.length} giọng {langName(lang).replace("Tiếng ", "tiếng ")} · {ready.length} dùng được ngay
           </div>
           {groups.map((g) => {
             const items = ready.filter((v) => v.group === g)

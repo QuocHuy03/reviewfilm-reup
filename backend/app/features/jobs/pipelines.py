@@ -85,8 +85,18 @@ def _layout(cfg):
     return C.SUBTITLE_LAYOUT_PRESETS.get(cfg.get('sub_layout'), C.SUBTITLE_LAYOUT_PRESETS[DEFAULT_LAYOUT])
 
 
-def _rechunk(cues, layout):
-    return rechunk_cues(cues, layout['sub_max_chars_per_chunk'], layout['sub_max_lines'])
+def _rechunk(cues, layout, target_lang='vi'):
+    n = layout['sub_max_chars_per_chunk']
+    if target_lang in ('zh', 'ja', 'ko'):
+        n = max(12, n // 2)                       # chữ Hán / kana / Hàn rộng gấp ~2 chữ La-tinh
+    return rechunk_cues(cues, n, layout['sub_max_lines'])
+
+
+def _layout_for(layout, target_lang):
+    """Bố cục phụ đề theo ngôn ngữ: chữ Hán / kana / Hàn rộng gấp ~2 → nửa số ký tự mỗi đoạn. Tiếng Việt: y như cũ."""
+    if target_lang in ('zh', 'ja', 'ko') and layout.get('sub_max_chars_per_chunk'):
+        return {**layout, 'sub_max_chars_per_chunk': max(12, int(layout['sub_max_chars_per_chunk']) // 2)}
+    return layout
 
 
 def _write_srt(path, cues):
@@ -112,8 +122,35 @@ def _base_name(video_path):
     return safe_filename(os.path.splitext(os.path.basename(video_path))[0])
 
 
-def _voice_id(label):
-    return C.VOICE_OPTIONS.get(label) or C.LEGACY_VOICE_OPTIONS.get(label) or label or 'vi-VN-HoaiMyNeural'
+def _voice_id(label, target_lang='vi'):
+    from core import langs
+    return C.VOICE_OPTIONS.get(label) or C.LEGACY_VOICE_OPTIONS.get(label) or label or langs.edge_voice(target_lang)
+
+
+def _tl(cfg):
+    """Ngôn ngữ lời đọc + phụ đề xuất của job ('vi' mặc định — như cũ)."""
+    from core import langs
+    return langs.norm((cfg or {}).get('target_lang'))
+
+
+def _tl_kw(cfg):
+    """{'target_lang': tl} khi xuất ngôn ngữ khác tiếng Việt, {} khi tiếng Việt (gọi hàm y như cũ)."""
+    tl = _tl(cfg)
+    return {'target_lang': tl} if tl != 'vi' else {}
+
+
+def _voice_for_lang(voice, target_lang, log=None):
+    """Giọng (id) không đọc được ngôn ngữ đích (vd VieNeu / FPT / giọng Việt khi lồng tiếng Anh) → giọng Edge cùng giới
+    của ngôn ngữ đó, có báo. Tiếng Việt: giữ nguyên giọng đã chọn (như cũ)."""
+    from core import langs
+    if target_lang == 'vi' or langs.voice_lang(voice) in (target_lang, 'multi'):
+        return voice
+    from core.tts_engine import _get_fallback_edge_voice
+    alt = _get_fallback_edge_voice(voice, target_lang)
+    if log:
+        log(f'   [CẢNH BÁO] Giọng "{voice}" không đọc được {langs.name_vi(target_lang)} — dùng {alt} (Edge TTS). '
+            f'Chọn giọng {langs.name_vi(target_lang)} ở mục Giọng đọc.', 'warn')
+    return alt
 
 
 def _speed(cfg):
@@ -236,14 +273,16 @@ def _translate(job, segments, lang, cfg, video_path):
     """Dịch + Việt hoá phụ đề. AI khi bật ai_translate và có engine; không thì Google miễn phí."""
     from core import user_glossary
     from core.translator import translate_and_localize_transcript
+    tl = _tl(cfg)
     use_ai = bool(cfg.get('ai_translate')) and _web_ai().available()
     job.log(f"   Dịch phụ đề ({'AI — tài khoản web' if use_ai else 'Google miễn phí'})...", 'info')
-    context = (user_glossary.prompt_block() + (cfg.get('film_context') or '')).strip()   # tên / thuật ngữ người dùng đã chốt
+    # từ điển người dùng = cách dịch sang tiếng Việt → chỉ dùng khi xuất tiếng Việt
+    context = ((user_glossary.prompt_block() if tl == 'vi' else '') + (cfg.get('film_context') or '')).strip()
     scenes = translate_and_localize_transcript(
         segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=context,
-        video_filename=os.path.basename(video_path), allow_web=use_ai)
+        video_filename=os.path.basename(video_path), allow_web=use_ai, **_tl_kw(cfg))
     # cách dịch sai người dùng đã chốt → tự thay (cả bản dịch Google miễn phí)
-    entries = user_glossary.load()
+    entries = user_glossary.load() if tl == 'vi' else []
     if scenes and entries:
         n = 0
         for s in scenes:
@@ -272,11 +311,12 @@ def vieneu_fx(cfg):
         return (1.0, 0.0)
 
 
-def synthesize(scenes, voice_label, out_dir, log, strict=True, fx=None):
+def synthesize(scenes, voice_label, out_dir, log, strict=True, fx=None, target_lang='vi'):
     """Đọc bằng ĐÚNG giọng đã chọn — lỗi thì trả về thiếu cảnh, không tự đổi sang Edge / giọng khác.
-    fx = (tốc độ, pitch Hz) áp cho câu đọc bằng VieNeu (vieneu_fx(cfg))."""
+    fx = (tốc độ, pitch Hz) áp cho câu đọc bằng VieNeu (vieneu_fx(cfg)).
+    target_lang ≠ 'vi': giọng không đọc được ngôn ngữ đó (VieNeu / FPT / giọng Việt) → Edge TTS của ngôn ngữ đó."""
     from core.tts_engine import apply_voice_fx, generate_tts_per_scene
-    voice = _voice_id(voice_label)
+    voice = _voice_for_lang(_voice_id(voice_label, target_lang), target_lang, log)
     out = generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=True)
     if fx and out:
         apply_voice_fx(out, fx[0], fx[1], log)
@@ -500,11 +540,11 @@ def _step_script(run):
         run.log('   → Cắt cảnh theo scene thật + phân tích từng chương (V2)', 'info')
         script = write_review_script_v2(analysis, run.transcript, vid_dur, run.video_path, target_minutes=mins,
                                         log_fn=job.log, deepseek_key=NO_KEY, openai_key=NO_KEY,
-                                        gemini_key=NO_KEY, film_context=film_ctx, temp_dir=run.temp_dir)
+                                        gemini_key=NO_KEY, film_context=film_ctx, temp_dir=run.temp_dir, **_tl_kw(cfg))
     else:
         script = write_review_script(analysis, run.transcript, vid_dur, target_minutes=mins, log_fn=job.log,
                                      deepseek_key=NO_KEY, openai_key=NO_KEY, gemini_key=NO_KEY,
-                                     film_context=film_ctx)
+                                     film_context=film_ctx, **_tl_kw(cfg))
     scenes = script.get('scenes') if isinstance(script, dict) else script
     if not scenes:
         raise RuntimeError('AI không tạo được cảnh nào — thử lại hoặc đổi video khác.')
@@ -548,7 +588,7 @@ def _step_voice(run):
         rendered = _multi_voice(job, voice_label, audio_dir, cast_key, cfg)
     else:
         run.log(f'[5] Tạo giọng đọc: {voice_label}', 'info')
-        rendered = synthesize([{**s, '_original_index': i} for (i, s) in enumerate(job.scenes)], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config))
+        rendered = synthesize([{**s, '_original_index': i} for (i, s) in enumerate(job.scenes)], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
     if not rendered:
         raise RuntimeError('Tạo giọng đọc thất bại.')
     rendered = _fill_missing_voices(job, rendered, voice_in_use(job), audio_dir, cfg)
@@ -569,7 +609,7 @@ def _fill_missing_voices(job, rendered, voice_label, audio_dir, cfg):
         out = None
         for attempt in range(2):
             job.check()
-            r = synthesize([dict(s)], voice_label, os.path.join(audio_dir, f'retry_{i}_{attempt}'), job.log, fx=vieneu_fx(job.config))
+            r = synthesize([dict(s)], voice_label, os.path.join(audio_dir, f'retry_{i}_{attempt}'), job.log, fx=vieneu_fx(job.config), target_lang=_tl(job.config))
             if r and r[0].get('tts_path'):
                 out = {**r[0], '_original_index': i}
                 break
@@ -596,7 +636,7 @@ def _revoice_stale(run):
             + ', '.join(f'#{i + 1}' for i in stale[:10]) + (' …' if len(stale) > 10 else ''), 'info')
     batch = [{**job.scenes[i], '_original_index': i} for i in stale]
     out_dir = os.path.join(run.temp_dir, 'audio', f'revoice_{uuid.uuid4().hex[:6]}')
-    rendered = synthesize(batch, voice_in_use(job), out_dir, job.log, strict=run.cfg.get('strict_voice', False), fx=vieneu_fx(job.config))
+    rendered = synthesize(batch, voice_in_use(job), out_dir, job.log, strict=run.cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
     by_idx = {int(r['_original_index']): r for r in rendered or [] if r.get('tts_path') and '_original_index' in r}
     for i in stale:
         if i in by_idx:
@@ -636,7 +676,7 @@ def _step_autopost(run):
     ai_count, regen_ok, regen_fail = 0, 0, 0
     if _web_ai().available():
         try:
-            edits = suggest_edits(scenes, job.kind, '', job.log)
+            edits = suggest_edits(scenes, job.kind, '', job.log, **_tl_kw(cfg))
         except RuntimeError as e:
             edits = []
             run.log(f'   [WARN] AI hậu kỳ bỏ qua: {e}', 'warn')
@@ -666,11 +706,11 @@ def _step_autopost(run):
             # giây có, đọc lại cùng lượt (B7) — giữ hình tốc độ thật, lời vào đúng miệng nhân vật
             from .postedit import rewrite_to_length
             from .qa import scene_fit
-            long_ = {p['scene']: {'why': p['why'], 'fit': p['fit']} for p in scene_fit(scenes, reup=True)
+            long_ = {p['scene']: {'why': p['why'], 'fit': p['fit']} for p in scene_fit(scenes, reup=True, **_tl_kw(cfg))
                      if p['kind'] == 'long' and p['scene'] not in to_voice}
             if long_:
                 run.log(f'   {len(long_)} câu lời quá dài so với khoảng trống — AI rút gọn cho vừa...', 'step')
-                for (i, t) in (rewrite_to_length(scenes, long_, job.log) or {}).items():
+                for (i, t) in (rewrite_to_length(scenes, long_, job.log, **_tl_kw(cfg)) or {}).items():
                     sc = scenes[i]
                     old_text[i] = (sc.get('voiceover'), sc.get('subtitle'))
                     if (sc.get('subtitle') or '') == (sc.get('voiceover') or ''):
@@ -683,7 +723,7 @@ def _step_autopost(run):
             run.log(f'   Tạo lại giọng {len(to_voice)} câu đã sửa (một lượt, song song)...', 'step')
             batch = [{**scenes[i], '_original_index': i} for i in to_voice]
             out_dir = os.path.join(run.temp_dir, 'audio', f'autopost_{uuid.uuid4().hex[:6]}')
-            rendered = synthesize(batch, voice_in_use(job), out_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config))
+            rendered = synthesize(batch, voice_in_use(job), out_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
             by_idx = {int(r['_original_index']): r for r in rendered or [] if r.get('tts_path') and '_original_index' in r}
             for i in to_voice:
                 if i in by_idx:
@@ -917,8 +957,8 @@ def _render(run, out_path):
                                 sub_source_mode=sub_source, is_reup=not run.is_review,
                                 mirror_video=bool(cfg.get('mirror_video')), video_speed=_speed(cfg),
                                 should_stop=lambda: job.cancelled,
-                                **_sub_style(cfg), **run.layout, **_render_options(cfg, run.mixer), **_text_regions(run),
-                                **_bg_options(run))
+                                **_sub_style(cfg), **_layout_for(run.layout, _tl(cfg)), **_render_options(cfg, run.mixer), **_text_regions(run),
+                                **_bg_options(run), **_tl_kw(cfg))
     job.check()
     if not result or not os.path.isfile(out_path):
         raise RuntimeError('Dựng video thất bại.')
@@ -941,7 +981,7 @@ def _write_job_srt(run):
     Mốc trong job.scenes là mốc video GỐC (clip_start) — chỉ dùng khi không có file SRT của bước dựng."""
     out_path = run.job.result['output_path']
     synced = os.path.splitext(out_path)[0] + '.srt'
-    vi_srt = os.path.splitext(out_path)[0] + '.vi.srt'
+    vi_srt = os.path.splitext(out_path)[0] + f'.{_tl(run.cfg)}.srt'      # .vi.srt (tiếng Việt) / .en.srt …
     if os.path.isfile(synced) and os.path.getmtime(synced) >= os.path.getmtime(out_path) - 600:
         shutil.copyfile(synced, vi_srt)
         run.job.result['srt_path'] = vi_srt
@@ -977,7 +1017,7 @@ def _auto_fix(run, qa):
 
     def synth(scene, tag):
         job.check()
-        rendered = synthesize([scene], voice_in_use(job), os.path.join(run.temp_dir, 'audio', tag), job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config))
+        rendered = synthesize([scene], voice_in_use(job), os.path.join(run.temp_dir, 'audio', tag), job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
         if rendered and rendered[0].get('tts_path'):
             return _clean_scene({**scene, **rendered[0]})
         return None
@@ -1009,20 +1049,39 @@ def _multi_voice(job, voice_label, audio_dir, cast_key, cfg):
         characters = None
     if not characters:
         return synthesize(scenes, voice_label, audio_dir, job.log,
-                          strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config))
+                          strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
+    tl = _tl(cfg)
     (vmap, mi, fi) = ({}, 0, 0)
+    if tl == 'vi':
+        (pool_m, pool_f) = ([C.VOICE_OPTIONS[x] for x in C.VIENEU_CAST_MALE], [C.VOICE_OPTIONS[x] for x in C.VIENEU_CAST_FEMALE])
+    else:
+        (pool_m, pool_f) = cast_pools(tl)
     for c in characters:
         if c.get('gioi_tinh') == 'nu':
-            vmap[c['ten']] = C.VOICE_OPTIONS[C.VIENEU_CAST_FEMALE[fi % len(C.VIENEU_CAST_FEMALE)]]
+            vmap[c['ten']] = pool_f[fi % len(pool_f)]
             fi += 1
         else:
-            vmap[c['ten']] = C.VOICE_OPTIONS[C.VIENEU_CAST_MALE[mi % len(C.VIENEU_CAST_MALE)]]
+            vmap[c['ten']] = pool_m[mi % len(pool_m)]
             mi += 1
-    narrator = voice_label if voice_label in C.VIENEU_CAST_MALE + C.VIENEU_CAST_FEMALE else C.VIENEU_CAST_MALE[0]
+    if tl == 'vi':
+        narrator = C.VOICE_OPTIONS[voice_label if voice_label in C.VIENEU_CAST_MALE + C.VIENEU_CAST_FEMALE else C.VIENEU_CAST_MALE[0]]
+    else:
+        narrator = _voice_for_lang(_voice_id(voice_label, tl), tl, job.log)
     job.log(f"   Phân vai: người kể + {len(characters)} nhân vật ({', '.join(vmap)})", 'ok')
     from core.tts_engine import apply_voice_fx
-    out = generate_tts_multi_voice(scenes, vmap, C.VOICE_OPTIONS[narrator], audio_dir, log_fn=job.log, strict_voice=True)
+    out = generate_tts_multi_voice(scenes, vmap, narrator, audio_dir, log_fn=job.log, strict_voice=True)
     return apply_voice_fx(out, *vieneu_fx(job.config), job.log) if out else out
+
+
+def cast_pools(tl):
+    """Giọng phân vai cho ngôn ngữ khác tiếng Việt: giọng CapCut miễn phí đúng ngôn ngữ (nam / nữ), thiếu thì Edge.
+    → (danh sách id nam, danh sách id nữ), mỗi danh sách ≥ 1."""
+    from core import langs
+    from core.capcut_tts import CATALOG
+    free = [v for v in CATALOG if v.get('lang') == tl and v.get('free')]
+    males = ['capcut-' + v['id'] for v in free if v.get('gender') == 'male'][:8] or [langs.edge_voice(tl, True)]
+    females = ['capcut-' + v['id'] for v in free if v.get('gender') == 'female'][:8] or [langs.edge_voice(tl, False)]
+    return (males, females)
 
 
 def regenerate_scene(job, idx, text, scene=None):
@@ -1041,7 +1100,7 @@ def regenerate_scene(job, idx, text, scene=None):
     if scene.get('subtitle') in (None, '') or job.config.get('mode') == 'review':
         scene['subtitle'] = text
     out_dir = os.path.join(job.temp_dir, 'audio', f'regen_{uuid.uuid4().hex[:6]}')
-    rendered = synthesize([scene], voice_in_use(job), out_dir, job.log, strict=job.config.get('strict_voice', False), fx=vieneu_fx(job.config))
+    rendered = synthesize([scene], voice_in_use(job), out_dir, job.log, strict=job.config.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
     if not rendered or not rendered[0].get('tts_path'):
         raise RuntimeError('Không tạo được giọng cho câu này.')
     new = _clean_scene({**scene, **rendered[0]})
@@ -1065,13 +1124,15 @@ def run_srt_pipeline(job):
         job.result['video_path'] = '' if _is_url(cfg['inp']) else video_path
         job.log(f"   SRT gốc: {job.result['original_srt']} ({len(cues)} dòng)", 'ok')
         job.check()
-        if cfg.get('translate') and lang != 'vi':
-            job.set_progress(60, 'Dịch sang tiếng Việt')
+        tl = _tl(cfg)
+        if cfg.get('translate') and lang != tl:
+            from core import langs
+            job.set_progress(60, f'Dịch sang {langs.name_vi(tl)}')
             scenes = _translate(job, transcript['segments'], lang, cfg, video_path)
             if scenes:
-                cues = _rechunk(scenes_to_cues(scenes, 'subtitle'), layout)
-                job.result['vi_srt'] = _write_srt(os.path.join(out_dir, base + '_vi.srt'), cues)
-                job.log(f"   SRT tiếng Việt: {job.result['vi_srt']}", 'ok')
+                cues = _rechunk(scenes_to_cues(scenes, 'subtitle'), layout, tl)
+                job.result['vi_srt'] = _write_srt(os.path.join(out_dir, base + f'_{tl}.srt'), cues)   # khoá giữ tên cũ
+                job.log(f"   SRT {langs.name_vi(tl)}: {job.result['vi_srt']}", 'ok')
         job.scenes = [{'clip_start': c['start'], 'clip_end': c['end'], 'voiceover': c['text'], 'subtitle': c['text']} for c in cues]
 
 

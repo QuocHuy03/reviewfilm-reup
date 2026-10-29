@@ -11,6 +11,7 @@ import { api } from "@/lib/api"
 import { fmtClock } from "@/lib/format"
 import { cutWord, isRetimed, origOf, partsWithText, readSpeed, resetTiming, sceneCues, voiceSlot } from "@/lib/subcues"
 import type { Scene, ScenePart } from "@/lib/types"
+import { dubCps } from "@/lib/langs"
 import { cn } from "@/lib/utils"
 
 /** Sóng âm video gốc: đỉnh 0-255 mỗi 1/rate giây. */
@@ -51,7 +52,7 @@ const MIN_PPS = 4
 const MAX_PPS = 400
 const MIN_DUR = 0.3
 const SNAP_PX = 8
-const DUB_CPS = 17      // giọng Việt ~17 ký tự / giây (khớp bước Sửa bản dịch)
+// giọng Việt ~17 ký tự / giây (khớp bước Sửa bản dịch); ngôn ngữ khác theo dubCps(lang)
 const HELP: [string, string][] = [
   ["Kéo khối", "dời phụ đề / giọng"],
   ["Kéo mép", "đổi lúc bắt đầu / kết thúc"],
@@ -70,9 +71,9 @@ const HELP: [string, string][] = [
 ]
 const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
 const LANES = {
-  orig: { label: "Gốc", sub: "sóng âm + phụ đề gốc", icon: AudioWaveform, h: 48, accent: "bg-sky-400", text: "text-sky-300" },
-  voice: { label: "Giọng", sub: "khung đọc lồng tiếng từng câu", icon: Mic, h: 40, accent: "bg-orange-400", text: "text-orange-300" },
-  sub: { label: "Phụ đề", sub: "dòng chữ hiện trên video", icon: Captions, h: 40, accent: "bg-violet-400", text: "text-violet-300" },
+  orig: { label: "Original", sub: "waveform + source subs", icon: AudioWaveform, h: 48, accent: "bg-sky-400", text: "text-sky-300" },
+  voice: { label: "Voice", sub: "dub per line", icon: Mic, h: 40, accent: "bg-orange-400", text: "text-orange-300" },
+  sub: { label: "Subtitle", sub: "on video", icon: Captions, h: 40, accent: "bg-violet-400", text: "text-violet-300" },
 } as const
 
 type LaneKey = "voice" | "sub"
@@ -85,6 +86,8 @@ const r2 = (x: number) => Math.round(x * 100) / 100
 const snapOf = (s: Scene): Snap => ({ clip_start: s.clip_start, clip_end: s.clip_end, parts: s.parts, voice_start: s.voice_start, voice_end: s.voice_end })
 
 type Props = {
+  /** ngôn ngữ lời đọc (ước tính độ dài giọng) */
+  lang?: string
   scenes: Scene[]
   onChange: (next: Scene[]) => void
   /** có lồng tiếng → hiện làn Lồng tiếng */
@@ -117,7 +120,7 @@ type Props = {
 }
 
 export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selected, duration, onSeek, onSelect, onToggle, peaks, shots = [],
-  onPreviewVoice, voiceBusy = null, voicePlaying = null, subtitleVisible = true, onToggleSubtitle, origMuted = false, onToggleOrigMute, subStyleMenu }: Props) {
+  onPreviewVoice, voiceBusy = null, voicePlaying = null, subtitleVisible = true, onToggleSubtitle, origMuted = false, onToggleOrigMute, subStyleMenu, lang = "vi" }: Props) {
   // khoá làn: không kéo / cắt / dời / sửa nhầm khối của làn đó (vẫn bấm chọn & tua được)
   const [locked, setLocked] = useState<Record<LaneKey, boolean>>({ voice: false, sub: false })
   const [styleOpen, setStyleOpen] = useState(false)
@@ -684,7 +687,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   const voiceInfo = (x: Item, sp: Span) => {
     const slot = Math.max(0.1, sp.end - sp.start)
     const real = realDur[x.scene]
-    const need = real ?? x.text.replace(/\s+/g, " ").length / DUB_CPS
+    const need = real ?? x.text.replace(/\s+/g, " ").length / dubCps(lang)
     const ratio = need / slot
     return { slot, need, ratio, level: ratio > 1.35 ? "long" : ratio > 1 ? "fast" : "ok" }
   }

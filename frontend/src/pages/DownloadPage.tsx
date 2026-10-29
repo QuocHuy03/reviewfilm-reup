@@ -152,24 +152,25 @@ export function DownloadPage() {
           action={<Segmented size="sm" value={quality} onChange={setQuality} items={QUALITIES} />}>
           <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} className="font-mono text-xs placeholder:font-sans"
             placeholder={"https://www.douyin.com/video/…\nhttps://www.bilibili.com/video/BV…\nhttps://www.dramabox.com/vi/video/41000107260_… (phim ngắn: tải cả bộ)\n7.43 复制打开抖音，看看… https://v.douyin.com/…"} />
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-2">
-              <Captions className="size-3.5" /> Tạo phụ đề (kèm bản dịch Việt):
+          {/* tuỳ chọn + nơi lưu + nút tải: cùng 1 hàng, mọi ô cao h-9, viền / bo góc như ô nhập */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-input bg-background/40 pr-1 pl-3 text-muted-foreground"
+              title="Tạo phụ đề theo tiếng trong video, kèm bản dịch tiếng Việt">
+              <Captions className="size-3.5" /> Phụ đề
               <Segmented size="sm" value={subs} onChange={setSubs} items={SUBS} />
-            </span>
-            <label className="flex cursor-pointer items-center gap-2" title="Phim nhiều tập: poster.jpg trong thư mục phim · Video lẻ: ảnh -poster.jpg cạnh video">
-              <ImageDown className="size-3.5" /> Lưu poster <Switch size="sm" checked={poster} onCheckedChange={togglePoster} />
+            </div>
+            <label className="flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-lg border border-input bg-background/40 px-3 text-muted-foreground"
+              title="Phim nhiều tập: poster.jpg trong thư mục phim · Video lẻ: ảnh -poster.jpg cạnh video">
+              <ImageDown className="size-3.5" /> Poster <Switch size="sm" checked={poster} onCheckedChange={togglePoster} />
             </label>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-background/40 py-1 pr-1 pl-2.5 text-[12px]">
+            <div className="flex h-9 min-w-[260px] flex-1 items-center gap-1.5 rounded-lg border border-input bg-background/40 pr-1 pl-3">
               <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="shrink-0 text-muted-foreground">Lưu vào</span>
               <span className="min-w-0 flex-1 truncate font-medium" title={shownDir}>{shownDir}</span>
               {outDir && <Button size="icon-xs" variant="ghost" title="Về mặc định (Cài đặt)" onClick={() => saveDir("")}><X /></Button>}
               <Button size="xs" variant="ghost" onClick={pickDir}>Đổi</Button>
             </div>
-            <Button onClick={start} disabled={!links.length || starting || probing || (infos.length > 0 && okCount === 0)}>
+            <Button className="h-9 shrink-0 px-4" onClick={start} disabled={!links.length || starting || probing || (infos.length > 0 && okCount === 0)}>
               {starting ? <Loader2 className="animate-spin" /> : <Download />} Tải {links.length > 1 ? `${links.length} video` : "video"}
             </Button>
           </div>

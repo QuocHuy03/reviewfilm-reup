@@ -12,6 +12,25 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-10-29
+
+### Added
+- **Lồng tiếng & phụ đề 17 ngôn ngữ**: chọn "Ngôn ngữ lồng tiếng & phụ đề" (Anh, Trung, Nhật, Hàn, Indonesia, Thái, Tây
+  Ban Nha, Bồ Đào Nha, Pháp, Đức, Ý, Nga, Ả Rập, Thổ Nhĩ Kỳ, Mã Lai, Philippines) — AI viết / dịch lời đọc và phụ đề sang
+  ngôn ngữ đó, đọc bằng giọng ngôn ngữ đó, phụ đề tự dùng font có đủ chữ (Trung / Nhật / Hàn / Thái / Ả Rập) và ngắt dòng
+  theo ký tự. Mặc định vẫn tiếng Việt, như cũ.
+- **1.117 giọng CapCut mọi ngôn ngữ** (+ Edge TTS miễn phí cho từng ngôn ngữ), có mẫu nghe sẵn; trang Giọng đọc lọc
+  theo ngôn ngữ. Giọng "multi … bigtts" CapCut web từ chối thì tự chạy qua API bản PC.
+
+### Fixed
+- **App kẹt "Đang khởi động" khi chạy cùng tool khác**: backend dùng cổng riêng (47651); cổng vẫn bị chiếm thì tự chọn
+  cổng khác, chạy lại và tải lại giao diện — không còn đứng mãi ở "Đang kết nối backend".
+- **Menu chọn bấm không ăn**: menu dài bung lên đè thanh tiêu đề cửa sổ bị "nuốt" cú bấm — giờ bấm được mọi chỗ.
+- **Xem trước phụ đề đúng tỉ lệ** video xuất (trước chữ quá to, bị cắt dòng dưới); khung 9:16 xem trước dạng dọc.
+- **Header không còn xuống dòng** khi cửa sổ hẹp; trang Tải video gọn 1 hàng, các ô cao bằng nhau.
+- **"Có gì mới" rộng hơn**, hiện đủ câu (trước bị cắt giữa chừng); nhãn timeline đổi sang tiếng Anh (Video · Voice ·
+  Subtitle · Music).
+
 ## [2.13.0] - 2026-10-28
 
 ### Added
@@ -467,7 +486,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...HEAD
+[2.14.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.2...v2.12.0
 [2.11.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.1...v2.11.2

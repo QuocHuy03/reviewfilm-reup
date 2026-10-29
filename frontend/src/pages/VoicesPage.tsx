@@ -11,18 +11,26 @@ import { VieneuSetup } from "@/components/VieneuSetup"
 import { useAudio } from "@/hooks/useAudio"
 import { api, mediaUrl } from "@/lib/api"
 import type { Voice } from "@/lib/types"
+import { DEMO_TEXT, LANGS, voiceFits } from "@/lib/langs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 type Gender = "all" | "male" | "female"
 
 export function VoicesPage() {
-  const { voices, settings, setSettings, go, refreshSystem } = useStore()
+  const { voices: allVoices, settings, setSettings, go, refreshSystem } = useStore()
+  // ngôn ngữ giọng đọc: mặc định tiếng Việt; đổi sang ngôn ngữ khác để nghe / chọn giọng lồng tiếng nước ngoài
+  const [lang, setLang] = useState("vi")
+  const voices = useMemo(() => allVoices.filter((v) => voiceFits(v, lang)), [allVoices, lang])
+  const langCount = (c: string) => allVoices.filter((v) => voiceFits(v, c)).length
   const [onlyReady, setOnlyReady] = useState(true)
   const { play, playing, playList, queueKey, stop } = useAudio()
   const [group, setGroup] = useState("Tất cả")
   const [gender, setGender] = useState<Gender>("all")
   const [q, setQ] = useState("")
-  const [text, setText] = useState("Xin chào các bạn, hôm nay chúng ta sẽ cùng xem một bộ phim cực kỳ hấp dẫn.")
+  const [text, setText] = useState(DEMO_TEXT.vi)
+  // đổi ngôn ngữ → câu thử đổi theo (nếu chưa tự sửa câu)
+  const changeLang = (c: string) => { if (Object.values(DEMO_TEXT).includes(text)) setText(DEMO_TEXT[c] ?? DEMO_TEXT.en); setLang(c); setGroup("Tất cả") }
   const [busy, setBusy] = useState<string | null>(null)
   const [generated, setGenerated] = useState<Record<string, string>>({})
   // Tạo thử hàng loạt: lần lượt từng giọng (máy chủ chỉ tạo 1 giọng thử một lúc), huỷ được giữa chừng
@@ -106,7 +114,13 @@ export function VoicesPage() {
       <VieneuSetup onChange={refreshSystem} />
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
-          <span className="flex items-center gap-1.5 font-semibold"><VnFlag /> {voices.length} giọng tiếng Việt</span>
+          <Select value={lang} onValueChange={changeLang}>
+            <SelectTrigger className="h-8 w-auto gap-1.5 font-semibold">{lang === "vi" && <VnFlag />}<SelectValue /></SelectTrigger>
+            <SelectContent className="max-h-80">
+              {LANGS.map((l) => <SelectItem key={l.code} value={l.code}>{l.name} · {langCount(l.code)} giọng</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <span className="font-semibold">{voices.length} giọng</span>
           <span className="text-success">{ready} dùng được ngay</span>
           {voices.length - ready > 0 && <span className="text-muted-foreground">{voices.length - ready} cần cài thêm / key</span>}
           <span className="text-muted-foreground">{new Set(voices.map((v) => v.group)).size} nhóm</span>

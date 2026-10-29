@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url"
 import { appInfo, releaseNotes, trackVersion } from "./appInfo"
 import * as auth from "./auth"
 import { capcutLogin, capcutLogout } from "./capcut"
-import { backendPort, pickPort, startBackend, stopBackend } from "./backend"
+import { backendPort, onBackendRestart, pickPort, startBackend, stopBackend } from "./backend"
 import { logger, logsDir } from "./logger"
 import { DEV, DEV_URL, FRONTEND_INDEX, ICON, ROOT, userData } from "./paths"
 import type { PythonStatus } from "./python"
@@ -201,7 +201,9 @@ if (process.platform === "win32") app.setAppUserModelId("com.taothaoai.reviewfil
 app.whenReady().then(async () => {
   trackVersion()
   log.info(`ReviewFilm Studio v${app.getVersion()} (${app.isPackaged ? "bản cài đặt" : "dev"}) — Electron ${process.versions.electron}`)
-  await pickPort(8765)
+  await pickPort()
+  ipcMain.on("rf:backendUrl", (e) => { e.returnValue = `http://127.0.0.1:${backendPort}` })
+  onBackendRestart(() => win?.webContents.reload())      // backend chạy lại ở cổng khác → giao diện nạp lại với cổng mới
   createWindow()
   initUpdater(() => win)
 })

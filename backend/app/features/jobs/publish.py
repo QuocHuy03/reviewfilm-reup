@@ -28,7 +28,7 @@ TONES = {
 }
 
 PROMPT = """# VAI TRÒ
-Bạn là chuyên gia nội dung mạng xã hội cho kênh {kind} phim tiếng Việt. Viết bài đăng cho video dưới đây
+Bạn là chuyên gia nội dung mạng xã hội cho kênh {kind} phim {lang}. Viết bài đăng cho video dưới đây
 theo đúng thói quen của TỪNG nền tảng. Giọng văn: {tone}.
 
 # VIDEO
@@ -46,10 +46,10 @@ theo đúng thói quen của TỪNG nền tảng. Giọng văn: {tone}.
 - tiktok: "caption" 1–2 câu hook ≤ 150 ký tự; "hashtags" 4–6 (trộn hashtag rộng + ngách phim).
 - facebook: "caption" 2–4 câu kể chuyện + câu hỏi gợi bình luận; "hashtags" 3–5.
 - instagram: "caption" 1–3 câu + 1 dòng kêu gọi; "hashtags" 8–12.
-- "thumbnail_texts": 3 phương án chữ trên ảnh thumbnail, mỗi phương án ≤ 5 từ, mạnh, dễ đọc.
+- "thumbnail_texts": 3 phương án chữ trên ảnh thumbnail, mỗi phương án ≤ {thumb_len}, mạnh, dễ đọc.
 
 # QUY TẮC
-Tiếng Việt có dấu, tự nhiên. Hashtag viết liền không dấu, bắt đầu bằng #. Không bịa tình tiết không có trong nội dung.
+{lang_rules} Không bịa tình tiết không có trong nội dung.
 Không markdown. Chỉ trả về JSON đúng mẫu:
 {{"youtube": {{"title": "", "description": "", "chapters": [], "tags": [], "hashtags": []}},
  "shorts": {{"title": "", "description": "", "hashtags": []}},
@@ -79,20 +79,46 @@ def scene_marks(job):
     return out
 
 
-def _hashtag(h):
-    """'#Hoạt hình vui' → '#hoathinhvui' — hashtag không dấu, viết liền (tìm kiếm trên nền tảng chuẩn hơn)."""
+# Quy tắc ngôn ngữ của bài đăng theo ngôn ngữ video ('vi' giữ y như cũ)
+_VI_RULES = 'Tiếng Việt có dấu, tự nhiên. Hashtag viết liền không dấu, bắt đầu bằng #.'
+
+
+def _tl(job):
+    from core import langs
+    return langs.norm((getattr(job, 'config', None) or {}).get('target_lang'))
+
+
+def _lang_prompt(tl):
+    """→ (tên ngôn ngữ trong vai trò, quy tắc ngôn ngữ, độ dài chữ thumbnail) cho PROMPT."""
+    if tl == 'vi':
+        return ('tiếng Việt', _VI_RULES, '5 từ')
+    from core import langs
+    name = langs.name_vi(tl)
+    name = name[:1].lower() + name[1:]
+    rules = (f'Mọi tiêu đề, mô tả, chú thích, tags, hashtag và chữ thumbnail viết bằng {name} ({langs.name_en(tl)}) tự nhiên — '
+             f'không dùng tiếng Việt. Write all titles/descriptions/captions/tags/hashtags/thumbnail texts in {langs.name_en(tl)}. '
+             'Hashtag viết liền, không dấu cách, bắt đầu bằng #.')
+    return (f'{name} ({langs.name_en(tl)})', rules, '5 từ' if langs.spaced(tl) else '10 ký tự')
+
+
+def _hashtag(h, tl='vi'):
+    """'#Hoạt hình vui' → '#hoathinhvui' — hashtag không dấu, viết liền (tìm kiếm trên nền tảng chuẩn hơn).
+    Ngôn ngữ khác: giữ nguyên chữ (Trung / Nhật / Thái / Nga… — bỏ dấu sẽ mất hết chữ), chỉ bỏ dấu cách / ký hiệu."""
+    if tl != 'vi':
+        h = re.sub(r'[^\w]', '', str(h or '').lstrip('#'))
+        return f'#{h.lower()}' if h else ''
     h = unicodedata.normalize('NFD', str(h or '').replace('đ', 'd').replace('Đ', 'D'))
     h = re.sub(r'[^0-9A-Za-z_]', '', ''.join(c for c in h if unicodedata.category(c) != 'Mn'))
     return f'#{h.lower()}' if h else ''
 
 
-def _clean(data, marks, total):
+def _clean(data, marks, total, tl='vi'):
     """Chuẩn hoá kết quả AI: cắt theo giới hạn ký tự, sửa hashtag, chỉ giữ chương có mốc hợp lệ."""
     valid = {_fmt(t) for (t, _) in marks}
     out = {}
     for (key, spec) in PLATFORMS.items():
         d = data.get(key) or {}
-        item = {'hashtags': [x for x in dict.fromkeys(_hashtag(h) for h in d.get('hashtags') or []) if x]}
+        item = {'hashtags': [x for x in dict.fromkeys(_hashtag(h, tl) for h in d.get('hashtags') or []) if x]}
         if spec['title']:
             item['title'] = str(d.get('title') or '').strip()[:spec['title']]
         body = str(d.get('description') or d.get('caption') or '').strip()
@@ -135,6 +161,31 @@ def compose(key, item):
 
 _BOLD_FONTS = [r'C:\Windows\Fonts\seguibl.ttf', r'C:\Windows\Fonts\ariblk.ttf', r'C:\Windows\Fonts\arialbd.ttf',
                r'C:\Windows\Fonts\segoeuib.ttf', r'C:\Windows\Fonts\arial.ttf']
+# chữ thumbnail Trung / Nhật / Hàn / Thái: font Latin thiếu chữ (ô vuông) → font Windows có đủ chữ
+_SCRIPT_FONTS = {
+    'ja': [r'C:\Windows\Fonts\YuGothB.ttc', r'C:\Windows\Fonts\meiryob.ttc', r'C:\Windows\Fonts\msgothic.ttc'],
+    'zh': [r'C:\Windows\Fonts\msyhbd.ttc', r'C:\Windows\Fonts\msyh.ttc', r'C:\Windows\Fonts\simhei.ttf'],
+    'ko': [r'C:\Windows\Fonts\malgunbd.ttf', r'C:\Windows\Fonts\malgun.ttf'],
+    'th': [r'C:\Windows\Fonts\LeelaUIb.ttf', r'C:\Windows\Fonts\leelawui.ttf', r'C:\Windows\Fonts\tahomabd.ttf'],
+    'ar': [r'C:\Windows\Fonts\segoeuib.ttf', r'C:\Windows\Fonts\arialbd.ttf', r'C:\Windows\Fonts\tahomabd.ttf'],
+}
+_UNSPACED = re.compile('[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]')
+
+
+def _script(text):
+    """Chữ thumbnail thuộc hệ chữ nào (ko / ja / zh / th / ar) — None = chữ Latin / Việt (font cũ)."""
+    t = str(text or '')
+    if re.search('[\uac00-\ud7af]', t):
+        return 'ko'
+    if re.search('[\u3040-\u30ff]', t):
+        return 'ja'
+    if re.search('[\u4e00-\u9fff]', t):
+        return 'zh'
+    if re.search('[\u0e00-\u0e7f]', t):
+        return 'th'
+    if re.search('[\u0600-\u06ff]', t):
+        return 'ar'
+    return None
 
 
 def _frame(video, t, out, mirror=False):
@@ -157,6 +208,17 @@ def _score(path):
 
 
 def _wrap(draw, text, font, width):
+    if len(_UNSPACED.findall(text)) >= 0.3 * len(text.replace(' ', '') or ' '):
+        # Trung / Nhật / Thái: không có dấu cách → xuống dòng theo ký tự (dấu Thái dính ký tự trước)
+        words = re.findall('(?:[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff][\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]*|[^\\s\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]+)\\s*', text.strip())
+        lines, cur = [], ''
+        for w in words:
+            if draw.textlength(cur + w, font=font) <= width or not cur:
+                cur += w
+            else:
+                lines.append(cur.strip())
+                cur = w
+        return lines + ([cur.strip()] if cur.strip() else [])
     words, lines, cur = text.split(), [], ''
     for w in words:
         nxt = f'{cur} {w}'.strip()
@@ -182,7 +244,7 @@ def render_thumbnail(src, text, out, size=(1280, 720)):
             shade.putpixel((0, y), int(max(0, (y - H * 0.45) / (H * 0.55)) * 200))
         im.paste(Image.new('RGB', (W, H), (0, 0, 0)), (0, 0), shade.resize((W, H)))
         draw = ImageDraw.Draw(im)
-        font_path = next((f for f in _BOLD_FONTS if os.path.isfile(f)), None)
+        font_path = next((f for f in _SCRIPT_FONTS.get(_script(text), []) + _BOLD_FONTS if os.path.isfile(f)), None)
         fs = int(H * (0.13 if W > H else 0.075))
         while True:
             font = ImageFont.truetype(font_path, fs) if font_path else ImageFont.load_default()
@@ -298,13 +360,16 @@ def generate(job, platforms=None, tone='hap-dan', extra='', log=print):
         (job.config.get('film_context') or 'không rõ — suy ra từ nội dung')
     scenes_txt = '\n'.join(f'  [{_fmt(t)}] {vo[:160]}' for (t, vo) in marks[:60])[:6000]
     extra_txt = f'\n# YÊU CẦU THÊM CỦA NGƯỜI DÙNG (ưu tiên)\n{extra.strip()}' if extra.strip() else ''
+    tl = _tl(job)
+    (lang, lang_rules, thumb_len) = _lang_prompt(tl)
     prompt = PROMPT.format(kind='review' if job.kind == 'review' else 'dịch & reup', tone=TONES.get(tone, TONES['hap-dan']),
-                           duration=_fmt(total), film=film_txt[:1500], scenes=scenes_txt, extra=extra_txt)
+                           duration=_fmt(total), film=film_txt[:1500], scenes=scenes_txt, extra=extra_txt,
+                           lang=lang, lang_rules=lang_rules, thumb_len=thumb_len)
     log('[Bài đăng] AI đang viết tiêu đề, mô tả, hashtag theo từng nền tảng...', 'info')
     data = _extract_json(web_llm.chat(prompt, log))
     if not isinstance(data, dict):
         raise RuntimeError('AI không trả về bài đăng hợp lệ — thử lại.')
-    posts = _clean(data, marks, total)
+    posts = _clean(data, marks, total, tl)
 
     out_dir = os.path.splitext(video)[0] + '_dang-bai'
     os.makedirs(out_dir, exist_ok=True)

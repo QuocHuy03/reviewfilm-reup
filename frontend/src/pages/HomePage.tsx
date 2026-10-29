@@ -52,7 +52,7 @@ export function HomePage() {
             <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary [&_svg]:size-4">{a.icon}</span>
             <p className="mt-3 text-sm font-semibold">{a.title}</p>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              {a.page === "voices" ? `${voices.length} giọng tiếng Việt · ${ready} dùng được ngay — CapCut, Edge, FPT.AI, VieNeu.` : a.desc}
+              {a.page === "voices" ? `${voices.filter((v) => (v.lang || "vi") === "vi").length} giọng tiếng Việt · ${voices.length} giọng 17 ngôn ngữ · ${ready} dùng được ngay — CapCut, Edge, FPT.AI, VieNeu.` : a.desc}
             </p>
             <ArrowRight className="absolute top-4 right-4 size-4 text-muted-foreground opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
           </button>

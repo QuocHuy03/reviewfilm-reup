@@ -14,6 +14,7 @@ from app.config import DATA_DIR
 
 _PATH = os.path.join(DATA_DIR, 'glossary.json')
 _lock = threading.Lock()
+_NO_SPACE = re.compile('[฀-๿぀-ヿ㐀-䶿一-鿿豈-﫿]')   # Thái, kana, chữ Hán
 
 
 def _clean(e):
@@ -69,8 +70,11 @@ def _patterns(entries):
         s = e['sai']
         # chỉ chữ cái ĐẦU được khác hoa / thường (đầu câu), còn lại khớp đúng y — "Mệnh Nguyệt" không ăn vào "vận mệnh nguyệt quang"
         head = f'[{re.escape(s[0].lower())}{re.escape(s[0].upper())}]' if s[0].lower() != s[0].upper() else re.escape(s[0])
-        # không cắt giữa từ: trước / sau không phải chữ cái (kể cả chữ có dấu tiếng Việt)
-        pats.append((re.compile(r'(?<!\w)' + head + re.escape(s[1:]) + r'(?!\w)'), e['viet']))
+        # không cắt giữa từ: trước / sau không phải chữ cái (kể cả chữ có dấu tiếng Việt). Chữ Trung / Nhật / Thái không có
+        # dấu cách giữa từ → mép là chữ đó thì khớp ngay giữa câu (ranh giới \w không bao giờ đúng)
+        pre = '' if _NO_SPACE.match(s[0]) else r'(?<!\w)'
+        post = '' if _NO_SPACE.match(s[-1]) else r'(?!\w)'
+        pats.append((re.compile(pre + head + re.escape(s[1:]) + post), e['viet']))
     return pats
 
 

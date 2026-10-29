@@ -265,7 +265,7 @@ def ai_polish(job_id: str, req: AiPolishRequest):
     if job.waiting != 'preview':
         raise HTTPException(409, 'Chỉ dùng được ở bước Xem trước.')
     try:
-        edits = suggest_edits(req.scenes, job.kind, req.instruction, job.log)
+        edits = suggest_edits(req.scenes, job.kind, req.instruction, job.log, target_lang=job.config.get('target_lang') or 'vi')
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     job.log(f'   [AI hậu kỳ] {len(edits)} đề xuất', 'info')

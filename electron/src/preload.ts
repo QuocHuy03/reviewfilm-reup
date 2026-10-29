@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron"
 
+// Hỏi main lúc nạp trang (đúng cổng hiện tại — backend đổi cổng thì main tải lại trang); lỗi → lấy từ tham số cửa sổ
 const arg = process.argv.find((a) => a.startsWith("--rf-backend="))
-const backendUrl = arg ? arg.slice("--rf-backend=".length) : "http://127.0.0.1:8765"
+let backendUrl = arg ? arg.slice("--rf-backend=".length) : "http://127.0.0.1:47651"
+try { backendUrl = ipcRenderer.sendSync("rf:backendUrl") || backendUrl } catch { /* main cũ chưa có kênh này */ }
 
 contextBridge.exposeInMainWorld("rf", {
   backendUrl,

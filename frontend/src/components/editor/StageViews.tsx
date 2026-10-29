@@ -27,6 +27,7 @@ import { basename, fmtClock, fmtDuration } from "@/lib/format"
 import type { JobDetail, LogLine, QaFix, QaReport, Scene } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/components/ConfirmHost"
+import { dubCps, langName } from "@/lib/langs"
 import { asrLabel } from "@/lib/asr"
 
 const NO_MUTE = { video: false, voice: false, music: false }
@@ -257,20 +258,19 @@ export function RunningStage({ job }: { job: JobDetail; logs?: LogLine[] }) {
 const KIND_TEXT: Record<string, string> = { review: "Review phim", reup: "Dịch & Reup", vietsub: "Dịch phụ đề", srt: "Tách SRT", burn: "Ghép phụ đề" }
 
 /* ═══════════════════════════════ Sửa kịch bản ═══════════════════════════════ */
-// Giọng đọc tiếng Việt ~17 ký tự/giây (đo trên CapCut / Edge / VieNeu, đã cắt khoảng lặng)
-const DUB_CPS = 17
+// Giọng đọc tiếng Việt ~17 ký tự/giây (đo trên CapCut / Edge / VieNeu, đã cắt khoảng lặng); ngôn ngữ khác: dubCps(lang)
 // Căn thời gian như VideoLingo (khớp backend): mượn khoảng lặng sau tối đa 1.5s, dài hơn thì đọc nhanh nhẹ tối đa 1.2×
 const DUB_TOLERANCE = 1.5
 const DUB_MAX_SPEED = 1.2
 
 /** Lồng tiếng giữ thời gian video: câu có kịp đọc trong khung (thời lượng câu + khoảng lặng mượn được) không. */
-function readFit(scenes: Scene[], i: number) {
+function readFit(scenes: Scene[], i: number, lang = "vi") {
   const s = scenes[i]
   const v = voiceSlot(s)
   const next = scenes[i + 1] ? voiceSlot(scenes[i + 1]) : undefined
   const gap = Math.max(0, (next ? next.start : v.end + DUB_TOLERANCE) - v.end)
   const slot = Math.max(0.3, v.end - v.start + (v.manual ? 0 : Math.min(gap, DUB_TOLERANCE)))
-  const need = s.speaker_id === -1 ? 0 : (s.voiceover || "").replace(/\s+/g, " ").trim().length / DUB_CPS
+  const need = s.speaker_id === -1 ? 0 : (s.voiceover || "").replace(/\s+/g, " ").trim().length / dubCps(lang)
   return { slot, need, level: need > slot * DUB_MAX_SPEED ? "long" : need > slot ? "fast" : "ok" } as const
 }
 
@@ -335,7 +335,8 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
   const words = useMemo(() => scenes.reduce((n, s) => n + (s.voiceover || "").split(/\s+/).filter(Boolean).length, 0), [scenes])
   // Dịch phụ đề + lồng tiếng: báo câu dài hơn thời gian câu thoại (vàng = đọc nhanh hơn, đỏ = AI sẽ rút gọn)
   const dub = job.kind === "vietsub" && !!job.config.dub_voice
-  const fits = useMemo(() => (dub ? scenes.map((_, i) => readFit(scenes, i)) : []), [dub, scenes])
+  const jobLang = String(job.config.target_lang ?? "vi")
+  const fits = useMemo(() => (dub ? scenes.map((_, i) => readFit(scenes, i, jobLang)) : []), [dub, scenes, jobLang])
   // duyệt theo vai: danh sách nhân vật AI nhận ra (đổi được nhân vật từng câu trước khi tạo giọng)
   // stream gửi lại job.result (object mới) mỗi lần có log → so theo nội dung, không theo tham chiếu, để danh sách câu không vẽ lại vô cớ
   const castKey = JSON.stringify(job.result.dub_cast?.speakers ?? {})
@@ -479,7 +480,7 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
                   <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium", c.female ? "bg-pink-500/15 text-pink-600 dark:text-pink-300" : "bg-sky-500/15 text-sky-600 dark:text-sky-300")}>{c.female ? "Nữ" : "Nam"}</span>
                   <span className="text-[11px] text-muted-foreground">{lineCount[c.id] ?? 0} câu</span>
                 </div>
-                <VoiceSelect value={voiceOf(c)} onChange={(v) => setCharVoices((m) => ({ ...m, [String(c.id)]: v }))} fx={fx} />
+                <VoiceSelect value={voiceOf(c)} onChange={(v) => setCharVoices((m) => ({ ...m, [String(c.id)]: v }))} fx={fx} lang={jobLang} />
               </div>
             ))}
           </div>
@@ -490,7 +491,7 @@ export function ScriptStage({ job, reedit, onExit }: { job: JobDetail; reedit?: 
         ))}
       </>}
       timeline={vietsub
-        ? <SubtitleTimeline scenes={scenes} onChange={setScenes} dub={dub} time={tl.time} playing={tl.playing} selected={tl.selected} duration={tl.duration}
+        ? <SubtitleTimeline lang={jobLang} scenes={scenes} onChange={setScenes} dub={dub} time={tl.time} playing={tl.playing} selected={tl.selected} duration={tl.duration}
             peaks={media.peaks} shots={media.shots}
             subtitleVisible={showSubs} onToggleSubtitle={toggleSubs}
             origMuted={origMuted} onToggleOrigMute={() => setOrigMuted((v) => !v)}
@@ -661,7 +662,7 @@ function DoneView({ job, onEdit }: { job: JobDetail; onEdit: () => void }) {
   const files = ([
     ["Video", job.result.output_path, Film, "bg-sky-500/15 text-sky-500"],
     ...(job.result.output_variants ?? []).map((p) => [/_doc_9x16/.test(p) ? "Video dọc 9:16" : "Video ngang 16:9", p, Film, "bg-sky-500/15 text-sky-500"]),
-    ["Phụ đề tiếng Việt", job.result.srt_path || job.result.vi_srt, Captions, "bg-violet-500/15 text-violet-500"],
+    [job.config.target_lang && job.config.target_lang !== "vi" ? `Phụ đề ${langName(String(job.config.target_lang)).replace("Tiếng ", "tiếng ")}` : "Phụ đề tiếng Việt", job.result.srt_path || job.result.vi_srt, Captions, "bg-violet-500/15 text-violet-500"],
     ["Phụ đề song ngữ", exp.bilingual, Captions, "bg-violet-500/15 text-violet-500"],
     ["Phụ đề VTT", exp.vtt, Captions, "bg-violet-500/15 text-violet-500"],
     ["Phụ đề ASS (giữ kiểu chữ)", exp.ass, Captions, "bg-violet-500/15 text-violet-500"],

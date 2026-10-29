@@ -318,6 +318,32 @@ VIENEU_CAST_FEMALE = [
 ]
 
 # Giọng VieNeu cũ không còn trong model mới — ẩn khỏi danh sách nhưng cấu hình / job cũ vẫn chạy (worker đổi sang giọng gần nhất)
+
+def _foreign_voice_options():
+    """Giọng lồng tiếng ngôn ngữ khác: Edge TTS (miễn phí) + toàn bộ giọng CapCut theo ngôn ngữ → {nhãn: id}.
+    Nhãn "CapCut EN — Tên" / "Edge TTS EN — Nữ": duy nhất, phần sau " — " là tên hiện trong ô chọn."""
+    from core import langs
+    from core.capcut_tts import CATALOG
+    out = {}
+    for (code, row) in langs.LANGS.items():
+        if code == 'vi':
+            continue
+        out[f'Edge TTS {code.upper()} — Nữ (miễn phí)'] = row[2]
+        out[f'Edge TTS {code.upper()} — Nam (miễn phí)'] = row[3]
+    for v in CATALOG:
+        if v['lang'] == 'vi':
+            continue
+        sex = {'female': ' (Nữ)', 'male': ' (Nam)'}.get(v.get('gender'), '')
+        base = f"CapCut {('MULTI' if v['lang'] == 'multi' else v['lang'].upper())} — {v['name']}{sex}"
+        (label, n) = (base, 2)
+        while label in out or label in VOICE_OPTIONS:
+            (label, n) = (f'{base} {n}', n + 1)
+        out[label] = 'capcut-' + v['id']
+    return out
+
+
+VOICE_OPTIONS.update(_foreign_voice_options())
+
 LEGACY_VOICE_OPTIONS = {
     "VieNeu — Bình An (Nam)": "vieneu-binh-an",
     "VieNeu — Gia Bảo (Nam)": "vieneu-gia-bao",

@@ -100,9 +100,31 @@ MALE = {
 }
 
 
+def _load_catalog():
+    """Toàn bộ giọng CapCut mọi ngôn ngữ (capcut_voices.json: id, name, resource_id, platform, lang, gender, free).
+    Giọng Việt khai báo tay ở VOICES giữ nguyên (vài giọng phải đi API bản PC)."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'capcut_voices.json'), encoding='utf-8') as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+CATALOG = _load_catalog()
+LANG_OF = {}
+for _v in CATALOG:
+    VOICES.setdefault(_v['id'], (_v['name'], _v['resource_id'], _v['platform']))
+    LANG_OF[_v['id']] = _v.get('lang') or 'multi'
+    if _v.get('gender') == 'male':
+        MALE.add(_v['id'])
+for _k in list(VOICES):
+    LANG_OF.setdefault(_k, 'vi')
+
+
 def edge_fallback(voice_type):
-    """Giọng Edge TTS thay thế cùng giới tính khi CapCut lỗi / chưa có cookie."""
-    return 'vi-VN-NamMinhNeural' if voice_type in MALE else 'vi-VN-HoaiMyNeural'
+    """Giọng Edge TTS thay thế cùng giới tính (cùng ngôn ngữ với giọng) khi CapCut lỗi / chưa có cookie."""
+    from core import langs
+    return langs.edge_voice(LANG_OF.get(voice_type, 'vi'), voice_type in MALE)
 
 
 def normalize_cookie(raw):
@@ -147,6 +169,9 @@ class CapcutBatchTooBig(CapcutError):
     """CapCut cắt request (504 / hết giờ) — gói quá nhiều chữ, chia nhỏ rồi gửi lại."""
 
 
+_WEB_UNSUPPORTED = 'Giọng này CapCut không hỗ trợ qua web.'
+
+
 def synthesize_batch(items, voice_type, cookie, speed=1.0, volume=100):
     """Nhiều đoạn trong MỘT request (texts=[...]) → {chỉ số: lỗi hoặc None}.
 
@@ -155,7 +180,8 @@ def synthesize_batch(items, voice_type, cookie, speed=1.0, volume=100):
     """
     cookie = cookie or _ANON_COOKIE
     name, resource_id, platform = VOICES.get(voice_type, (voice_type, '', 'sami'))
-    if platform == 'pc':
+    if platform == 'pc' or (platform == 'sami' and voice_type.startswith('multi_') and voice_type.endswith('_bigtts')):
+        # dòng giọng "multi_…_bigtts" CapCut web từ chối (40402004) — chỉ chạy qua API bản PC
         return _synthesize_pc(items, voice_type, resource_id, speed)
     body = {'texts': [t for (t, _) in items], 'need_url': True,
             'tts_conf': {'speaker': voice_type, 'rate': round(speed, 2), 'volume': volume, 'name': name, 'platform': platform,
@@ -182,7 +208,7 @@ def synthesize_batch(items, voice_type, cookie, speed=1.0, volume=100):
         (_, out_path) = items[k]
         mat = mats[k] if k < len(mats) else {}
         if mat.get('err_code') == 40402004:
-            return 'Giọng này CapCut không hỗ trợ qua web.'
+            return _WEB_UNSUPPORTED
         url = (mat.get('meta_data') or {}).get('url') or (mat.get('extra_map') or {}).get('url_office')
         if not url:
             return f"CapCut không trả link audio (status={mat.get('status')}, err={mat.get('err_code')})."
@@ -201,6 +227,11 @@ def synthesize_batch(items, voice_type, cookie, speed=1.0, volume=100):
     with ThreadPoolExecutor(min(4, len(items)) or 1) as ex:
         for (k, err) in enumerate(ex.map(_save, range(len(items)))):
             errors[k] = err
+    web_no = [k for (k, e) in errors.items() if e == _WEB_UNSUPPORTED]
+    if web_no and platform == 'sami':                 # giọng web không nhận → thử API bản PC
+        res = _synthesize_pc([items[k] for k in web_no], voice_type, resource_id, speed)
+        for (j, k) in enumerate(web_no):
+            errors[k] = res.get(j)
     return errors
 
 

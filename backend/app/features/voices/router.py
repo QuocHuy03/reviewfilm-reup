@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app import constants as C
 from app.config import DATA_DIR, get_key
+from core.langs import DEMO, voice_lang
 from core.utils import VOICE_SAMPLE_KINDS, voice_samples_dir
 
 router = APIRouter(prefix='/api/voices', tags=['voices'])
@@ -21,14 +22,18 @@ def _group(label, vid):
         return 'VieNeu 3'
     if vid.startswith('vieneu-'):
         return 'VieNeu'
-    if vid.startswith('vi-VN-'):
-        return 'Edge TTS'
     if vid.startswith('capcut-'):
         return 'CapCut'
+    if vid.endswith('Neural'):
+        return 'Edge TTS'
     return 'Cao cấp (FPT.AI)'
 
 
 def _gender(label, vid):
+    if vid.startswith('capcut-'):
+        from core.capcut_tts import MALE, LANG_OF
+        if LANG_OF.get(vid[7:], 'vi') != 'vi':
+            return 'male' if vid[7:] in MALE else 'female' if '(Nữ)' in label else 'neutral'
     l = (label + ' ' + vid).lower()
     if 'giọng bé' in l:
         return 'neutral'
@@ -78,9 +83,7 @@ def _vieneu_available():
 
 def availability(vid):
     """→ (dùng được?, cần gì). Giọng chưa dùng được sẽ tự đổi sang Edge TTS khi tạo giọng."""
-    if vid.startswith('vi-VN-'):
-        return True, ''
-    if vid.startswith('capcut-'):
+    if vid.startswith('capcut-') or vid.endswith('Neural'):
         return True, ''          # cookie CapCut tuỳ chọn
     if vid.startswith(('vieneu3-', 'vieneu-')):
         return (True, '') if _vieneu_available() else (False, 'Cần tải model VieNeu (nút "Tải model" ở trang Giọng đọc)')
@@ -95,23 +98,23 @@ def list_voices():
         group = _group(label, vid)
         # tier: free = dùng ngay, miễn phí · key = cần API key (Cài đặt) · install = cần cài thêm trên máy
         tier = 'key' if group == 'Cao cấp (FPT.AI)' else 'install' if vid.startswith(('vieneu3-', 'vieneu-')) else 'free'
-        out.append({'label': label, 'id': vid, 'group': group, 'gender': _gender(label, vid),
+        out.append({'label': label, 'id': vid, 'group': group, 'gender': _gender(label, vid), 'lang': voice_lang(vid),
                     'sample': sample_path(vid), 'tier': tier, 'free': tier != 'key', 'available': ok, 'need': need})
     return out
 
 
 class TestVoiceRequest(BaseModel):
     voice: str
-    text: str = 'Đây là thử nghiệm giọng đọc, xin chào các bạn, chúc một ngày tốt lành.'
+    text: str = ''                  # trống → câu mẫu theo ngôn ngữ của giọng
     vieneu_rate: float = 0          # giọng VieNeu: tốc độ ±%
     vieneu_pitch: float = 0         # giọng VieNeu: dời cao độ ± Hz
 
 
 @router.post('/test')
 def test_voice(req: TestVoiceRequest):
-    text = req.text.strip()
-    if not text:
-        raise HTTPException(400, 'Câu thử đang trống.')
+    text = req.text.strip() or DEMO.get(voice_lang(C.VOICE_OPTIONS.get(req.voice, req.voice)), DEMO['vi'])
+    if voice_lang(C.VOICE_OPTIONS.get(req.voice, req.voice)) == 'multi' and not req.text.strip():
+        text = DEMO['en']
     key = (req.voice, text, req.vieneu_rate, req.vieneu_pitch)
     hit = _cache.get(key)
     if hit and os.path.isfile(hit['path']):

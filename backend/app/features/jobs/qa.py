@@ -19,7 +19,7 @@ SHORT_RATIO = 0.5        # Review: lời ngắn hơn nửa đoạn hình (hình 
 LABEL_RE = re.compile(r'^\s*(?:\[\s*Cảnh|\*\*\s*Cảnh|Cảnh\s+\S+\s*[:：])', re.IGNORECASE)
 
 
-def scene_fit(scenes, reup=False):
+def scene_fit(scenes, reup=False, target_lang='vi'):   # target_lang: chỉ đo theo giây → mọi ngôn ngữ như nhau
     """Cảnh nào lời đọc không vừa hình. → [{'scene', 'kind': long|short, 'why', 'fit': số giây lời nên có}]
 
     Review: video_editor đọc hình gốc từ clip_start dài đúng bằng lời (không kéo giãn) → lời dài thì
@@ -98,7 +98,12 @@ TEXT_SHARED_MIN = 3      # hoặc trùng từ 3 cụm 3 từ "hiếm" trở lên
 
 
 def _grams(text, n=3):
-    w = [x.lower() for x in _WORD.findall(text or '')]
+    from core.video_editor import _is_unspaced
+    if _is_unspaced(text):                     # Trung / Nhật / Thái: không có dấu cách → mỗi 2 ký tự tính 1 "từ"
+        t = ''.join(ch for ch in (text or '') if ch.isalnum())
+        w = [t[k:k + 2] for k in range(0, len(t) - 1, 2)]
+    else:
+        w = [x.lower() for x in _WORD.findall(text or '')]
     return {tuple(w[k:k + n]) for k in range(len(w) - n + 1)}, w
 
 

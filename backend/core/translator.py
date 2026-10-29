@@ -1,5 +1,6 @@
 __doc__ = '\nTranslator — Dich & Reup pipeline (phien ban 3 — PIVOT qua tieng Anh):\n  1. Gom Whisper segments thanh blocks ~10-12s (bao toan ngu canh)\n  2. Phan tich ngu canh phim → glossary KHOA CUNG ten rieng/thuat ngu (chong pivot lam hong Han-Viet)\n  3. Stage A: dich goc(Trung...) → TIENG ANH trung gian (hieu DUNG nghia, het mo ho)\n  4. Stage B: dich tieng Anh + doi chieu ban goc + glossary → TIENG VIET dia phuong hoa muot\n  5. Stage C: ChatGPT "nuot" ngu dieu giong thuyet minh YouTube VN\n  6. Tra ve list scenes cho TTS + video editor\n\nVi sao pivot qua tieng Anh: tieng Anh lam ro nghia (tri "sai nghia"), con glossary giu\nten rieng/thuat ngu di THANG Han-Viet (giang ho, Truong Tam...) — khong bi pivot pha nat.\nKhong co API key: Google dich pivot goc→Anh→Viet (don thuan, khong nuot).\n'
 import os, time, json, re, requests
+from core import langs
 BLOCK_MAX_DUR = 6.0       # gộp câu Whisper liền nhau thành 1 câu lồng tiếng: tối đa 6s / 100 ký tự / khoảng lặng < 0.35s
 BLOCK_MAX_CHARS = 100     # (trước: gộp MỌI câu trong 12s bất kể khoảng lặng → câu 2–3 của khối vang lên lúc nhân vật
 BLOCK_MAX_GAP = 0.35      #  chưa nói / đã nói xong). Ngữ cảnh dịch vẫn giữ nhờ dịch theo lô (BATCH_BLOCKS).
@@ -53,6 +54,21 @@ def _find_known_titles(text: str) -> list:
     found.sort(key=lambda x: len(x[1]), reverse=True)
     return found
 
+def _block_budgets(blocks, target_lang='vi'):
+    """Độ dài tối đa từng câu lồng tiếng: khung = thời lượng câu + khoảng lặng tới câu sau (tối đa 1.5s) × tốc độ đọc.
+    Tiếng Việt: số từ theo VI_WPS (như cũ). Ngôn ngữ khác: theo dub_translate.rate (từ hoặc ký tự)."""
+    from core.dub_translate import rate
+    t = langs.norm(target_lang)
+    speed = VI_WPS if t == 'vi' else rate(t)[0]
+    n = len(blocks)
+    out = []
+    for (i, b) in enumerate(blocks):
+        nxt = float(blocks[i + 1]['start']) if i + 1 < n else float(b['end']) + 1.5
+        room = max(0.6, float(b['end']) - float(b['start']) + min(1.5, max(0.0, nxt - float(b['end']))))
+        out.append(max(3, int(room * speed * 1.1)))
+    return out
+
+
 _GT_UA = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'}
 _GT_FAILS = [0]          # số lần dịch thất bại (trả nguyên văn) — báo ra log thay vì im lặng
 
@@ -82,14 +98,16 @@ def _google_translate(text: str, sl: str, tl: str) -> str:
     _GT_FAILS[0] += 1
     return text
 
-def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_context: str, video_filename: str) -> list:
+def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_context: str, video_filename: str, target_lang: str = 'vi') -> list:
+    t = langs.norm(target_lang)
+    tl = langs.google_code(t)
     if segments:
         blocks = _group_segments(segments)
         log_fn(f"   Gộp {len(segments)} segment -> {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
         sl = source_lang if source_lang and source_lang != 'auto' else 'auto'
         _lookup_text = (user_context or '') + ' ' + (video_filename or '')
         _glossary = []
-        _known = _find_known_titles(_lookup_text) if _lookup_text.strip() else []
+        _known = _find_known_titles(_lookup_text) if _lookup_text.strip() and t == 'vi' else []   # từ điển phim: tên tiếng Việt
         vi_t = ''
         if _known:
             (vi_t, _src_t) = _known[0]
@@ -101,7 +119,8 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
             _has_r2w = True
         except Exception:
             _has_r2w = False
-        log_fn('   Dịch miễn phí (Google): gốc → tiếng Anh → tiếng Việt...')
+        log_fn('   Dịch miễn phí (Google): gốc → tiếng Anh → tiếng Việt...' if t == 'vi' else
+               f"   Dịch miễn phí (Google): gốc → {'tiếng Anh' if t == 'en' else 'tiếng Anh → ' + langs.name_vi(t).lower()}...")
         _GT_FAILS[0] = 0
         translated_scenes = []
         for (i, block) in enumerate(blocks):
@@ -110,14 +129,16 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
             if src:
                 try:
                     eng = _google_translate(src, sl, 'en')
-                    if eng:
-                        translated_text = _google_translate(eng, 'en', 'vi')
+                    if t == 'en':
+                        translated_text = eng or src
+                    elif eng:
+                        translated_text = _google_translate(eng, 'en', tl)
                     else:
-                        translated_text = _google_translate(src, sl, 'vi')
+                        translated_text = _google_translate(src, sl, tl)
                 except Exception as e:
                     log_fn(f'   [WARN] Lỗi dịch đoạn {i + 1}: {e}. Thử dịch thẳng...')
                     try:
-                        translated_text = _google_translate(src, sl, 'vi')
+                        translated_text = _google_translate(src, sl, tl)
                     except Exception:
                         translated_text = src
             if _glossary and translated_text:
@@ -187,9 +208,11 @@ def _save_film_glossary(key: str, glossary: list, title: str):
     else:
         return None
 
-def translate_and_localize_transcript(segments: list, api_key: str = '', source_lang: str = 'auto', log_fn=print, openai_key: str = '', polish_with_gpt: bool = False, troll_tone: bool = False, gemini_key: str = '', cost_acc=None, video_filename: str = '', user_context: str = '', allow_web: bool = False) -> list:
+def translate_and_localize_transcript(segments: list, api_key: str = '', source_lang: str = 'auto', log_fn=print, openai_key: str = '', polish_with_gpt: bool = False, troll_tone: bool = False, gemini_key: str = '', cost_acc=None, video_filename: str = '', user_context: str = '', allow_web: bool = False, target_lang: str = 'vi') -> list:
     if log_fn is None:
         log_fn = print
+    t = langs.norm(target_lang)
+    is_vi = t == 'vi'
     video_filename = video_filename or ''
     user_context = user_context or ''
     deepseek_key = (api_key or '').strip()
@@ -198,7 +221,7 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
     _wrap = web_llm.with_web if allow_web else (lambda engs: [(e, k) for (e, k) in engs if k])
     if not _wrap([('deepseek', deepseek_key), ('openai', okey)]):
         log_fn('   Dịch miễn phí qua Google (không tốn Token)...')
-        return _translate_via_google_free(segments, source_lang, log_fn, user_context=user_context, video_filename=video_filename)
+        return _translate_via_google_free(segments, source_lang, log_fn, user_context=user_context, video_filename=video_filename, target_lang=t)
     if segments:
         blocks = _group_segments(segments)
         log_fn(f"   Gộp {len(segments)} segment → {len(blocks)} block (~{BLOCK_MAX_DUR:.0f}s/block)")
@@ -207,11 +230,11 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
         ctx_chain = _wrap([('deepseek', deepseek_key), ('openai', okey)])
         film_ctx = {}
         for (ce, ck) in ctx_chain:
-            film_ctx = _analyze_film_context(blocks, ck, source_lang, log_fn, engine=ce, extra_title_hint=video_filename, user_context=user_context) or {}
+            film_ctx = _analyze_film_context(blocks, ck, source_lang, log_fn, engine=ce, extra_title_hint=video_filename, user_context=user_context, target_lang=t) or {}
             if film_ctx.get('title') or film_ctx.get('glossary') or film_ctx.get('origin'):
                 break
             log_fn(f"   Phân tích ngữ cảnh '{ce}' chưa được, thử engine khác...")
-        _name_matches = _find_known_titles(video_filename) if video_filename else []
+        _name_matches = _find_known_titles(video_filename) if video_filename and is_vi else []   # tên phim tiếng Việt
         if video_filename and (not film_ctx.get('_vi_title')) and _name_matches:
             (_vi, _src) = _name_matches[0]
             film_ctx['title'] = f'{_vi} ({_src})'
@@ -231,7 +254,7 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
         if film_ctx.get('glossary'):
             log_fn(f"   → {len(film_ctx['glossary'])} thuật ngữ/tên riêng được KHÓA cách dịch")
         _vi_title_ctx = film_ctx.get('title', '') or film_ctx.get('_vi_title', '')
-        _hard_chars = _get_char_glossary_for_film(_vi_title_ctx)
+        _hard_chars = _get_char_glossary_for_film(_vi_title_ctx) if is_vi else []
         if _hard_chars:
             log_fn(f'   → Đã inject {len(_hard_chars)} tên nhân vật cứng từ DB')
         _all_extra = _hard_chars
@@ -246,6 +269,8 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
                             e['vi'] = entry['vi']
         film_ctx['_user_context'] = user_context
         _film_key_id = _film_key(film_ctx.get('title', ''), user_context)
+        if not is_vi:
+            _film_key_id += '__' + t          # bảng tên đã chốt riêng cho từng ngôn ngữ (bản tiếng Việt không lẫn sang)
         film_ctx['_film_key'] = _film_key_id
         _persisted = _load_film_glossary(_film_key_id)
         if _persisted:
@@ -260,15 +285,22 @@ def translate_and_localize_transcript(segments: list, api_key: str = '', source_
         pivot_engines = _wrap([('deepseek', deepseek_key), ('openai', okey)])
         loc_engines = list(pivot_engines)
         english_texts = _blocks_to_english(blocks, pivot_engines, source_lang, film_ctx, log_fn)
-        translated = _localize_to_vietnamese(blocks, english_texts, loc_engines, source_lang, film_ctx, troll_tone, log_fn)
+        if is_vi:
+            translated = _localize_to_vietnamese(blocks, english_texts, loc_engines, source_lang, film_ctx, troll_tone, log_fn)
+        elif t == 'en':
+            log_fn('   [2/3] Ngôn ngữ đích là tiếng Anh — dùng luôn bản tiếng Anh ở bước 1')
+            translated = list(english_texts)
+        else:
+            translated = _localize_to_target(blocks, english_texts, loc_engines, film_ctx, troll_tone, log_fn, t)
         polish_engines = _wrap([('openai', okey), ('deepseek', deepseek_key)])
         if polish_engines:
-            translated = _polish_blocks_chatgpt(translated, polish_engines, log_fn, troll_tone=troll_tone)
+            translated = (_polish_blocks_chatgpt(translated, polish_engines, log_fn, troll_tone=troll_tone) if is_vi
+                          else _polish_blocks_target(translated, polish_engines, log_fn, troll_tone, t))
         else:
             log_fn('   [3/3] (Bỏ qua bước chuốt ngữ điệu — chưa có API key nào)')
         _vi_title_for_fix = (film_ctx or {}).get('title', '') or (film_ctx or {}).get('_vi_title', '')
         fixed_count = 0
-        for (i, txt) in enumerate(translated):
+        for (i, txt) in enumerate(translated if is_vi else []):        # chuẩn hoá Hán Việt → chỉ bản tiếng Việt
             new_txt = _post_fix_sino_pinyin(txt, _vi_title_for_fix)
             if new_txt != txt:
                 fixed_count += 1
@@ -369,7 +401,8 @@ def _distribute_time(parts: list, t_start: float, t_end_total: float) -> list:
         t_cursor = t_end
     return result
 
-def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, engine: str, extra_title_hint: str, user_context: str) -> dict:
+def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, engine: str, extra_title_hint: str, user_context: str, target_lang: str = 'vi') -> dict:
+    tgt = langs.norm(target_lang)
     if blocks:
         n = len(blocks)
         max_lines = 70
@@ -386,7 +419,7 @@ def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, 
         sample = '\n'.join(sample_lines)
         lang_hint = f'ngon ngu goc: {source_lang}' if source_lang != 'auto' else 'tu dong phat hien ngon ngu'
         lookup_text = sample + ('\n' + extra_title_hint if extra_title_hint else '')
-        known_matches = _find_known_titles(lookup_text)
+        known_matches = _find_known_titles(lookup_text) if tgt == 'vi' else []
         known_hint = ''
         _char_glossary_hint = ''
         if known_matches:
@@ -403,6 +436,8 @@ def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, 
         if user_context:
             user_ctx_hint = f'\n*** BOI CANH NGUOI DUNG CUNG CAP — UU TIEN TUYET DOI, TIN TUONG HOAN TOAN ***\n{user_context}\n→ Dung dung ten phim, ten/vai tro nhan vat va xuat xu nhu nguoi dung mo ta. Neu nguoi dung da cho biet day la phim Han/Nhat/Thai... thi origin theo do, DU loi thoai goc la tieng Trung (phim long tieng). Dat ten nhan vat theo dung nguoi dung yeu cau.\n'
         prompt = f"""Ban la chuyen gia phan tich phim & dich thuat ({lang_hint}).\nDuoi day la cac doan thoai LAY MAU tu mot video/phim (theo thu tu thoi gian):\n\n{sample}\n\n{user_ctx_hint}{known_hint}{_char_glossary_hint}Hay phan tich va tra ve JSON THUAN TUY theo schema sau (tat ca gia tri tieng Viet co dau):\n{{\n  "title": "ten phim — DICH NGHIA sang TIENG VIET TU NHIEN hoac giu TEN TIENG ANH/ten goc. TUYET DOI KHONG dung ten phien am Han-Viet (vi du KHONG viet \\"Khanh Du Nien\\" ma viet \\"Niem Vui Cuoc Song\\" / \\"Joy of Life\\"). Neu nguoi dung da cho ten phim thi dung dung ten do. Neu khong nhan ra thi mo ta the loai+boi canh.",\n  "origin": "nuoc san xuat goc cua phim: \\"han\\" (Han Quoc) / \\"trung\\" (Trung Quoc) / \\"nhat\\" (Nhat) / \\"au-my\\" / \\"thai\\" (Thai Lan) / \\"khac\\". QUAN TRONG: nhieu phim Han/Thai/Nhat bi LONG TIENG TRUNG roi dang len Douyin/TikTok — DUNG chi dua vao ngon ngu thoai. Hay dua vao BOI CANH VAN HOA & THE CHE: he thong chinh tri (nghi si Quoc hoi + bau cu Tong thong = Han Quoc; khong co bau cu Tong thong = Trung Quoc), trang phuc, mon an, kieu xung ho, ten dia danh, ten goc nhan vat. Neu khong the xac dinh chac chan → tra ve \\"khac\\".",\n  "genre": "the loai (vi du: do mo phieu luu, kinh di, ngon tinh, hanh dong, hoc duong, tu tien...)",\n  "summary": "2-3 cau tom tat boi canh & noi dung chinh, de nguoi dich nam mach truyen",\n  "glossary": [\n    {{"src": "ten rieng / thuat ngu goc", "vi": "ten tieng Viet dung chuan"}}\n  ],\n  "hook": "MOT cau mo dau CUC CUON (kieu giat tit YouTube review phim), khien nguoi xem phai xem tiep ngay. Khong qua 25 chu, khong dung chu so."\n}}\n\nLUU Y CUC KY QUAN TRONG VE TEN NHAN VAT — TUYET DOI KHONG DUNG HAN-VIET:\n- KHONG BAO GIO phien am Han-Viet ten nhan vat (KHONG 'Tieu Phi', 'Tieu Man', 'Truong Tam', 'Lam Kiet'...). Nghe rat 'Trung Quoc hoa', nguoi xem khong thich.\n- Neu BIET CHAC ten that cua nhan vat (nguoi dung cung cap, hoac nhan ra phim): dung ten goc romanized. Phim Han → ten Han (Na Hwa-jin, Gong Min, Kim Min-jae); Nhat → ten Nhat (Tanaka, Sakura); Thai → ten Thai (Somchai, Ploy); Au-My → ten goc (John, Sara).\n- Neu KHONG BIET ten that (phim long tieng Trung, transcript chi co pinyin nhu 'Xiao Piao', 'Xiao Min', 'Xiao Ba'): TUYET DOI KHONG giu pinyin va KHONG Han-Viet hoa. Thay vao do GAN MOT VAI TRO / BIET DANH THUAN VIET, NGAN GON, DE THUONG, theo dung vai tro nhan vat trong phim (vi du: 'cau hoc tro quay', 'co be lop truong', 'ga dau gau', 'thang ban than', 'co giao', 'ong trum'). Trong glossary ghi: src='Xiao Piao' → vi='cau hoc tro quay' (mot vai tro/biet danh CO DINH). PHAI DUNG NHAT QUAN cung mot biet danh cho cung mot nhan vat trong CA PHIM (va ca cac tap sau).\n- TU CHI VAI TRO / CHUC DANH (KHONG PHAI TEN RIENG): 校霸='trum truong', 班长='lop truong', 老师='thay/co giao', 议员='nghi si', 老板='ong chu'. Dich thanh DANH TU CHUNG thuan Viet, KHONG phien am Han-Viet (KHONG 'Hieu Ba').\n- glossary liet ke: tung nhan vat chinh (src = ten/pinyin trong transcript, vi = ten that romanized HOAC vai tro/biet danh thuan Viet), dia danh, chuc danh hay gap.\n- hook bam sat the loai & boi canh that, khong bia dat.\nChi tra ve JSON, khong them giai thich."""
+        if tgt != 'vi':
+            prompt = _context_prompt_other(sample, lang_hint, user_context, tgt)
         try:
             content = _engine_call(engine, api_key, prompt, log_fn, temperature=0.4, max_tokens=3000)
             if content:
@@ -448,6 +483,58 @@ def _analyze_film_context(blocks: list, api_key: str, source_lang: str, log_fn, 
             return {}
     else:
         return {}
+
+def _context_prompt_other(sample: str, lang_hint: str, user_context: str, target_lang: str) -> str:
+    """Lời nhắc phân tích ngữ cảnh phim khi ngôn ngữ đích KHÁC tiếng Việt: giá trị (tên phim, glossary, hook…) viết bằng
+    ngôn ngữ đích; không có quy tắc Hán Việt. Khoá 'vi' của glossary giữ tên cũ = cách viết ở ngôn ngữ đích."""
+    lang = langs.name_en(target_lang)
+    uc = (f'\n*** USER-PROVIDED CONTEXT — HIGHEST PRIORITY, TRUST IT FULLY ***\n{user_context}\n'
+          f'Use the film title, character names/roles and origin exactly as the user describes.\n') if user_context else ''
+    return (f'You are a film analysis & translation expert ({lang_hint}). The film will be dubbed and subtitled in {lang}.\n'
+            f'Below are SAMPLED dialogue lines from a video/film (in time order):\n\n{sample}\n{uc}\n'
+            f'Analyse it and return PURE JSON with this schema (all values written in {lang}):\n'
+            '{\n'
+            f'  "title": "the film title as known to {lang} audiences (official title in {lang} if it exists, else the English/original title). If unknown, describe genre + setting.",\n'
+            '  "origin": "country of origin: \\"han\\" (Korea) / \\"trung\\" (China) / \\"nhat\\" (Japan) / \\"au-my\\" / \\"thai\\" / \\"khac\\". Many Korean/Thai/Japanese works are Chinese-DUBBED on Douyin/TikTok — judge by culture, politics, clothes, food, place names, not by the audio language. Unsure → \\"khac\\".",\n'
+            f'  "genre": "genre (in {lang})",\n'
+            f'  "summary": "2-3 sentences of setting and main plot (in {lang})",\n'
+            '  "glossary": [\n'
+            f'    {{"src": "proper noun / special term as in the transcript", "vi": "how to write it in {lang} (keep this key name \\"vi\\")"}}\n'
+            '  ],\n'
+            f'  "hook": "ONE very catchy opening line (YouTube movie-recap style) in {lang}, max 25 words, no digits."\n'
+            '}\n\n'
+            'CHARACTER NAMES: use the standard romanization of the country of origin (Korean: Kim Min-jae; Japanese: Tanaka; Thai: Somchai; '
+            'Western: John), or the established name used by ' + lang + ' audiences. If only Chinese pinyin nicknames are known for a '
+            f'non-Chinese work (Xiao Min, Xiao Ba...), give each character a short fixed role/nickname in {lang} and keep it consistent. '
+            f'Role words (校霸, 班长, 老师, 议员, 老板) are common nouns, translate them as such in {lang}.\n'
+            'Return only the JSON, no explanation.')
+
+
+def _build_ctx_header_other(film_ctx: dict, target_lang: str) -> str:
+    """Ngữ cảnh phim chèn vào lời nhắc dịch khi ngôn ngữ đích KHÁC tiếng Việt (không quy tắc Hán Việt)."""
+    if not film_ctx:
+        return ''
+    parts = ['FILM CONTEXT (for consistent translation and terminology):']
+    _uc = (film_ctx.get('_user_context') or '').strip()
+    if _uc:
+        parts.append(f'- USER-PROVIDED CONTEXT (highest priority): {_uc}')
+    if film_ctx.get('title'):
+        parts.append(f"- Title: {film_ctx['title']}")
+    origin_map = {'han': 'South Korea', 'trung': 'China', 'nhat': 'Japan', 'au-my': 'US/Europe', 'thai': 'Thailand'}
+    org = (film_ctx.get('origin') or '').strip().lower()
+    parts.append(f"- Country of origin: {origin_map.get(org, org) if org else 'UNCERTAIN'}")
+    parts.append('  → Character names: standard romanization of the country of origin (or the established name for this audience); '
+                 'one character = one name for the whole film. Never Sino-Vietnamese readings.')
+    if film_ctx.get('genre'):
+        parts.append(f"- Genre: {film_ctx['genre']}")
+    if film_ctx.get('summary'):
+        parts.append(f"- Summary: {film_ctx['summary']}")
+    gloss = film_ctx.get('glossary') or []
+    if gloss:
+        parts.append('- MANDATORY GLOSSARY (always translate exactly like this): ' + '; '.join(f"{g['src']} = {g['vi']}" for g in gloss))
+    parts.append('')
+    return '\n'.join(parts)
+
 
 def _build_ctx_header(film_ctx: dict) -> str:
     if film_ctx:
@@ -595,11 +682,7 @@ def _localize_to_vietnamese(blocks: list, english_texts: list, engines: list, so
     tone_str = 'Giong van: hoi troll, vui ve, cham biem di dom de nguoi xem thich thu bat cuoi.\n' if troll_tone else 'Giong van: nghiem tuc, chuan muc, sat voi ngu canh va cam xuc that cua video goc.\n'
     eng_label = engines[0][0] if engines else '?'
     # ngân sách độ dài từng câu (B7): khung = thời lượng câu + khoảng lặng tới câu sau (tối đa 1.5s) × tốc độ đọc giọng Việt
-    budget = []
-    for (i, b) in enumerate(blocks):
-        nxt = float(blocks[i + 1]['start']) if i + 1 < n else float(b['end']) + 1.5
-        room = max(0.6, float(b['end']) - float(b['start']) + min(1.5, max(0.0, nxt - float(b['end']))))
-        budget.append(max(3, int(room * VI_WPS * 1.1)))
+    budget = _block_budgets(blocks, 'vi')
     for s in range(0, n, BATCH_BLOCKS):
         e = min(s + BATCH_BLOCKS, n)
         log_fn(f'   [2/3] Địa phương hóa tiếng Việt: block {s + 1}-{e}/{n} ({eng_label})...')
@@ -615,6 +698,66 @@ def _localize_to_vietnamese(blocks: list, english_texts: list, engines: list, so
         if not results[i]:
             results[i] = english_texts[i] or blocks[i]['text']
     return results
+
+def _localize_to_target(blocks: list, english_texts: list, engines: list, film_ctx: dict, troll_tone: bool, log_fn, target_lang: str) -> list:
+    """Bước 2 khi ngôn ngữ đích KHÁC tiếng Việt / tiếng Anh: bản gốc + bản tiếng Anh trung gian → lời lồng tiếng tự nhiên
+    bằng ngôn ngữ đích, mỗi câu giới hạn số từ (Trung / Nhật / Thái: số ký tự) vừa thời gian nhân vật nói."""
+    from core.dub_translate import rate
+    n = len(blocks)
+    results = [''] * n
+    lang = langs.name_en(target_lang)
+    unit = 'characters' if rate(target_lang)[1] == 'chars' else 'words'
+    ctx_header = _build_ctx_header_other(film_ctx, target_lang)
+    tone_str = ('Tone: a bit playful and witty so viewers enjoy it.\n' if troll_tone
+                else 'Tone: serious, faithful to the context and real emotions of the original video.\n')
+    eng_label = engines[0][0] if engines else '?'
+    budget = _block_budgets(blocks, target_lang)
+    for s in range(0, n, BATCH_BLOCKS):
+        e = min(s + BATCH_BLOCKS, n)
+        log_fn(f'   [2/3] Dịch sang {langs.name_vi(target_lang).lower()}: block {s + 1}-{e}/{n} ({eng_label})...')
+        lines = '\n'.join((f"[{s + i}] (max {budget[s + i]} {unit}) ORIGINAL: {blocks[s + i]['text']}\n     ENG: {english_texts[s + i]}" for i in range(e - s)))
+        prompt = (f'You are a professional film dubbing translator. Target language: {lang}.\n{ctx_header}'
+                  f'Below are {e - s} dialogue lines. Each has the ORIGINAL text and an intermediate ENGLISH translation so you get the meaning right. '
+                  f'Rewrite each one as natural, fluent {lang} spoken dialogue for dubbing.\n\n{lines}\n\nRULES:\n'
+                  f'- Translate all {e - s} lines, keep the same IDs and count. Do not merge or split lines.\n'
+                  f'- Translate the MEANING, not word by word; sound like a native {lang} speaker.\n{tone_str}'
+                  '- Follow the glossary and the character-name rules in the FILM CONTEXT exactly.\n'
+                  f'- LENGTH (VERY IMPORTANT): "max N {unit}" is the maximum length so the dub fits the time the character speaks. '
+                  'Do not exceed it: say it shorter, drop filler — but keep the meaning. Shorter is fine.\n'
+                  '- Escape double quotes inside text as \\".\n'
+                  f'Return ONLY JSON: {{ "translations": [{{"id": {s}, "text": "..."}}, ...] }}')
+        mp = _try_engines(engines, prompt, log_fn, 0.3, min(8000, (e - s) * 90 + 500), 'translations', min_items=max(1, (e - s) // 2))
+        for (k, v) in mp.items():
+            if 0 <= k < n:
+                results[k] = v
+        if e < n:
+            time.sleep(0.8)
+    for i in range(n):
+        if not results[i]:
+            results[i] = english_texts[i] or blocks[i]['text']
+    return results
+
+
+def _polish_blocks_target(translated: list, engines: list, log_fn, troll_tone: bool, target_lang: str) -> list:
+    """Bước 3 khi ngôn ngữ đích KHÁC tiếng Việt: chuốt lời cho tự nhiên như kênh review phim bản xứ, giữ độ dài."""
+    if not engines:
+        return translated
+    lang = langs.name_en(target_lang)
+    input_data = [{'id': i, 'text': t} for (i, t) in enumerate(translated)]
+    tone_str = ('Tone: a bit playful and witty.\n' if troll_tone else 'Tone: serious, faithful to the context and emotions of the characters.\n')
+    prompt = (f'You are an editor polishing dubbed dialogue in {lang} for a {lang} movie-recap / dubbing channel.\n'
+              f'Rewrite each line so it sounds natural and fluent to native {lang} speakers, fixing any stiff or machine-translated wording. '
+              'Keep the same number of lines and IDs, do not add or remove content, keep character names exactly as written, '
+              f'and keep each line about the same length as the draft (it must still fit the timing).\n{tone_str}'
+              'Return ONLY JSON:\n{"polished": [{"id": 0, "text": "..."}, ...]}\n\n'
+              f'Lines ({len(input_data)}):\n{json.dumps(input_data, ensure_ascii=False)}')
+    log_fn(f'   [3/3] Chuốt ngữ điệu {langs.name_vi(target_lang).lower()} ({engines[0][0]})...')
+    mp = _try_engines(engines, prompt, log_fn, 0.3, min(16000, len(translated) * 100 + 500), 'polished', min_items=max(1, len(translated) // 2))
+    if mp:
+        return [mp.get(i, t) for (i, t) in enumerate(translated)]
+    log_fn('   [WARN] Chuốt ngữ điệu không thành công ở engine nào, giữ bản dịch gốc')
+    return translated
+
 
 def _clean_json_newlines(s: str) -> str:
     result = []

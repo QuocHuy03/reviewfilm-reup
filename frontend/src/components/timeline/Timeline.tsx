@@ -18,10 +18,10 @@ const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
 
 /** Cấu hình track: chiều cao cố định để các hàng luôn thẳng nhau. */
 const TRACKS = {
-  video: { label: "Video", sub: "hình gốc", icon: Film, h: 46, accent: "bg-sky-400", text: "text-sky-300", clip: "bg-slate-600/90 border-slate-400/40" },
-  voice: { label: "Lời đọc", sub: "giọng TTS", icon: Mic, h: 34, accent: "bg-orange-400", text: "text-orange-300", clip: "bg-orange-600/85 border-orange-300/40" },
-  subtitle: { label: "Phụ đề", sub: "chữ trên video", icon: Captions, h: 34, accent: "bg-violet-400", text: "text-violet-300", clip: "bg-violet-600/85 border-violet-300/40" },
-  music: { label: "Nhạc nền", sub: "", icon: Music2, h: 30, accent: "bg-emerald-400", text: "text-emerald-300", clip: "bg-emerald-600/80 border-emerald-300/40" },
+  video: { label: "Video", sub: "source", icon: Film, h: 46, accent: "bg-sky-400", text: "text-sky-300", clip: "bg-slate-600/90 border-slate-400/40" },
+  voice: { label: "Voice", sub: "TTS", icon: Mic, h: 34, accent: "bg-orange-400", text: "text-orange-300", clip: "bg-orange-600/85 border-orange-300/40" },
+  subtitle: { label: "Subtitle", sub: "on video", icon: Captions, h: 34, accent: "bg-violet-400", text: "text-violet-300", clip: "bg-violet-600/85 border-violet-300/40" },
+  music: { label: "Music", sub: "", icon: Music2, h: 30, accent: "bg-emerald-400", text: "text-emerald-300", clip: "bg-emerald-600/80 border-emerald-300/40" },
 } as const
 const RULER_H = 22
 const HIDDEN_H = 14          // làn đã tắt mắt: còn 1 dải mỏng
@@ -496,7 +496,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
               : null
             return (
               <LaneHeader key={k} label={t.label} accent={t.accent} height={laneH(k)} collapsed={!!hidden[k]}
-                stat={k === "music" ? (bgmName || "chưa chọn") : t.sub} onToggle={() => toggleLane(k)}
+                stat={k === "music" ? (bgmName || "none") : t.sub} onToggle={() => toggleLane(k)}
                 toggleTitle={`${t.label} — bấm để ${hidden[k] ? "mở rộng" : "thu gọn"} làn`}
                 slots={hidden[k] ? [eye, null] : [eye, sound]} />
             )

@@ -21,6 +21,106 @@ def _ass_time(t):
     return f'{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}'
 
 
+# ── Ngôn ngữ đầu ra (target_lang, core/langs.py): 'vi' giữ nguyên mọi hành vi cũ ──
+_UNSPACED = '\u0e00-\u0e7f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff'   # Thái, kana, chữ Hán: không cách từ
+_UNSPACED_RE = re.compile(f'[{_UNSPACED}]')
+_THAI_MARKS = 'ัิ-ฺ็-๎'          # dấu nguyên âm / thanh Thái: luôn dính ký tự trước
+_TOKEN_RE = re.compile(f'(?:[{_UNSPACED}][{_THAI_MARKS}]*|[^\\s{_UNSPACED}]+)\\s*')
+_SENT_END = (',', '.', '?', '!', ';', ':', '…', '，', '。', '？', '！', '；', '：', '、')
+# font Windows có đủ chữ cho ngôn ngữ phụ đề (font phụ đề Việt / Latin thiếu chữ → ô vuông)
+_TARGET_FONT = {'zh': 'Microsoft YaHei', 'ja': 'Yu Gothic UI', 'ko': 'Malgun Gothic', 'th': 'Leelawadee UI', 'ar': 'Segoe UI'}
+
+
+def _tl(cfg):
+    """Ngôn ngữ lời đọc / phụ đề xuất của job ('vi' mặc định)."""
+    from core import langs
+    return langs.norm((cfg or {}).get('target_lang'))
+
+
+def _tl_label(tl):
+    """'tiếng Việt' (y như cũ) · 'tiếng Anh'…"""
+    from core import langs
+    n = langs.name_vi(tl)
+    return n[:1].lower() + n[1:]
+
+
+def _unspaced(text):
+    """Câu viết không cách từ (Trung / Nhật / Thái): chia, đếm, xuống dòng theo ký tự."""
+    t = str(text or '')
+    n = len(_UNSPACED_RE.findall(t))
+    return n > 0 and n >= 0.3 * len(re.sub(r'\s', '', t))
+
+
+def _tokens(text):
+    """Câu → các đơn vị cắt được: từ (có dấu cách) hoặc từng ký tự (Trung / Nhật / Thái; dấu cách dính vào ký tự trước).
+    → (tokens, chuỗi nối)."""
+    t = str(text or '')
+    if not _unspaced(t):
+        return (t.split(), ' ')
+    return (_TOKEN_RE.findall(t.strip()), '')
+
+
+def _detect_lang(texts):
+    """Ngôn ngữ phụ đề đoán từ chữ (khi không có target_lang): ko / ja / zh / th / ar hoặc None (chữ Latin)."""
+    t = ' '.join(str(x or '') for x in texts)[:4000]
+    cnt = {'ko': len(re.findall('[\uac00-\ud7af]', t)), 'ja': len(re.findall('[\u3040-\u30ff]', t)),
+           'zh': len(re.findall('[\u4e00-\u9fff]', t)), 'th': len(re.findall('[\u0e00-\u0e7f]', t)),
+           'ar': len(re.findall('[\u0600-\u06ff]', t))}
+    letters = len(re.findall('[^\\W\\d_]', t)) or 1
+    if cnt['ja'] and cnt['ja'] + cnt['zh'] >= 0.3 * letters:
+        return 'ja'
+    best = max(cnt, key=cnt.get)
+    return best if cnt[best] >= 0.3 * letters else None
+
+
+def _target_font(tl, texts=()):
+    """Font phải dùng cho phụ đề ngôn ngữ tl (None = giữ font kiểu chữ của app)."""
+    return _TARGET_FONT.get(tl) or _TARGET_FONT.get(_detect_lang(texts) or '')
+
+
+def _wrap_unspaced(text, max_px, size):
+    """libass chỉ xuống dòng ở dấu cách → câu Trung / Nhật / Thái dài vượt khung. Chia đều thành nhiều dòng (\\n) theo
+    bề ngang ước tính (chữ Hán / kana ≈ 1 cỡ chữ, chữ khác ≈ 0.55), ưu tiên cắt ngay sau dấu câu."""
+    out = []
+    for line in str(text or '').split('\n'):
+        if not _unspaced(line):
+            out.append(line)
+            continue
+        toks = _TOKEN_RE.findall(line.strip())
+        wid = [size * (1.0 if re.match('[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]', tk) else 0.55 * len(tk.strip() or ' '))
+               for tk in toks]
+        total = sum(wid)
+        n = int(total // max(1.0, max_px)) + 1 if total > max_px else 1
+        if n <= 1:
+            out.append(line)
+            continue
+        (cuts, acc, k) = ([], 0.0, 0)
+        for j in range(1, n):
+            goal = total * j / n
+            while k < len(toks) - 1 and acc + wid[k] <= goal:
+                acc += wid[k]
+                k += 1
+            near = [i for i in range(max(1, k - 3), min(len(toks) - 1, k + 3) + 1) if toks[i - 1].rstrip().endswith(_SENT_END)]
+            c = min(near, key=lambda i: abs(i - k)) if near else k
+            cuts.append(max(cuts[-1] + 1 if cuts else 1, c))
+        bounds = [0] + cuts + [len(toks)]
+        out.extend(''.join(toks[a:b]).strip() for (a, b) in zip(bounds, bounds[1:]) if a < b)
+    return '\n'.join(out)
+
+
+def _call_tl(fn, *args, tl='vi', **kw):
+    """Gọi hàm core (dub_translate / speakers…) kèm target_lang nếu hàm đó nhận — 'vi' gọi y như cũ."""
+    if tl != 'vi':
+        import inspect
+        try:
+            ps = inspect.signature(fn).parameters
+            if 'target_lang' in ps or any(x.kind == x.VAR_KEYWORD for x in ps.values()):
+                kw['target_lang'] = tl
+        except (TypeError, ValueError):
+            pass
+    return fn(*args, **kw)
+
+
 def _box_geom(box, w, h, style, spans):
     """1 vùng (% khung xuất [x, y, rộng, cao]) → (px, py, pw, ph, enable, sigma), None nếu vùng quá nhỏ / không có lúc nào che."""
     try:
@@ -154,6 +254,9 @@ def _google_lines(job, segs, lang):
     from core.translator import _google_translate
     from core import user_glossary
     sl = lang if lang and lang not in ('auto', 'reuse') else 'auto'
+    from core import langs
+    tl = _tl(getattr(job, 'config', None))
+    gtl = langs.google_code(tl)
     texts = [str(s.get('text') or '').replace('\n', ' ').strip() for s in segs]
     (batches, cur, size) = ([], [], 0)
     for (i, t) in enumerate(texts):
@@ -167,7 +270,9 @@ def _google_lines(job, segs, lang):
 
     def two_hop(text):                           # gốc → Anh → Việt (như bản Google cũ — tên & ngữ pháp ổn hơn dịch thẳng)
         eng = _google_translate(text, sl, 'en')
-        return _google_translate(eng, 'en', 'vi') if eng and eng != text else _google_translate(text, sl, 'vi')
+        if gtl == 'en':                          # đích là tiếng Anh → 1 bước
+            return eng or text
+        return _google_translate(eng, 'en', gtl) if eng and eng != text else _google_translate(text, sl, gtl)
 
     def run(idx):
         src = [texts[i] for i in idx]
@@ -326,10 +431,14 @@ def _variant_center(w, h, vw, vh):
     return None
 
 
-def _write_ass(path, cues, style, w, h, center_y=None, scale=1.0):
+def _write_ass(path, cues, style, w, h, center_y=None, scale=1.0, target_lang=None):
     """File ASS có PlayRes = đúng khung video → toạ độ / cỡ chữ chính xác (SRT qua ffmpeg dùng lưới 384x288, lệch dọc ~2%).
-    center_y (0-1): tâm phụ đề đặt đúng chỗ (giữa vùng che); không có → đáy giữa, cách đáy theo kiểu phụ đề."""
+    center_y (0-1): tâm phụ đề đặt đúng chỗ (giữa vùng che); không có → đáy giữa, cách đáy theo kiểu phụ đề.
+    target_lang: ngôn ngữ phụ đề — Trung / Nhật / Hàn / Thái / Ả Rập dùng font có đủ chữ (không có thì đoán theo chữ)."""
     kv = dict(p.split('=', 1) for p in _force_style(style).split(','))
+    tfont = _target_font(target_lang, [c.get('text') for c in cues[:200]])
+    if tfont:
+        kv['FontName'] = tfont
     # kiểu chữ của app tính theo lưới 288 dòng; khung dọc (9:16) tính theo bề ngang — chữ vừa video ngang nằm giữa, không
     # to gấp đôi tràn 3 dòng (16:9 giữ nguyên: min(1080, 1440) = 1080)
     k = min(h, w * 0.75) / 288.0 * scale
@@ -345,7 +454,10 @@ def _write_ass(path, cues, style, w, h, center_y=None, scale=1.0):
              'Style: ' + ','.join(fields), '', '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
     main_size = round(float(kv['FontSize']) * k)
     for c in cues:
-        text = str(c['text']).replace('\r', '').replace('{', '(').replace('}', ')').replace('\n', '\\N')
+        raw = str(c['text']).replace('\r', '')
+        if _unspaced(raw):                       # libass không tự xuống dòng chữ không cách từ → chia sẵn
+            raw = _wrap_unspaced(raw, w * 0.88 - 2 * round(w * 0.06), main_size)
+        text = raw.replace('{', '(').replace('}', ')').replace('\n', '\\N')
         orig = str(c.get('orig') or '').replace('\r', '').replace('\n', ' ').replace('{', '(').replace('}', ')').strip()
         if orig:
             # song ngữ: lời gốc nhỏ (~62%), màu ngà, font có chữ Trung / Hàn / Nhật (font phụ đề Việt thường thiếu → ô vuông)
@@ -356,12 +468,15 @@ def _write_ass(path, cues, style, w, h, center_y=None, scale=1.0):
         f.write('\n'.join(lines) + '\n')
 
 
-def _text_widths(cues, style, w, h):
+def _text_widths(cues, style, w, h, target_lang=None):
     """Bề ngang (px) từng câu phụ đề khi vẽ bằng kiểu chữ ASS ở khung w x h (dòng dài nhất; libass tự xuống dòng ở ~88% khung)."""
     from PIL import ImageFont
     from core.fonts import find_font_file
     from core.video_editor import _find_font, _find_system_font
     kv = dict(p.split('=', 1) for p in _force_style(style).split(','))
+    tfont = _target_font(target_lang, [c.get('text') for c in cues[:200]])
+    if tfont:
+        kv['FontName'] = tfont
     size = max(8, round(float(kv['FontSize']) * min(h, w * 0.75) / 288.0))   # như _write_ass (khung dọc tính theo bề ngang)
     path = find_font_file(kv['FontName']) or _find_system_font(kv['FontName']) or _find_font()
     try:
@@ -371,7 +486,7 @@ def _text_widths(cues, style, w, h):
     out = []
     for c in cues:
         lines = str(c['text']).split('\n') or ['']
-        tw = max((font.getlength(ln) if font else len(ln) * size * 0.55) for ln in lines) * 1.06   # chữ đậm (Bold) rộng hơn ~6%
+        tw = max((font.getlength(ln) if font else len(ln) * size * (1.0 if _unspaced(ln) else 0.55)) for ln in lines) * 1.06   # chữ đậm (Bold) rộng hơn ~6%
         out.append(min(w * 0.88, tw))
     return (out, size)
 
@@ -521,21 +636,25 @@ def _genders(video, units, log):
     return out
 
 
-SHORTEN_PROMPT = """Bạn biên tập lời lồng tiếng phim (tiếng Việt). Mỗi câu dưới đây đọc LÂU HƠN thời gian nhân vật nói câu gốc.
-Viết lại TỪNG câu ngắn gọn hơn, KHÔNG vượt quá "toi_da_tu" từ (đếm theo chữ), giữ nguyên ý chính, tên riêng, giọng điệu
-tự nhiên như người Việt nói; bỏ từ đệm, ý phụ. Không thêm ý mới, không markdown.
+SHORTEN_PROMPT = """Bạn biên tập lời lồng tiếng phim ({lang}). Mỗi câu dưới đây đọc LÂU HƠN thời gian nhân vật nói câu gốc.
+Viết lại TỪNG câu ngắn gọn hơn, KHÔNG vượt quá "toi_da_tu" {unit}, giữ nguyên ý chính, tên riêng, giọng điệu
+tự nhiên như {native}; bỏ từ đệm, ý phụ. Không thêm ý mới, không markdown.{lang_rule}
 TUYỆT ĐỐI không đổi / bịa nghĩa: câu nào không thể gọn hơn mà vẫn đúng nghĩa thì giữ nguyên câu đó.
 Chỉ trả về JSON đúng dạng: {{"cau": [{{"i": <số>, "loi": "<câu mới>"}}]}}
 
 {rows}"""
 
 
-def _shorten(units, todo, wps, log):
-    """AI viết gọn các câu lồng tiếng dài hơn chỗ trống. todo = {chỉ số câu: số giây có}. wps = từ/giây của giọng đang dùng.
-    Gửi từng gói 20 câu (gói lớn dễ bị cắt cụt), đọc JSON dễ dãi, gói lỗi thử lại 1 lần. → {chỉ số: câu mới}."""
+def _shorten(units, todo, wps, log, target_lang='vi'):
+    """AI viết gọn các câu lồng tiếng dài hơn chỗ trống. todo = {chỉ số câu: số giây có}. wps = từ/giây của giọng đang dùng
+    (Trung / Nhật / Thái: ký tự/giây). Gửi từng gói 20 câu (gói lớn dễ bị cắt cụt), đọc JSON dễ dãi, gói lỗi thử lại 1 lần.
+    → {chỉ số: câu mới}."""
     import json as _json
-    from core import web_llm
-    from .postedit import _extract_json, word_count
+    from core import langs, web_llm
+    from .postedit import _extract_json, lang_rule, unit_name, word_count
+    tl = langs.norm(target_lang)
+    fmt = {'lang': _tl_label(tl), 'lang_rule': ('\n' + lang_rule(tl, True).strip()) if tl != 'vi' else '',
+           'unit': 'từ (đếm theo chữ)' if tl == 'vi' else f'{unit_name(tl)}', 'native': 'người Việt nói' if tl == 'vi' else 'người bản xứ nói'}
     if not web_llm.available():
         log('   [WARN] Chưa đăng nhập ChatGPT / Gemini (Cài đặt → Tài khoản AI) — không rút gọn được câu dài, giọng sẽ lấn thời gian', 'warn')
         return {}
@@ -545,7 +664,7 @@ def _shorten(units, todo, wps, log):
         batch = keys[k:k + 20]
         rows = [{'i': i, 'toi_da_tu': max(3, int(todo[i] * wps * 1.1)), 'cau': units[i]['text']} for i in batch]
         for attempt in range(2):
-            raw = web_llm.chat(SHORTEN_PROMPT.format(rows=_json.dumps(rows, ensure_ascii=False, indent=0)), log)
+            raw = web_llm.chat(SHORTEN_PROMPT.format(rows=_json.dumps(rows, ensure_ascii=False, indent=0), **fmt), log)
             data = _extract_json(raw) or {}
             items = data.get('cau') or data.get('items') or data.get('edits') or (data if isinstance(data, list) else [])
             (got, parsed) = (0, 0)
@@ -696,7 +815,7 @@ def _analyze_cast(job, video, units, orig_texts, vi_texts=None):
         job.log(f'   [WARN] Phân tích nhân vật lỗi ({str(e)[:120]}) — chỉ dựa vào kịch bản', 'warn')
     try:
         job.set_progress(job.progress, 'AI phân vai theo kịch bản')
-        ai = speakers.refine_with_script(vi_texts, orig_texts, res, job.log)
+        ai = _call_tl(speakers.refine_with_script, vi_texts, orig_texts, res, job.log, tl=_tl(getattr(job, 'config', None)))
         if ai:
             res = ai
     except Exception as e:
@@ -887,7 +1006,8 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
         u['orig'] = u['text']                    # lời gốc (hiện ở bước duyệt kịch bản theo vai)
     job.set_progress(42, 'AI dịch theo vai')
     job.log('[4] AI dịch theo vai: đúng xưng hô từng nhân vật, mỗi câu vừa thời gian câu gốc...', 'info')
-    vi = dub_translate.translate(units, res, job.log, cfg.get('film_context') or '')
+    tl = _tl(cfg)
+    vi = _call_tl(dub_translate.translate, units, res, job.log, cfg.get('film_context') or '', tl=tl)
     if not vi or sum(1 for t in vi if t) < len(units) * 0.8:
         job.log('   [WARN] AI dịch theo vai không đủ câu — dùng cách dịch thường', 'warn')
         return ([], None)
@@ -917,7 +1037,8 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
     # ước lượng độ dài TRƯỚC khi tạo giọng (như estimate_duration của VideoLingo): câu dịch quá khung kể cả khi đọc nhanh 1.2×
     # → AI viết gọn ngay, khỏi phải tạo giọng → rút gọn → tạo lại (chậm, dễ mất ý)
     try:
-        from .postedit import word_count
+        from .postedit import units_per_sec, word_count
+        dwps = dub_translate.rate(tl)[0] if hasattr(dub_translate, "rate") else units_per_sec(tl, dub_translate.WPS)   # cùng tốc độ với hạn mức lúc dịch (từ/giây; Trung / Nhật / Thái: ký tự/giây)
         rooms = []
         for (i, u) in enumerate(units):
             nxt = units[i + 1]['start'] if i + 1 < len(units) else u['end'] + TOLERANCE
@@ -926,10 +1047,10 @@ def _translate_for_dub(job, cfg, video, transcript, lang, layout):
         # tối đa 1.2× và lấn thêm 0.25s (bước xếp lịch bù được) mới nhờ AI viết gọn — còn lại để đo độ dài giọng thật quyết định
         over = {i: rooms[i] for (i, u) in enumerate(units)
                 if (res is None or res['labels'][i] != -1) and word_count(u['text']) > 3
-                and word_count(u['text']) / dub_translate.WPS > rooms[i] * MAX_FIT + 0.25}
+                and word_count(u['text']) / dwps > rooms[i] * MAX_FIT + 0.25}
         if over:
             job.log(f'   {len(over)} câu dịch dài quá khung thời gian — AI viết gọn trước khi tạo giọng', 'info')
-            for (i, t) in _shorten(units, over, dub_translate.WPS, job.log).items():
+            for (i, t) in _shorten(units, over, dwps, job.log, tl).items():
                 units[i]['text'] = t
     except Exception as e:
         job.log(f'   [WARN] Ước lượng độ dài lỗi ({str(e)[:100]}) — bỏ qua', 'warn')
@@ -998,7 +1119,7 @@ def _split_by_parts(text, parts):
     """Câu dịch (đã gộp từ nhiều dòng phụ đề gốc) → chia lại thành từng đoạn ứng với từng dòng gốc, theo tỉ lệ độ dài lời
     gốc; cắt ở ranh giới từ, ưu tiên ngay sau dấu câu (±2 từ). → list chuỗi cùng số phần tử với parts (có thể rỗng)."""
     n = len(parts or [])
-    words = str(text or '').split()
+    (words, sep) = _tokens(text)                 # tiếng có dấu cách: từng từ (như cũ) · Trung / Nhật / Thái: từng ký tự
     if n <= 1 or len(words) < 2:
         return [str(text or '').strip()] + [''] * max(0, n - 1)
     weights = [max(1, len(str(p[2] or ''))) for p in parts]
@@ -1006,16 +1127,18 @@ def _split_by_parts(text, parts):
     for wgt in weights[:-1]:
         acc += wgt
         k = max(1, min(len(words) - 1, round(acc / total * len(words))))
-        near = [j for j in range(max(1, k - 2), min(len(words) - 1, k + 2) + 1) if words[j - 1].endswith((',', '.', '?', '!', ';', ':', '…'))]
+        near = [j for j in range(max(1, k - 2), min(len(words) - 1, k + 2) + 1)
+                if words[j - 1].rstrip().endswith((',', '.', '?', '!', ';', ':', '…') if sep else _SENT_END)]
         k = min(near, key=lambda j: abs(j - k)) if near else k
         cuts.append(max(cuts[-1] if cuts else 0, k))
     bounds = [0] + cuts + [len(words)]
-    return [' '.join(words[bounds[j]:bounds[j + 1]]).strip() for j in range(n)]
+    return [sep.join(words[bounds[j]:bounds[j + 1]]).strip() for j in range(n)]
 
 
 def _bare(text):
     """Chữ để so 2 câu có cùng lời không (bỏ dấu câu, hoa / thường)."""
-    return re.sub(r'[^\w\s]', ' ', str(text or '')).lower().split()
+    t = re.sub(r'[^\w\s]', ' ', str(text or '')).lower()
+    return re.sub(r'\s', '', t) if _unspaced(t) else t.split()
 
 
 def _part_cues(units, layout):
@@ -1076,10 +1199,11 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
             n_manual += 1
     if n_manual:
         job.log(f'   {n_manual} câu có khung lồng tiếng chỉnh tay trên timeline — đọc đúng khung đó', 'step')
-    job.set_progress(56, 'Lồng tiếng Việt')
+    tl = _tl(cfg)
+    job.set_progress(56, 'Lồng tiếng Việt' if tl == 'vi' else f'Lồng tiếng {_tl_label(tl)}')
     # Đúng giọng người dùng chọn, KHÔNG tự đổi: chọn 1 giọng → mọi nhân vật đọc giọng đó; chỉ khi bật "giọng theo nhân vật
     # nam / nữ" VÀ chọn 2 giọng khác nhau mới chia nam / nữ. Giọng chọn riêng từng nhân vật (char_voices) luôn được dùng.
-    v_male = cfg.get('voice', '') or 'Edge TTS — Nam Bắc (miễn phí)'
+    v_male = cfg.get('voice', '') or ('Edge TTS — Nam Bắc (miễn phí)' if tl == 'vi' else f'Edge TTS {tl.upper()} — Nam (miễn phí)')
     v_female = cfg.get('voice_female', '') or ''
     by_gender = bool(cfg.get('dub_by_gender') and video and v_female and v_female != v_male)
     voices = {'male': v_male, 'female': v_female if by_gender else v_male}
@@ -1164,7 +1288,7 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
         voice_all(miss)
     # Không tự đổi giọng: câu vẫn lỗi sau các lượt đọc lại thì để trống & báo rõ (chọn giọng nào dùng đúng giọng đó)
     # Câu dài hơn chỗ trống (đọc ở tốc độ gốc) → AI viết gọn cho vừa rồi đọc lại; 2 lượt (cần tài khoản AI)
-    from .postedit import word_count
+    from .postedit import units_per_sec, word_count
     shortened = set()                            # câu đã viết gọn → phụ đề phải đổi theo (giọng & chữ luôn giống nhau)
     for rnd in range(3):
         # chỉ câu tua tối đa (MAX_SPEED) vẫn không vừa khung mới nhờ AI viết gọn — giữ nghĩa bản dịch nhiều nhất
@@ -1179,14 +1303,14 @@ def _dub(job, cfg, cues, temp_dir, video_dur, video='', plan=None, orig_level=No
         for v in set(filter(None, uvoice)):
             r = sorted(word_count(u['text']) / u['dur'] for (i, u) in enumerate(units)
                        if uvoice[i] == v and u.get('dur', 0) >= 1.0 and word_count(u['text']) >= 3)
-            wps[v] = r[len(r) // 2] if r else 3.5
+            wps[v] = r[len(r) // 2] if r else (3.5 if tl == 'vi' else units_per_sec(tl))
         job.log(f'   {len(long_)} câu dài hơn chỗ trống — AI rút gọn (lượt {rnd + 1}, giọng đọc ~{max(wps.values()):.1f} từ/giây)...', 'info')
         new = {}
         for v in set(filter(None, uvoice)):
             part = {i: s for (i, s) in long_.items() if uvoice[i] == v}
             if part:
                 try:
-                    new.update(_shorten(units, part, wps[v], job.log))
+                    new.update(_shorten(units, part, wps[v], job.log, tl))
                 except Exception as e:
                     job.log(f'   [WARN] AI rút gọn lỗi ({str(e)[:100]}) — câu dài sẽ lấn sang khoảng lặng sau', 'warn')
         if not new:
@@ -1419,18 +1543,19 @@ def run_vietsub_pipeline(job):
         job.check()
 
         # 1. Dịch — có lồng tiếng: phân vai trên SRT gốc TRƯỚC, rồi dịch theo đúng người nói & vừa thời gian câu gốc
-        if lang not in ('reuse', 'vi'):
+        tl = _tl(cfg)
+        if lang not in ('reuse', tl):
             dub_plan = None
             if cfg.get('dub_voice') and cfg.get('ai_translate', True):
                 (cues, dub_plan) = _translate_for_dub(job, cfg, video, transcript, lang, layout)
         if lang == 'reuse' or dub_plan:
             pass
-        elif lang == 'vi':
-            job.log('   Video đã là tiếng Việt — giữ nguyên phụ đề', 'info')
+        elif lang == tl:
+            job.log(f'   Video đã là {_tl_label(tl)} — giữ nguyên phụ đề', 'info')
             cues = orig
         else:
-            job.set_progress(40, 'Dịch sang tiếng Việt')
-            job.log('[3] Dịch phụ đề sang tiếng Việt...', 'info')
+            job.set_progress(40, f'Dịch sang {_tl_label(tl)}')
+            job.log(f'[3] Dịch phụ đề sang {_tl_label(tl)}...', 'info')
             from core import web_llm
             if transcript.get('hardsub') and not (cfg.get('ai_translate', True) and web_llm.available()):
                 scenes = _google_lines(job, transcript['segments'], lang)   # Google: đúng từng dòng phụ đề gốc
@@ -1514,8 +1639,8 @@ def run_vietsub_pipeline(job):
         if dub_plan:
             job.result['dub_units'] = [{'start': u['start'], 'end': u['end'], 'text': u['text'], 'orig': u.get('orig', ''),
                                         'parts': u.get('parts'), **_voice_slot(u)} for u in dub_plan['units']]
-        job.result['vi_srt'] = _write_srt(os.path.join(out_dir, base + '_vi.srt'), cues)
-        job.log(f"   SRT tiếng Việt: {job.result['vi_srt']}", 'ok')
+        job.result['vi_srt'] = _write_srt(os.path.join(out_dir, base + f'_{tl}.srt'), cues)   # khoá 'vi_srt' giữ cho giao diện
+        job.log(f"   SRT {_tl_label(tl)}: {job.result['vi_srt']}", 'ok')
         job.check()
 
         # 3. Chữ Trung trên hình (AI quét cả phim). Khung mờ vừa theo chữ cũng cần biết chữ cũ rộng tới đâu → quét luôn
@@ -1621,10 +1746,10 @@ def run_vietsub_pipeline(job):
             sc = [{**c, 'text': c['text'].upper() if upper else c['text']} for c in cues_]
             if orig_cues:
                 sc = _attach_orig(sc, orig_cues)          # song ngữ: lời gốc nhỏ dưới dòng Việt
-            _write_ass(os.path.join(temp_dir, 'subs.ass'), sc, style, w, h, sub_cover_center(cfg))
+            _write_ass(os.path.join(temp_dir, 'subs.ass'), sc, style, w, h, sub_cover_center(cfg), target_lang=tl)
             if variant:
                 _write_ass(os.path.join(temp_dir, 'subs_v.ass'), sc, style, variant[0], variant[1], _variant_center(w, h, *variant),
-                           scale=1.45 if variant[1] > variant[0] else 1.0)     # bản dọc xem trên điện thoại → chữ to hơn
+                           scale=1.45 if variant[1] > variant[0] else 1.0, target_lang=tl)     # bản dọc xem trên điện thoại → chữ to hơn
             return sc
         sub_cues = write_subs(cues)
         from core.fonts import render_font_files
@@ -1632,6 +1757,16 @@ def run_vietsub_pipeline(job):
         os.makedirs(fonts_tmp, exist_ok=True)
         for fp in render_font_files(style.get('sub_font_name', '')):
             shutil.copy2(fp, fonts_tmp)
+        tfont = _target_font(tl, [c.get('text') for c in sub_cues[:200]])
+        if tfont:                                # phụ đề Trung / Nhật / Hàn / Thái / Ả Rập: chép font hệ thống có đủ chữ cho libass
+            try:
+                from core.fonts import find_font_file
+                from core.video_editor import _find_system_font
+                fp = find_font_file(tfont) or _find_system_font(tfont)
+                if fp and os.path.isfile(fp):
+                    shutil.copy2(fp, fonts_tmp)
+            except Exception:
+                pass
 
         # 5. Một lượt dựng: xoá / mờ chữ Trung (hình gốc) → cắt / co về khung xuất → che phụ đề cũ → phụ đề Việt
         cstyle = cfg.get('cover_style') or 'erase'
@@ -1853,11 +1988,12 @@ def export_subs(job, fmt):
     if not cues:
         raise RuntimeError('Không còn file phụ đề tiếng Việt của job này.')
     stem = os.path.splitext(vi)[0]
-    stem = stem[:-3] if stem.endswith('_vi') else stem
+    tl = _tl(getattr(job, 'config', None))
+    stem = stem[:-len(tl) - 1] if stem.endswith('_' + tl) else stem[:-3] if stem.endswith('_vi') else stem
     if fmt == 'srt':
         return vi
     if fmt == 'vtt':
-        path = stem + '_vi.vtt'
+        path = stem + f'_{tl}.vtt'
         rows = ['WEBVTT', '']
         for c in cues:
             rows += [f"{fmt_ts(c['start']).replace(',', '.')} --> {fmt_ts(c['end']).replace(',', '.')}", str(c['text']).strip(), '']
@@ -1866,8 +2002,8 @@ def export_subs(job, fmt):
         return path
     if fmt == 'ass':
         (w, h) = [int(v) for v in str(job.config.get('target_resolution') or '1920x1080').split('x')]
-        path = stem + '_vi.ass'
-        _write_ass(path, cues, _sub_style(job.config), w, h)
+        path = stem + f'_{tl}.ass'
+        _write_ass(path, cues, _sub_style(job.config), w, h, target_lang=tl)
         return path
     if fmt == 'bilingual':
         orig = _read_srt(job.result.get('original_srt'))

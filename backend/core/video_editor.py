@@ -4,6 +4,7 @@ Video editor: cat clip tu video goc theo timestamp script, ghep voiceover, burn 
 Output: 1 video review hoan chinh.
 """
 import hashlib
+import re
 import json
 import os
 import functools
@@ -117,6 +118,41 @@ def _find_font():
     except Exception:
         pass
     return None
+# Font hệ thống Windows có đủ chữ từng ngôn ngữ (bản đậm trước — phụ đề dễ đọc)
+_SCRIPT_FONTS = {
+    'zh': ['C:/Windows/Fonts/msyhbd.ttc', 'C:/Windows/Fonts/msyh.ttc', 'C:/Windows/Fonts/simhei.ttf'],
+    'ja': ['C:/Windows/Fonts/YuGothB.ttc', 'C:/Windows/Fonts/meiryob.ttc', 'C:/Windows/Fonts/meiryo.ttc', 'C:/Windows/Fonts/msgothic.ttc'],
+    'ko': ['C:/Windows/Fonts/malgunbd.ttf', 'C:/Windows/Fonts/malgun.ttf'],
+    'th': ['C:/Windows/Fonts/LeelaUIb.ttf', 'C:/Windows/Fonts/LeelawUI.ttf', 'C:/Windows/Fonts/tahomabd.ttf', 'C:/Windows/Fonts/tahoma.ttf'],
+    'ar': ['C:/Windows/Fonts/arialbd.ttf', 'C:/Windows/Fonts/arial.ttf', 'C:/Windows/Fonts/tahoma.ttf'],
+}
+_PROBE = {'zh': '中文字', 'ja': 'あア日', 'ko': '한국어', 'th': 'ภาษาไทย', 'ar': 'عربي'}
+
+
+def script_font(target_lang):
+    """Font Windows cho ngôn ngữ cần bộ chữ riêng (zh/ja/ko/th/ar) → đường dẫn; ngôn ngữ chữ La-tinh / Việt → ''."""
+    for p in _SCRIPT_FONTS.get(str(target_lang or ''), []):
+        if os.path.exists(p):
+            return p
+    return ''
+
+
+def _font_covers(path, target_lang):
+    """Font có đủ chữ của ngôn ngữ đích không (đọc bảng ký tự bằng fontTools; không đọc được → coi như không đủ)."""
+    probe = _PROBE.get(str(target_lang or ''))
+    if not probe:
+        return True
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        from fontTools.ttLib import TTCollection, TTFont
+        f = TTCollection(path, lazy=True).fonts[0] if path.lower().endswith('.ttc') else TTFont(path, lazy=True)
+        cmap = f.getBestCmap() or {}
+        return all(ord(ch) in cmap for ch in probe)
+    except Exception:
+        return False
+
+
 def _find_system_font(font_name='Segoe UI'):
     font_name_lower = font_name.lower()
     font_map = {'segoe ui': ['C:/Windows/Fonts/segoeui.ttf', 'C:/Windows/Fonts/Segoeui.ttf'], 'arial': ['C:/Windows/Fonts/Arial.ttf', 'C:/Windows/Fonts/arial.ttf'], 'times new roman': ['C:/Windows/Fonts/times.ttf', 'C:/Windows/Fonts/timesbd.ttf'], 'tahoma': ['C:/Windows/Fonts/tahoma.ttf'], 'verdana': ['C:/Windows/Fonts/verdana.ttf'], 'impact': ['C:/Windows/Fonts/impact.ttf'], 'comic sans': ['C:/Windows/Fonts/comic.ttf', 'C:/Windows/Fonts/comicbd.ttf'], 'montserrat': ['C:/Windows/Fonts/Montserrat-Regular.ttf', 'C:/Windows/Fonts/montserrat.ttf'], 'roboto': ['C:/Windows/Fonts/Roboto-Regular.ttf', 'C:/Windows/Fonts/roboto.ttf']}
@@ -455,7 +491,8 @@ def recap_length_report(scenes, output_duration_sec):
         except Exception:
             pass
         try:
-            total_words += len(str(s.get('voiceover') or '').split())
+            vo = str(s.get('voiceover') or '')
+            total_words += (len(''.join(vo.split())) // 2) if _is_unspaced(vo) else len(vo.split())   # ~2 chữ Hán / từ
         except Exception:
             pass
     try:
@@ -611,6 +648,11 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         font_path = sub_custom_font_path.replace('\\', '/')
     else:
         font_path = _find_system_font(sub_font_name)
+    _script_font = script_font(kwargs.get('target_lang'))
+    if _script_font and not (sub_custom_font_path and os.path.exists(sub_custom_font_path) and _font_covers(sub_custom_font_path, kwargs.get('target_lang'))):
+        # phụ đề Trung / Nhật / Hàn / Thái / Ả Rập: font Việt / La-tinh không có chữ → ô vuông. Dùng font hệ thống có chữ đó.
+        if not _font_covers(font_path, kwargs.get('target_lang')):
+            font_path = _script_font
     video_total_duration = _safe_duration(source_video)
     # chuyển cảnh chỉ dùng lúc ghép → tách khỏi kwargs để đổi kiểu chuyển cảnh không phải dựng lại clip
     transition = str(kwargs.pop('transition', 'none') or 'none')
@@ -1080,6 +1122,8 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 eff_font_name = c_style.get('fontName') or ''
                 if eff_font_name:
                     eff_font_path = _find_system_font(eff_font_name) or font_path
+                    if kwargs.get('target_lang') and not _font_covers(eff_font_path, kwargs.get('target_lang')):
+                        eff_font_path = font_path      # font kiểu chữ riêng không có chữ ngôn ngữ đích → font ngôn ngữ đó
                 else:
                     eff_font_path = font_path
                 if eff_font_path:
@@ -1500,6 +1544,65 @@ def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None, style='blu
     if idx == 0:
         return ('', in_label)
     return (';'.join(parts), cur)
+# Chữ Trung / Nhật (Hán, kana) và Thái không có dấu cách giữa từ → ngắt dòng / chia đoạn theo ký tự.
+# Chữ Hán / kana / Hàn rộng ~1 ô vuông (≈ 1.0 × cỡ chữ), chữ La-tinh ~0.6×.
+_UNSPACED_RE = re.compile('[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u0e00-\u0e7f\u0e80-\u0eff\u1780-\u17ff]')
+_WIDE_RE = re.compile('[\u1100-\u11ff\u3000-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]')
+_CJK_STOPS = '。！？…；：，、!?;:,.'
+
+
+def _is_unspaced(text):
+    """Câu chủ yếu là chữ Hán / kana / Thái (không dấu cách giữa từ). Tiếng Việt / Anh … → False (giữ cách cũ)."""
+    t = ''.join((text or '').split())
+    return bool(t) and len(_UNSPACED_RE.findall(t)) >= 0.3 * len(t)
+
+
+def _is_wide(text):
+    t = ''.join((text or '').split())
+    return bool(t) and len(_WIDE_RE.findall(t)) >= 0.5 * len(t)
+
+
+def _glyph_units(text):
+    """Chia chữ thành ô hiển thị: 1 ký tự gốc + các dấu kết hợp đi theo (Thái: dấu thanh / nguyên âm trên-dưới) — không
+    bao giờ ngắt dòng giữa chữ và dấu của nó. Từ La-tinh liền nhau giữ nguyên 1 khối."""
+    import unicodedata
+    units = []
+    for ch in text:
+        if units and (unicodedata.combining(ch) or unicodedata.category(ch) in ('Mn', 'Mc')
+                      or units[-1][-1] in 'เแโใไ'):   # nguyên âm Thái đứng trước phụ âm
+            units[-1] += ch
+        elif units and ch.isascii() and ch.isalnum() and units[-1][-1:].isascii() and units[-1][-1:].isalnum():
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
+
+
+def _wrap_unspaced(text, max_len):
+    """Ngắt dòng chữ không dấu cách theo số ký tự; ưu tiên ngắt sau dấu câu (。，、！？) ở nửa sau dòng."""
+    units = _glyph_units(text)
+    lines = []
+    while units:
+        n = 0
+        (k, cut) = (0, None)
+        for (k, u) in enumerate(units):
+            if n + len(u) > max_len and k > 0:
+                break
+            n += len(u)
+            if u in _CJK_STOPS or u == ' ':
+                cut = k + 1
+        else:
+            lines.append(''.join(units).strip())
+            break
+        if cut is None or cut < k * 0.5:
+            cut = k
+        lines.append(''.join(units[:cut]).strip())
+        units = units[cut:]
+        while units and units[0] == ' ':
+            units = units[1:]
+    return '\n'.join(l for l in lines if l)
+
+
 def _fit_subtitle(text, vid_w, vid_h, font_size_factor=1.0, max_lines=2, line_spacing=6, max_width_pct=0.82):
     """Chữ phụ đề → (chữ đã ngắt dòng, cỡ chữ) vừa khung: thu cỡ chữ tới min_font; vẫn quá số dòng thì nới độ dài dòng và
     thu tiếp cỡ chữ cho vừa bề ngang — KHÔNG bao giờ trả về quá max_lines dòng. Chữ IN HOA rộng ~0.7× cỡ chữ (thường 0.6×)."""
@@ -1514,9 +1617,11 @@ def _fit_subtitle(text, vid_w, vid_h, font_size_factor=1.0, max_lines=2, line_sp
     letters = [c for c in text if c.isalpha()]
     upper = len(letters) > 0 and sum(1 for c in letters if c.isupper()) / len(letters) > 0.6
     cw = 0.7 if upper else 0.6                    # bề ngang 1 ký tự ≈ cw × cỡ chữ
+    if _is_wide(text):
+        cw = 1.0                                  # chữ Hán / kana / Hàn: mỗi chữ ~1 ô vuông
     fontsize = base_font
     while True:
-        chars_per_line = max(16, int(safe_w / (fontsize * cw)))
+        chars_per_line = max(8 if cw >= 1.0 else 16, int(safe_w / (fontsize * cw)))
         wrapped = _wrap_text(text, max_len=chars_per_line)
         n_lines = wrapped.count('\n') + 1
         line_h = fontsize * 1.15 + max(0, int(line_spacing))
@@ -1526,7 +1631,7 @@ def _fit_subtitle(text, vid_w, vid_h, font_size_factor=1.0, max_lines=2, line_sp
             break
         fontsize -= 2
     # tới cỡ nhỏ nhất vẫn quá số dòng → ép về max_lines dòng, thu cỡ chữ cho dòng dài nhất vừa bề ngang
-    wrapped = _wrap_lines(text, max(16, int(safe_w / (fontsize * cw))), max_lines)
+    wrapped = _wrap_lines(text, max(8 if cw >= 1.0 else 16, int(safe_w / (fontsize * cw))), max_lines)
     longest = max(len(x) for x in wrapped.split('\n'))
     fontsize = max(14, min(int(fontsize), int(safe_w / (max(1, longest) * cw))))
     return (wrapped, int(fontsize))
@@ -1550,6 +1655,7 @@ def _auto_split_subtitle_chunks(text, max_chars_per_chunk=56, max_lines_per_chun
         return []
     if len(text) <= max_chars_per_chunk:
         return [text]
+    unspaced = _is_unspaced(text)
     chunks = []
     remaining = text
     while remaining:
@@ -1559,20 +1665,26 @@ def _auto_split_subtitle_chunks(text, max_chars_per_chunk=56, max_lines_per_chun
         window = remaining[slice(None, max_chars_per_chunk + 1, None)]
         cut = -1
         for i in range(len(window) - 1, int(len(window) * 0.4), -1):
-            if window[i] in '.!?,;':
+            if window[i] in ('.!?,;' if not unspaced else _CJK_STOPS):
                 cut = i + 1
                 break
         if cut == -1:
             sp = window.rfind(' ')
             cut = sp if sp > 0 else max_chars_per_chunk
+            if unspaced and sp <= 0:
+                import unicodedata                 # không cắt giữa chữ Thái và dấu của nó
+                while cut < len(remaining) and unicodedata.category(remaining[cut]) in ('Mn', 'Mc'):
+                    cut += 1
+                if 1 < cut < len(remaining) and remaining[cut - 1] in 'เแโใไ':
+                    cut -= 1                        # nguyên âm Thái đứng trước đi cùng phụ âm sau
         chunks.append(remaining[slice(None, cut, None)].strip())
         remaining = remaining[slice(cut, None, None)].strip()
     chunks = [c for c in chunks if c]
-    _MIN_CHUNK_CHARS = 20
+    _MIN_CHUNK_CHARS = 8 if unspaced else 20      # 8 chữ Hán ≈ 20 ký tự La-tinh về độ dài đọc
     merged = []
     for c in chunks:
         if merged and len(c) < _MIN_CHUNK_CHARS:
-            combined = ((merged[-1] + ' ' + c)).strip()
+            combined = ((merged[-1] + ('' if unspaced else ' ') + c)).strip()
             if len(combined) <= max_chars_per_chunk:
                 merged[-1] = combined
                 continue
@@ -1592,6 +1704,8 @@ def _wrap_lines(text, max_len, max_lines):
 def _wrap_text(text, max_len=50):
     if len(text) <= max_len:
         return text
+    if _is_unspaced(text):
+        return _wrap_unspaced(text, max_len)
     words = text.split()
     lines = []
     cur = ''
