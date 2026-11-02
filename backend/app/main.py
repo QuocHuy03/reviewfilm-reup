@@ -13,14 +13,42 @@ from app.features.media.router import router as media_router  # noqa: E402
 from app.features.settings.router import router as settings_router  # noqa: E402
 from app.features.voices.router import router as voices_router  # noqa: E402
 
-app = FastAPI(title='ReviewFilm API', version='2.0.0')
+import contextlib  # noqa: E402
+
+# MCP (cho AI ngoài như Claude Desktop / Cursor điều khiển tool) — thiếu thư viện mcp thì bỏ qua, app vẫn chạy
+try:
+    from app.features.mcp.server import mcp as _mcp  # noqa: E402
+except Exception:                                    # pragma: no cover
+    _mcp = None
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    for fn in (_startup, warm_fonts, warm_whisper):      # trước là @app.on_event('startup')
+        try:
+            fn()
+        except Exception:
+            pass
+    if _mcp is None:
+        yield
+        return
+    async with _mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title='ReviewFilm API', version='2.0.0', lifespan=_lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])
 
 for r in (jobs_router, download_router, voices_router, settings_router, media_router, glossary_router, assistant_router):
     app.include_router(r)
 
 
-@app.on_event('startup')
+if _mcp is not None:
+    from app.features.mcp.router import McpTokenGuard, router as mcp_router  # noqa: E402
+    app.include_router(mcp_router)
+    app.mount('/mcp', McpTokenGuard(_mcp.streamable_http_app()))
+
+
 def _startup():
     from core.downloader import auto_update
     auto_update()          # yt-dlp mới nhất (ngầm, 1 lần/tuần)
@@ -31,14 +59,12 @@ def health():
     return {'ok': True}
 
 
-@app.on_event('startup')
 def warm_fonts():
     import threading
     from core.fonts import families
     threading.Thread(target=families, daemon=True, name='warm-fonts').start()
 
 
-@app.on_event('startup')
 def warm_whisper():
     """Tải sẵn model Whisper đang chọn trong Cài đặt (chỉ lần đầu / khi đổi model)."""
     import threading

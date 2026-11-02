@@ -4,6 +4,8 @@ import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { AiAccounts } from "@/components/AiAccounts"
 import { AboutPanel } from "@/components/ReleaseNotes"
+import { McpPanel } from "@/components/McpPanel"
+import { Plug } from "lucide-react"
 import { UpdatePanel } from "@/components/UpdatePanel"
 import { Field, ToggleRow, PathInput, Section, Segmented } from "@/components/common"
 import { ACCENTS, UI_SCALES, useAppearance, type AccentKey } from "@/app/appearance"
@@ -22,6 +24,7 @@ const SETTING_TABS = [
   { value: "ai", label: "Tài khoản AI", desc: "ChatGPT / Gemini viết kịch bản, dịch", icon: <Bot /> },
   { value: "voice", label: "Giọng đọc", desc: "Key FPT, Viettel… · tài khoản CapCut", icon: <KeyRound /> },
   { value: "defaults", label: "Mặc định", desc: "Thư mục xuất, nhận dạng giọng, giọng mặc định", icon: <SlidersHorizontal /> },
+  { value: "mcp", label: "Kết nối AI (MCP)", desc: "Claude Desktop, Cursor, Claude Code điều khiển app", icon: <Plug /> },
   { value: "look", label: "Giao diện", desc: "Sáng/tối, màu nhấn, cỡ chữ", icon: <Palette /> },
   { value: "system", label: "Hệ thống & cập nhật", desc: "Phiên bản, cập nhật, nhật ký", icon: <Monitor /> },
 ]
@@ -81,6 +84,8 @@ export function SettingsPage() {
       </TabsList>
 
       <TabsContent value="ai"><AiAccounts /></TabsContent>
+
+      <TabsContent value="mcp"><McpPanel /></TabsContent>
 
       <TabsContent value="look"><AppearancePanel /></TabsContent>
 

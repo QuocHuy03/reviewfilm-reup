@@ -83,6 +83,11 @@ def main():
         sys.exit(0)
     if '--vieneu-worker' in sys.argv:
         _run_worker('--vieneu-worker', 'workers.vieneu_worker')
+    if '--mcp-stdio' in sys.argv:
+        # cầu MCP qua stdio (Claude Desktop): gọi backend ĐANG CHẠY qua cổng ghi trong data/mcp.json — không in gì ra stdout
+        from app.features.mcp.server import run_stdio
+        run_stdio()
+        sys.exit(0)
 
     # chạy nền ƯU TIÊN THẤP như HandBrake / Resolve: Windows & app khác luôn được phục vụ trước → máy không đơ khi dựng.
     # Mọi tiến trình con (ffmpeg, worker VieNeu / Whisper, yt-dlp) thừa hưởng mức ưu tiên này.
@@ -99,6 +104,11 @@ def main():
     port = 8765
     if '--port' in sys.argv:
         port = int(sys.argv[sys.argv.index('--port') + 1])
+    try:                                   # cổng hiện tại cho cầu MCP stdio + nút "Sao chép cấu hình"
+        from app.features.mcp.server import publish_port
+        publish_port(port)
+    except Exception:
+        pass
     if '--parent-pid' in sys.argv:
         _watch_parent(int(sys.argv[sys.argv.index('--parent-pid') + 1]))
     import uvicorn

@@ -154,6 +154,7 @@ class Job:
     # ---------- chờ người dùng ----------
     def wait_for(self, what, stage):
         """Dừng pipeline cho tới khi người dùng xác nhận/huỷ. Trả về payload người dùng gửi."""
+        self.check()                    # đã bấm Dừng ngay trước bước chờ → huỷ luôn (clear() bên dưới làm mất tín hiệu Dừng)
         self._event.clear()
         self._reply = None
         self.waiting = what

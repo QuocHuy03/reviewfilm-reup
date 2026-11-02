@@ -16,3 +16,4 @@ kaldi-native-fbank>=1.20   # đặc trưng giọng để nhận ra nhân vật n
 psutil>=5.9                  # đo RAM trống — xoá chữ tự bớt luồng khi máy thiếu RAM
 cryptography>=41.0   # phim ngắn: ký RSA DramaBox, giải mã link Hồng Quả (core/drama_downloader)
 deno>=2.5   # trình chạy JS cho yt-dlp — YouTube bắt buộc để giải mã chữ ký video (không có → thiếu định dạng / lỗi tải)
+mcp>=1.20   # MCP server: AI ngoài (Claude Desktop, Cursor, Claude Code) điều khiển tool — app/features/mcp

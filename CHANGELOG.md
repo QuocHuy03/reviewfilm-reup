@@ -12,6 +12,17 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.0] - 2026-11-02
+
+### Added
+- **Kết nối AI (MCP)**: Claude Desktop, Cursor, Claude Code… điều khiển ReviewFilm bằng lời — tải video, tạo video
+  Review / Dịch & Reup / Dịch phụ đề (17 ngôn ngữ), chọn & nghe thử giọng, theo dõi tiến độ, đọc & sửa kịch bản / bản
+  dịch, duyệt bước chờ, lấy file xuất. Cài đặt → Kết nối AI (MCP): bấm Sao chép cấu hình cho từng app AI. Chỉ máy này
+  kết nối được, cần token (đổi được nếu lỡ lộ).
+
+### Fixed
+- **Bấm Dừng ngay trước bước chờ duyệt** không còn làm job kẹt ở "Chờ sửa bản dịch / kịch bản" — huỷ luôn.
+
 ## [2.14.0] - 2026-10-29
 
 ### Added
@@ -486,7 +497,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...HEAD
+[2.15.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.11.2...v2.12.0
