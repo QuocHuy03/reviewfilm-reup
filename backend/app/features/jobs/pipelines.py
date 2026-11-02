@@ -443,6 +443,9 @@ def _start_bg_separation(run):
     from core.video_editor import _has_audio
     if run.sep or not _keep_bg(run) or not run.video_path or not _has_audio(run.video_path):
         return
+    if _ranged_sep(run):
+        run.sep['ranged'] = True                 # tách theo đoạn khi đã có kịch bản (_start_range_separation)
+        return
     job = run.job
     box = run.sep
 
@@ -462,6 +465,89 @@ def _start_bg_separation(run):
     job.log('   Tách giọng gốc để giữ nhạc nền & tiếng động (chạy nền)...', 'info')
     box['thread'] = threading.Thread(target=work, daemon=True)
     box['thread'].start()
+
+
+RANGED_SEP_MIN_SEC = 15 * 60     # Review phim dài hơn 15 phút: chỉ tách nhạc nền các đoạn được dùng (phim ngắn: tách cả phim chạy nền)
+
+
+def _ranged_sep(run):
+    if not run.is_review or not run.video_path:
+        return False
+    from core.video_editor import _safe_duration
+    return (_safe_duration(run.video_path) or 0) > RANGED_SEP_MIN_SEC
+
+
+def _review_spans(scenes, video_dur, estimate=False, lang='vi'):
+    """Đoạn phim mỗi cảnh Review sẽ dùng (theo đúng lịch dựng). estimate=True: chưa có giọng → ước theo độ dài lời (dư 20%)."""
+    from core import langs
+    from core.video_editor import plan_review_clips
+    live = [dict(sc) for sc in scenes if not sc.get('excluded') and sc.get('clip_start') is not None]
+    for sc in live:
+        if estimate or not sc.get('tts_duration'):
+            n = len(str(sc.get('voiceover') or ''))
+            sc['tts_duration'] = n / langs.chars_per_sec(lang) * 1.2 + 1.5
+    out = []
+    for (sc, (st, _cap)) in zip(live, plan_review_clips(live, video_dur)):
+        out.append((st, st + float(sc['tts_duration']) + 0.5))
+    return out
+
+
+def _start_range_separation(run):
+    """Review phim dài: có kịch bản → tách nhạc nền CHỈ các đoạn sẽ dùng, chạy nền trong lúc tạo giọng đọc."""
+    import threading
+    if not run.sep.get('ranged') or run.sep.get('thread'):
+        return
+    from core.video_editor import _safe_duration
+    job = run.job
+    box = run.sep
+    spans = _review_spans(job.scenes, _safe_duration(run.video_path), estimate=True, lang=_tl(run.cfg))
+    if not spans:
+        return
+
+    def prog(p):
+        if p >= box.get('pct', 0) + 25 or p == 100:
+            box['pct'] = p
+            if p < 100:
+                job.log(f'   Tách giọng gốc (chạy nền): {p}%', 'step')
+
+    def work():
+        from core import vocal_sep
+        try:
+            box['res_r'] = vocal_sep.separate_ranges(run.video_path, spans, job.log, prog,
+                                                     lambda: job.cancelled or box.get('stop') or job.status in ('error', 'done', 'cancelled'))
+        except Exception as e:
+            box['err'] = e
+    job.log('   Tách giọng gốc các đoạn sẽ dùng để giữ nhạc nền (chạy nền)...', 'info')
+    box['thread'] = threading.Thread(target=work, daemon=True)
+    box['thread'].start()
+
+
+def _bg_track_ranged(run):
+    """→ (music, segs) phủ đủ mọi cảnh theo độ dài giọng THẬT; thiếu → tách lại đúng các đoạn cần. ('', None) nếu lỗi."""
+    from core import vocal_sep
+    from core.video_editor import _safe_duration
+    job = run.job
+    box = run.sep
+    if box.get('thread') and box['thread'].is_alive():
+        job.set_progress(85, 'Đợi tách giọng gốc')
+        box['thread'].join()
+    job.check()
+    spans = _review_spans(job.scenes, _safe_duration(run.video_path))
+    (music, segs) = box.get('res_r') or (None, [])
+    if music and all(vocal_sep.locate(segs, a, b - a - 0.5) is not None for (a, b) in spans):
+        return (music, segs)
+    if music:
+        job.log('   Lời đọc dài hơn ước tính ở vài cảnh — tách bổ sung nhạc nền đúng các đoạn cần', 'info')
+    try:
+        (music, segs) = vocal_sep.separate_ranges(run.video_path, spans, job.log,
+                                                  lambda p: job.set_progress(85, f'Tách giọng gốc {p}%'), lambda: job.cancelled)
+    except Exception as e:
+        if job.cancelled:
+            raise
+        job.log(f'   [WARN] Tách giọng lỗi ({str(e)[:120]}) — dùng tiếng gốc hạ nhỏ như cũ', 'warn')
+        return ('', None)
+    box['res_r'] = (music, segs)
+    return (music or '', segs if music else None)
 
 
 def _bg_track(run):
@@ -579,6 +665,7 @@ def _step_voice(run):
     """TTS một giọng, hoặc phân vai nhiều giọng (review + multi_voice + có engine phân vai)."""
     (job, cfg) = (run.job, run.cfg)
     job.set_progress(55, 'Tạo giọng đọc')
+    _start_range_separation(run)                 # Review phim dài: tách nhạc nền các đoạn sẽ dùng, chạy song song lúc tạo giọng
     audio_dir = os.path.join(run.temp_dir, 'audio')
     voice_label = cfg.get('voice', '')
     web = _web_ai()
@@ -885,6 +972,18 @@ def auto_review_minutes(video_sec):
 def scan_ranges(scenes, is_review):
     """Đoạn video gốc cần quét chữ: từng cảnh (Review: kéo dài thêm nếu lời đọc dài hơn hình). None = cả phim."""
     out = []
+    if is_review:
+        # Review: đúng đoạn hình sẽ dựng (cảnh sát nhau được lùi điểm bắt đầu — core.video_editor.plan_review_clips)
+        from core.video_editor import plan_review_clips
+        live = [s for s in scenes or [] if not s.get('excluded') and s.get('clip_start') is not None]
+        for (s, (st, _cap)) in zip(live, plan_review_clips(live)):
+            try:
+                (a, b) = (float(s['clip_start']), float(s['clip_end']))
+            except (KeyError, TypeError, ValueError):
+                continue
+            need = max(float(s.get('tts_duration') or 0), b - a)
+            out.append((min(a, st), max(b, st + need) + 0.5))
+        return out or None
     for s in scenes or []:
         try:
             (a, b) = (float(s['clip_start']), float(s['clip_end']))
@@ -937,12 +1036,18 @@ def _text_regions(run):
 
 
 def _bg_options(run):
-    bg = _bg_track(run)
+    segs = None
+    if _keep_bg(run) and not run.sep and _ranged_sep(run):
+        run.sep['ranged'] = True                 # chạy tiếp từ checkpoint / vừa bật giữ nhạc nền ở Hậu kỳ
+    if run.sep.get('ranged') and _keep_bg(run):
+        (bg, segs) = _bg_track_ranged(run)
+    else:
+        bg = _bg_track(run)
     if not bg:
         return {}
     vol = _bg_volume(run)
     run.log(f'   Giữ nhạc nền & tiếng động gốc (đã tách giọng) · mức {int(vol * 100)}%', 'info')
-    return {'bg_audio': bg, 'bg_volume': vol}
+    return {'bg_audio': bg, 'bg_volume': vol, **({'bg_segs': segs} if segs is not None else {})}
 
 
 def _render(run, out_path):

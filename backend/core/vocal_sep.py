@@ -335,3 +335,85 @@ def separate(media, out_dir=None, log=print, progress=None, should_stop=None):
     log(f'   [OK] Tách giọng xong bằng {how} sau {took:.0f}s' + (f' (nhanh gấp {dur / max(took, 1e-3):.1f} lần thời lượng)' if dur else ''))
     _trim_cache(d)
     return (vp, mp_out)
+
+
+# ───────────────────────── tách theo đoạn (Review phim dài) ─────────────────────────
+RANGE_GAP = 1.0           # giây lặng chèn giữa 2 đoạn khi ghép → model không "nghe lẫn" đuôi đoạn này sang đầu đoạn sau
+
+
+def merge_ranges(ranges, pad=1.0, join=4.0):
+    """[(a, b)] giây trên phim → gộp đoạn chồng / sát nhau (≤ join giây), nới mỗi đầu pad giây."""
+    out = []
+    for (a, b) in sorted((max(0.0, float(a) - pad), float(b) + pad) for (a, b) in ranges if float(b) > float(a)):
+        if out and a <= out[-1][1] + join:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(round(a, 3), round(b, 3)) for (a, b) in out]
+
+
+def separate_ranges(media, ranges, log=print, progress=None, should_stop=None):
+    """Chỉ tách các đoạn phim được dùng (Review: cảnh nào dùng đoạn nào) thay vì cả phim — phim 2 tiếng làm review 10 phút
+    nhanh gấp ~10 lần, ít RAM (trước đọc cả tiếng phim vào bộ nhớ). → (music_path, segs) với segs = [(a, b, offset)]:
+    đoạn [a, b] giây trên phim nằm ở `offset` giây trong music_path; (None, []) nếu không tách được."""
+    import soundfile as sf
+    from core.utils import FFMPEG_EXE, _HIDE
+    rs = merge_ranges(ranges)
+    if not rs:
+        return (None, [])
+    key = hashlib.sha1(json.dumps(rs).encode()).hexdigest()[:12]
+    d = os.path.join(_cache_dir(media), f'r_{key}')
+    (mix_p, vp, mp_out, meta) = (os.path.join(d, 'mix.flac'), os.path.join(d, 'vocals.flac'), os.path.join(d, 'music.flac'), os.path.join(d, 'done.json'))
+    if os.path.isfile(meta) and os.path.isfile(mp_out):
+        with open(meta, encoding='utf-8') as f:
+            segs = [tuple(x) for x in json.load(f)['segs']]
+        log('   Tách giọng: dùng lại kết quả đã tách trước đó.')
+        if progress:
+            progress(100)
+        return (mp_out, segs)
+    if not ensure_model(log):
+        return (None, [])
+    os.makedirs(d, exist_ok=True)
+    total = sum(b - a for (a, b) in rs)
+    log(f'   Tách giọng chỉ {len(rs)} đoạn được dùng ({total / 60:.1f} phút) thay vì cả phim')
+    segs = []
+    gap = np.zeros((int(RANGE_GAP * SR), 2), np.float32)
+    with sf.SoundFile(mix_p, 'w', SR, 2, format='FLAC', subtype='PCM_16') as w:
+        pos = 0.0
+        for (a, b) in rs:
+            if should_stop and should_stop():
+                raise RuntimeError('Đã huỷ')
+            r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-ss', f'{a:.3f}', '-t', f'{b - a:.3f}', '-i', media, '-vn', '-ac', '2',
+                                '-ar', str(SR), '-f', 'f32le', '-'], capture_output=True, creationflags=_HIDE)
+            x = np.frombuffer(r.stdout, dtype=np.float32).reshape(-1, 2) if r.returncode == 0 else np.zeros((0, 2), np.float32)
+            segs.append((a, a + len(x) / SR, round(pos, 4)))
+            w.write(x)
+            w.write(gap)
+            pos += len(x) / SR + RANGE_GAP
+    t0 = time.time()
+    ok = False
+    how = 'CPU'
+    if _gpu_enabled() and _GPU_BAD.get('until', 0) < time.time():
+        ok = _run_gpu(mix_p, vp, mp_out, log, progress, should_stop)
+        how = 'GPU' if ok else how
+    if not ok:
+        ok = _run_cpu(mix_p, vp, mp_out, progress, should_stop)
+    if not ok:
+        return (None, [])
+    with open(meta, 'w', encoding='utf-8') as f:
+        json.dump({'source': media, 'model': MODEL_NAME, 'ranges': rs, 'segs': segs, 'took': round(time.time() - t0, 1), 'device': how}, f)
+    try:
+        os.remove(mix_p)
+    except OSError:
+        pass
+    log(f'   [OK] Tách giọng {total / 60:.1f} phút phim bằng {how} sau {time.time() - t0:.0f}s')
+    _trim_cache(_cache_dir(media))
+    return (mp_out, segs)
+
+
+def locate(segs, start, length):
+    """Đoạn [start, start+length] giây trên phim nằm trọn trong đoạn đã tách nào → giây tương ứng trong file nhạc, hoặc None."""
+    for (a, b, off) in segs or []:
+        if a - 0.01 <= start and start + length <= b + 0.05:
+            return off + (start - a)
+    return None

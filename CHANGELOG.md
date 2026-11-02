@@ -12,6 +12,19 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.1] - 2026-11-02
+
+### Fixed
+- **Review: hết đứng hình & tắt nhạc giữa cảnh**: hai cảnh nằm sát nhau trong phim trước làm cảnh trước chiếu chậm rồi
+  ĐỨNG HÌNH, còn nhạc nền / tiếng gốc TẮT HẲN tới hết câu (đo trên 100s video: 12s đứng hình, 15s mất nhạc). Giờ cảnh
+  sau tự lùi điểm bắt đầu (≤ 20s) cho hình chạy liền, nhạc chạy đủ suốt cảnh (đo lại: 0s mất nhạc, không đứng hình).
+- **Review: chỗ nối cảnh mượt hơn**: nhạc nền / tiếng gốc mờ vào – mờ ra rất ngắn ở mỗi chỗ nối, hết tiếng "bụp".
+
+### Changed
+- **Review phim dài tách nhạc nền nhanh gấp nhiều lần**: phim trên 15 phút chỉ tách đúng các đoạn sẽ dùng (bắt đầu ngay
+  khi có kịch bản, chạy song song lúc tạo giọng) thay vì cả phim — vd 2 phút được dùng trong phim 15 phút: 46 giây;
+  phim 2 tiếng làm review 10 phút nhanh ~10 lần, đỡ ~2 GB RAM.
+
 ## [2.15.0] - 2026-11-02
 
 ### Added
@@ -497,7 +510,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...HEAD
+[2.15.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...v2.14.0
 [2.13.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.12.0...v2.13.0

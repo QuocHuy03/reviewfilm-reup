@@ -529,6 +529,42 @@ def reup_fit(src, room, tts):
     return (room, max(room * pts, voice), pts, at)
 
 
+REVIEW_MAX_SHIFT = 20.0     # giây tối đa 1 cảnh Review được lệch khỏi chỗ AI chọn (lùi cho khỏi đè hình cảnh trước)
+
+
+def plan_review_clips(scenes, video_dur=0.0, tail=0.12, max_shift=REVIEW_MAX_SHIFT):
+    """Review: đoạn hình gốc cho từng cảnh → [(clip_start, review_cap | None)] theo đúng thứ tự `scenes`.
+    Mỗi cảnh cần hình dài bằng lời đọc (+ tail). Hai cảnh sát nhau trong phim (cảnh trước chưa đọc xong đã tới chỗ cảnh sau
+    bắt đầu): LÙI điểm bắt đầu cảnh sau tới chỗ cảnh trước hết → hình chạy liền, không lặp, không đứng hình. Mỗi cảnh lệch
+    khỏi chỗ AI chọn tối đa max_shift giây (cảnh dày đặc thì độ lệch không dồn mãi); vượt mức mới dùng review_cap như cũ
+    (cảnh trước chiếu chậm / giữ khung cuối)."""
+    items = []
+    for (i, s) in enumerate(scenes):
+        try:
+            st = float(s['clip_start'])
+        except (KeyError, TypeError, ValueError):
+            st = 0.0
+        need = float(s.get('tts_duration') or (float(s.get('clip_end', st)) - st) or 0) + tail
+        items.append([i, st, need])
+    order = sorted(items, key=lambda x: x[1])
+    last_end = None
+    for it in order:
+        (_, st, need) = it
+        if last_end is not None and st < last_end <= it[1] + max_shift:
+            st = last_end
+        if video_dur and st + need > video_dur:                      # sát cuối phim: dời lên sớm hơn cho đủ hình (không đè cảnh trước)
+            st = min(st, max(video_dur - need, last_end or 0.0, 0.0))
+        it[1] = round(st, 3)
+        last_end = max(last_end or 0.0, st + need)
+    starts = sorted(x[1] for x in items)
+    out = {}
+    for (i, st, need) in items:
+        later = [x for x in starts if x > st + 0.05]
+        nxt = min(later) if later else None
+        out[i] = (st, round(nxt - st, 3) if nxt is not None and nxt < st + need else None)
+    return [out[i] for i in range(len(items))]
+
+
 def build_review_video(scenes, source_video, output_path, temp_dir, target_resolution='1920x1080', fps=30, original_volume=0.08, burn_subtitles=True, bgm_path='', bgm_volume=0.05, log_fn=print, is_reup=False, remove_old_sub=False, sub_cover_height=18, mirror_video=False, speed_up_video=False, video_speed=1.0, audio_ducking=True, watermark_path='', intro_path='', outro_path='', ai_sub_box=None, ai_logo_box=None, remove_old_logo=False, manual_logo_corner='Trên-Phải', manual_logo_size=15, watermark_corner='Trên-Phải', watermark_size_pct=14, watermark_margin_x_pct=2.0, watermark_margin_y_pct=2.0, watermark_opacity=0.92, blur_boxes=None, music_clips=None, mute_music=False, mute_sfx=False, **kwargs):
     if not scenes:
         log_fn('   [LỖI] Không có cảnh nào để dựng video')
@@ -619,16 +655,17 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                 _create_silent_wav(fallback_wav, s['clip_end'] - s['clip_start'])
                 s['tts_path'] = fallback_wav
                 s['tts_duration'] = s['clip_end'] - s['clip_start']
+        # Lịch hình các cảnh: cảnh sau lùi điểm bắt đầu cho khỏi đè hình cảnh trước (thay vì chiếu chậm / ĐỨNG HÌNH cảnh trước)
+        for (s, (st, cap)) in zip(scenes, plan_review_clips(scenes, video_dur_srt, _SRT_TAIL)):
+            s['clip_start'] = st
+            s['review_cap'] = cap
+        for (idx, s) in enumerate(scenes):
             tts_dur = s.get('tts_duration', s['clip_end'] - s['clip_start'])
             if video_dur_srt > 0:
                 max_available = max(0.5, video_dur_srt - s['clip_start'])
                 real_clip_dur = max(tts_dur, min(tts_dur + _SRT_TAIL, max_available))
             else:
                 real_clip_dur = tts_dur + _SRT_TAIL
-            # hình của cảnh không lấn sang điểm bắt đầu của cảnh khác phía sau (B11): lấn thì cảnh kia chiếu lại đúng
-            # đoạn đó → lặp hình. _process_one_scene đọc 'review_cap' (đoạn hình tối đa) → lời dư thì chậm hình / giữ khung
-            later = [float(x['clip_start']) for x in scenes if float(x['clip_start']) > float(s['clip_start']) + 0.05]
-            s['review_cap'] = round(min(later) - float(s['clip_start']), 3) if later else None
             s['out_start'] = accumulated_time
             s['out_end'] = accumulated_time + tts_dur
             accumulated_time += real_clip_dur
@@ -790,7 +827,7 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
         try:
             from core import sfx
             done = [scenes[k] for k in sorted(results)]
-            energies = sfx.scene_energy(kwargs.get('bg_audio') or source_video, done)
+            energies = sfx.scene_energy(source_video if kwargs.get('bg_segs') is not None else (kwargs.get('bg_audio') or source_video), done)
             fx = sfx.plan(done, energies, _safe_duration(concat_output), intro=_intro_used[0] / (_applied_speed or 1.0))
             if fx:
                 n_w = sum(1 for f in fx if f['kind'] == 'whoosh')
@@ -1046,6 +1083,16 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
     # (không còn giọng Trung lẫn vào). Đoạn để tiếng gốc 100% (khoảng trống không lời Việt) vẫn dùng tiếng gốc thật.
     bg_audio = kwargs.get('bg_audio') or ''
     use_bg = bool(bg_audio) and os.path.isfile(bg_audio) and float(orig_vol) < 0.999 and has_audio
+    bg_ss = clip_start                       # giây đọc trong file nhạc nền (= giây trên phim, trừ khi chỉ tách vài đoạn)
+    if use_bg and kwargs.get('bg_segs') is not None:
+        # Review phim dài: nhạc nền chỉ tách các đoạn được dùng, ghép liền trong 1 file → tra vị trí cảnh này trong file
+        from core.vocal_sep import locate
+        _need = tts_duration if not is_reup else clip_duration
+        _off = locate(kwargs['bg_segs'], clip_start, max(clip_duration, _need))
+        if _off is None:
+            use_bg = False                   # cảnh không nằm trong đoạn đã tách → tiếng gốc hạ nhỏ như cũ
+        else:
+            bg_ss = _off
     if use_bg:
         orig_vol = max(0.0, min(2.0, float(kwargs.get('bg_volume', 0.9))))
     mute_orig = float(orig_vol) <= 0.001 or not has_audio
@@ -1238,9 +1285,15 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                 cmd.append(watermark_path)
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     else:
-        # nhạc nền đã tách là input sau watermark (watermark luôn là [2:v] nếu có)
-        a_in = f'{3 if has_wm else 2}:a' if use_bg else '0:a'
-        af_src = f'''[{a_in}]volume={orig_vol}{atempo_filter},atrim=duration={tts_duration},asetpts=N/SR/TB[ao]'''
+        # Review: hình hết trước lời (chiếu chậm / giữ khung cuối) → nhạc nền / tiếng gốc vẫn chạy đủ suốt cảnh (trước: input
+        # bị cắt đúng độ dài đoạn hình → nhạc TẮT HẲN cuối cảnh, nghe đứt). Reup: tiếng đã co giãn theo hình (atempo) như cũ.
+        audio_len = tts_duration if (not is_reup and tts_duration > clip_duration + 0.01) else clip_duration
+        ext_audio = bg_audio if use_bg else (source_video if audio_len > clip_duration + 0.01 else '')
+        # nhạc nền / tiếng gốc dài hơn hình là input sau watermark (watermark luôn là [2:v] nếu có)
+        a_in = f'{3 if has_wm else 2}:a' if ext_audio else '0:a'
+        # Review nối các cảnh rời nhau trong phim → mờ vào / mờ ra rất ngắn ở 2 đầu: chỗ nối không "bụp", nhạc không nhảy cục
+        edge = (f',afade=t=in:d=0.04,afade=t=out:st={max(0.0, tts_duration - 0.06):.3f}:d=0.06' if not is_reup and tts_duration > 0.3 else '')
+        af_src = f'''[{a_in}]volume={orig_vol}{atempo_filter},atrim=duration={tts_duration},asetpts=N/SR/TB{edge}[ao]'''
         # tiếng gốc còn giọng → nén mạnh khi có lời Việt (không nghe 2 giọng chồng); nhạc nền đã tách → chỉ hạ nhẹ ~6dB
         # cho lời rõ mà nhạc vẫn liền mạch như phim lồng tiếng thật
         duck = 'threshold=-30dB:ratio=3:attack=40:release=500' if use_bg else 'threshold=-35dB:ratio=20:attack=50:release=400'
@@ -1250,8 +1303,8 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             if os.path.exists(watermark_path):
                 cmd.append('-i')
                 cmd.append(watermark_path)
-        if use_bg:
-            cmd += ['-ss', str(clip_start), '-t', str(clip_duration), '-i', bg_audio]
+        if ext_audio:
+            cmd += ['-ss', f'{bg_ss if use_bg else clip_start:.3f}', '-t', f'{audio_len:.3f}', '-i', ext_audio]
         cmd.extend(['-filter_complex', filter_complex, '-map', map_v, '-map', '[a]', '-t', str(tts_duration), *enc, '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', '-r', str(fps), out_path])
     r = run_subprocess(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
