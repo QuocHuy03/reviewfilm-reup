@@ -257,7 +257,7 @@ class CapCutClient:
         headers = base_headers(device_dict, body_text, appid=True)
         lower_headers = {k.lower(): v for k, v in headers.items()}
         headers["sign"] = self.extra_headers.get("sign") or make_sign_header(
-            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"]
+            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"], device_dict["pf"]
         )
         return url, self._headers(headers), body_text
 
@@ -321,7 +321,7 @@ class CapCutClient:
         headers = base_headers(device_dict, body_text, appid=False)
         lower_headers = {k.lower(): v for k, v in headers.items()}
         headers["sign"] = self.extra_headers.get("sign") or make_sign_header(
-            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"]
+            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"], device_dict["pf"]
         )
         return url, self._headers(headers), body_text
 
@@ -362,7 +362,7 @@ class CapCutClient:
         )
         lower_headers = {k.lower(): v for k, v in headers.items()}
         headers["sign"] = self.extra_headers.get("sign") or make_sign_header(
-            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"]
+            url, device_dict["appvr"], lower_headers["device-time"], device_dict["tdid"], device_dict["pf"]
         )
         return url, self._headers(headers), body_text
 

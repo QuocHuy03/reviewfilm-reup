@@ -39,6 +39,7 @@ class VideoJobRequest(SubtitleOptions):
     cover_style: Literal['clean', 'erase', 'blur', 'reflect'] = 'erase'     # che chữ: xoá nhẹ (delogo) | làm mờ | phản chiếu dải bên cạnh
     cover_quality: Literal['fast', 'clean'] = 'fast'               # Dịch phụ đề: 'fast' che đúng khung từng câu Trung lúc câu hiện
                                                                    # (1 lượt dựng) | 'clean' xoá sạch nét chữ từng khung (đẹp, rất chậm)
+    cover_tight: bool = True                                       # Review: chỉ che sát chữ, đúng lúc câu hiện — dò trong khung người vẽ
     auto_sub_box: bool = True                                      # AI tự căn vùng che phụ đề theo chỗ phụ đề cũ thật
     dub_voice: bool = False                                        # Dịch phụ đề: lồng tiếng Việt đúng thời gian câu thoại
     dub_orig_volume: int = Field(20, ge=0, le=100)                 # % âm lượng tiếng gốc khi có lời Việt
@@ -66,6 +67,7 @@ class VideoJobRequest(SubtitleOptions):
     auto_publish: bool = True      # xuất xong → AI viết bài đăng theo nền tảng + thumbnail
     # Thương hiệu & khung hình
     target_resolution: str = '1920x1080'
+    split_minutes: float = Field(0, ge=0, le=60)                   # Reup: chia video xuất thành các phần ~N phút (0 = không chia)
     watermark_path: str = ''
     watermark_corner: str = 'Trên-Phải'
     watermark_size_pct: float = Field(14, ge=3, le=40)

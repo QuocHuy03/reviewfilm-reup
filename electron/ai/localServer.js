@@ -59,29 +59,46 @@ const sendJson = (res, code, obj) => {
 
 const errStatus = (e) => (e?.kind === 'auth' ? 401 : e?.status >= 400 ? e.status : 502);
 
-async function runChat(model, prompt) {
+// Lượt treo không được giữ cả job: quá hạn thì báo lỗi để đổi engine / backend thử lại.
+const withDeadline = (p, ms) => {
+  if (!ms) return p;
+  let t;
+  const late = new Promise((_, rej) => {
+    t = setTimeout(() => rej(Object.assign(new Error(`AI không trả lời sau ${Math.round(ms / 1000)}s`), { kind: 'deadline' })), ms);
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(t));
+};
+
+// ChatGPT vừa treo thì lượt treo còn giữ hàng đợi: tạm đi thẳng Gemini, khỏi lượt nào cũng chờ hết hạn.
+const GPT_REST_MS = 5 * 60 * 1000;
+let gptRestUntil = 0;
+
+async function runChat(model, prompt, timeoutMs = null) {
   const m = String(model || 'auto').toLowerCase();
   const ready = readiness();
   const wantGemini = m.startsWith('gemini');
   const wantGpt = m.startsWith('gpt') || m.startsWith('chatgpt');
 
   if (wantGemini) {
-    const r = await geminiChat(prompt);
+    const r = await geminiChat(prompt, { timeout: timeoutMs });
     return { text: r.content, model: 'gemini-web' };
   }
   const gptModel = m.startsWith('gpt') ? model : undefined;
-  if (wantGpt || ready.chatgpt) {
+  // "auto" có cả 2 engine: chia hạn chờ, ChatGPT treo vẫn còn thời gian cho Gemini trong cùng lượt
+  const both = timeoutMs && !wantGpt && ready.chatgpt && ready.gemini;
+  if (wantGpt || (ready.chatgpt && !(ready.gemini && Date.now() < gptRestUntil))) {
     try {
-      const r = await chatgptChat(prompt, { model: gptModel });
+      const r = await withDeadline(chatgptChat(prompt, { model: gptModel }), both ? timeoutMs * 0.6 : timeoutMs);
       return { text: r.message, model: r.model || 'chatgpt-web', finish: r.finish };
     } catch (e) {
       // "auto": ChatGPT hỏng mà có Gemini thì đổi engine thay vì làm hỏng cả job.
+      if (e?.kind === 'deadline') gptRestUntil = Date.now() + GPT_REST_MS;
       if (wantGpt || !ready.gemini) throw e;
       console.warn(`[ai-local] ChatGPT lỗi (${e?.message || e}) → chuyển sang Gemini.`);
     }
   }
   if (ready.gemini) {
-    const r = await geminiChat(prompt);
+    const r = await geminiChat(prompt, { timeout: both ? timeoutMs * 0.4 : timeoutMs });
     return { text: r.content, model: 'gemini-web' };
   }
   throw Object.assign(new Error('Chưa đăng nhập tài khoản ChatGPT hoặc Gemini (Cài đặt → Tài khoản AI).'), { kind: 'auth' });
@@ -101,7 +118,7 @@ async function handle(req, res) {
     const prompt = messagesToPrompt(body?.messages);
     if (!prompt.trim()) return sendJson(res, 400, { error: { message: 'messages rỗng.' } });
     try {
-      const r = await runChat(body?.model, prompt);
+      const r = await runChat(body?.model, prompt, Number(body?.timeout_ms) || null);
       return sendJson(res, 200, completionOf(r.text || '', r.model, r.finish));
     } catch (e) {
       return sendJson(res, errStatus(e), { error: { message: e?.message || String(e), type: e?.kind || 'unknown' } });

@@ -146,7 +146,8 @@ function ExtractTab({ send }: { send: (h: Omit<Handoff, "n">) => void }) {
   useEffect(() => {
     if (!settings) return
     const device = system && !system.gpu && settings.device.startsWith("GPU") ? "CPU" : settings.device
-    setCfg((c) => ({ ...c, whisper_model: settings.whisper_model, device, out_dir: settings.output_dir }))
+    const aiReady = Boolean(system?.web_ai?.chatgpt || system?.web_ai?.gemini)
+    setCfg((c) => ({ ...c, whisper_model: settings.whisper_model, device, out_dir: settings.output_dir, ai_translate: aiReady }))
   }, [settings, system])
   if (!options) return null
   const set = <K extends keyof typeof cfg>(k: K, v: (typeof cfg)[K]) => setCfg((c) => ({ ...c, [k]: v }))

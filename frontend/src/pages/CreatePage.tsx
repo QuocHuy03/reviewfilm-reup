@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, SlidersHorizontal, Captions, Clapperboard, FileVideo, FolderOpen, FolderOutput, Languages, ListPlus, Loader2, Mic2, Rocket, Settings2, Sparkles, Wand2 } from "lucide-react"
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { Field, PathInput, Section, Segmented, ToggleRow } from "@/components/common"
@@ -60,9 +60,9 @@ const DEFAULT_CFG = {
   voice: "Edge TTS — Nữ Bắc (miễn phí)", target_lang: "vi", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
   sub_source: "Theo lời đọc AI (khớp voiceover)", burn_subtitles: true, sub_margin_pct: 6,
-  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_style: "blur" as "clean" | "erase" | "blur" | "reflect", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
+  remove_old_sub: false, sub_in_cover: true, cover_fit_text: false, auto_sub_box: true, cover_tight: true, cover_style: "blur" as "clean" | "erase" | "blur" | "reflect", cover_quality: "fast" as "fast" | "clean", dub_voice: true, hardsub_source: true, dub_only_subbed: true, dub_separate: true, dub_orig_volume: 20, dub_by_gender: false, voice_female: "", cover_boxes: [[...DEFAULT_SUB_BOX]] as number[][], sub_custom: {} as Partial<SubStyle>,
   script_edit: true, scene_preview: true, out_dir: "", bilingual: false, extra_aspect: "",
-  auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080",
+  auto_post: true, auto_fix: true, auto_publish: true, target_resolution: "1920x1080", split_minutes: 0,
   watermark_path: "", watermark_corner: "Trên-Phải", watermark_size_pct: 14, watermark_opacity: 0.92, watermark_text: "", watermark_motion: "static" as "static" | "hop" | "drift" | "bounce", frame_bg: "blur" as "blur" | "black", intro_path: "", outro_path: "",
   crop_on: false, crop_box: [0, 0, 100, 84] as number[], crop_fill: true, ...DEFAULT_TEXT_COVER,
   color_preset: "none", ken_burns: false, ken_burns_zoom: 0.08, vignette: false, transition: "none", transition_duration: 0.5,
@@ -99,15 +99,34 @@ const TABS: { value: Tab; label: string; icon: ReactNode; desc: string }[] = [
 const VIETSUB_TABS: Tab[] = ["script", "voice", "subs", "output"]
 
 const CREATE_DRAFT_KEY = "rf.create.draft.v1"
-type CreateDraft = { mode: Mode; source: Source; inp: string; cfg: Partial<typeof DEFAULT_CFG>; fromJob?: { id: string; title: string } }
+type ModeCfgs = Partial<Record<Mode, Partial<typeof DEFAULT_CFG>>>
+type CreateDraft = { mode: Mode; source: Source; inp: string; cfg: Partial<typeof DEFAULT_CFG>; fromJob?: { id: string; title: string }
+  /** cấu hình đã chỉnh của từng chế độ — Review, Dịch & Reup, Dịch phụ đề riêng nhau, không lây sang nhau */
+  byMode?: ModeCfgs }
 function loadCreateDraft(): CreateDraft | null {
   try { const raw = localStorage.getItem(CREATE_DRAFT_KEY); return raw ? (JSON.parse(raw) as CreateDraft) : null } catch { return null }
+}
+
+/** Lần đầu vào 1 chế độ: chỉ lấy các lựa chọn chung của máy / kênh làm điểm khởi đầu, còn lại mặc định của chế độ đó. */
+const SEED_KEYS = ["out_dir", "source_lang", "whisper_model", "device", "voice", "sub_style", "sub_layout", "sub_custom"] as const
+function cfgForMode(mode: Mode, cur: Pick<CreateDraft, "mode" | "cfg" | "byMode"> | null): Partial<typeof DEFAULT_CFG> {
+  if (cur?.mode === mode) return cur.cfg              // đang mở đúng chế độ: cấu hình đang chỉnh mới nhất
+  const own = cur?.byMode?.[mode]
+  if (own) return own
+  const seed: Record<string, unknown> = {}
+  for (const k of SEED_KEYS) if (cur?.cfg?.[k] !== undefined) seed[k] = cur.cfg[k]
+  return modeCfg(mode, seed as Partial<typeof DEFAULT_CFG>)
+}
+/** Bản nháp đổi sang chế độ khác: cất cấu hình chế độ đang mở, lấy cấu hình riêng của chế độ mới. */
+function draftInMode(cur: CreateDraft | null, mode: Mode): CreateDraft {
+  const base: CreateDraft = cur ?? { mode, source: "file", inp: "", cfg: {} }
+  return { ...base, mode, cfg: cfgForMode(mode, cur), byMode: cur ? { ...cur.byMode, [cur.mode]: cur.cfg } : {} }
 }
 
 /** Điền sẵn video vào trang Tạo video (giữ nguyên cấu hình đang có) — dùng khi bấm "Tạo Review" ở trang Tải video. */
 export function openInCreate(path: string, mode: Mode) {
   const cur = loadCreateDraft()
-  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { cfg: {} }), mode, cfg: modeCfg(mode, cur?.cfg), source: "file", inp: path, fromJob: undefined })) } catch { /* bị chặn */ }
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...draftInMode(cur, mode), source: "file", inp: path, fromJob: undefined })) } catch { /* bị chặn */ }
 }
 
 /** Chuyển sang Dịch phụ đề: phụ đề Việt phải đè lên phụ đề cũ → bật sẵn che phụ đề + phụ đề nằm giữa vùng che (như bấm tab trên trang). */
@@ -128,8 +147,9 @@ export function reopenJobInCreate(job: JobDetail) {
   const raw = String(c.inp ?? "")
   const inp = /^https?:\/\//i.test(raw) ? String(job.result.video_path ?? "") : raw
   const mode: Mode = job.kind === "reup" || job.kind === "vietsub" ? job.kind : "review"
+  const cur = loadCreateDraft()
   const draft: CreateDraft = { mode, source: "file", inp, cfg: cfg as Partial<typeof DEFAULT_CFG>,
-    fromJob: { id: job.id, title: job.title } }
+    fromJob: { id: job.id, title: job.title }, byMode: cur ? { ...cur.byMode, [cur.mode]: cur.cfg } : {} }
   try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify(draft)) } catch { /* bị chặn */ }
 }
 
@@ -144,7 +164,7 @@ export function openBatchInCreate(paths: string[]) {
 /** Mở trang Tạo video ở chế độ cho trước (Review / Dịch & Reup), giữ nguyên các cấu hình khác. */
 export function setCreateMode(mode: Mode) {
   const cur = loadCreateDraft()
-  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ ...(cur ?? { source: "file", inp: "", cfg: {} }), mode, cfg: modeCfg(mode, cur?.cfg) })) } catch { /* bị chặn */ }
+  try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify(draftInMode(cur, mode))) } catch { /* bị chặn */ }
 }
 
 export function CreatePage() {
@@ -180,9 +200,10 @@ export function CreatePage() {
     } catch { /* bị chặn */ }
     return c
   })
+  const byMode = useRef<ModeCfgs>(saved?.byMode ?? {})
   // Tự lưu form — trang này bị dựng lại mỗi lần chuyển trang
   useEffect(() => {
-    const t = setTimeout(() => { try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ mode, source, inp, cfg, fromJob })) } catch { /* bị chặn / đầy */ } }, 400)
+    const t = setTimeout(() => { try { localStorage.setItem(CREATE_DRAFT_KEY, JSON.stringify({ mode, source, inp, cfg, fromJob, byMode: byMode.current })) } catch { /* bị chặn / đầy */ } }, 400)
     return () => clearTimeout(t)
   }, [mode, source, inp, cfg, fromJob])
   const [starting, setStarting] = useState(false)
@@ -329,23 +350,27 @@ export function CreatePage() {
           )}
           <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-1.5">
             <Segmented value={mode} onChange={(m) => {
+              if (m === mode) return
+              // mỗi chế độ giữ cấu hình riêng: cất cái đang mở, lấy cái của chế độ mới (không lây bật / tắt sang nhau)
+              const next = cfgForMode(m, { mode, cfg, byMode: byMode.current })
+              byMode.current = { ...byMode.current, [mode]: cfg }
               setMode(m)
-              // Dịch phụ đề: phụ đề Việt phải đè lên phụ đề cũ → bật sẵn che phụ đề + phụ đề nằm giữa vùng che
-              if (m === "vietsub") setCfg((c) => ({ ...c, remove_old_sub: true, sub_in_cover: true, burn_subtitles: true }))
+              setCfg({ ...DEFAULT_CFG, ...next })
               if (m === "vietsub" && !VIETSUB_TABS.includes(tab)) setTab("script")
             }} items={[
               { value: "review", label: "Tạo Review", icon: <Wand2 /> },
               { value: "reup", label: "Dịch & Reup", icon: <Languages /> },
-              { value: "vietsub", label: "Dịch phụ đề", icon: <Captions /> },
+              { value: "vietsub", label: "Lồng tiếng", icon: <Captions /> },
             ]} />
             <div className="ml-auto pr-1">
-              <PresetBar bare mode={mode} cfg={cfg} onApply={(m, c) => { setMode(m === "reup" || m === "vietsub" ? m : "review"); setCfg({ ...DEFAULT_CFG, ...c }) }} />
+              <PresetBar bare mode={mode} cfg={cfg} onApply={(c) => setCfg({ ...DEFAULT_CFG, ...c })} />
             </div>
           </div>
 
           <Section title="Video nguồn" icon={<FileVideo />}
             desc={mode === "review" ? "Nhận dạng giọng nói → AI xem phim & viết kịch bản → lồng tiếng → dựng video"
-              : mode === "vietsub" ? "Nhận dạng giọng nói → dịch tiếng Việt → che phụ đề cũ & ghép phụ đề Việt — giữ nguyên tiếng gốc"
+              : mode === "vietsub" ? (cfg.dub_voice ? "Đọc lời gốc → phân vai → dịch theo từng nhân vật → lồng tiếng đúng lúc câu gốc → che phụ đề cũ & ghép phụ đề Việt"
+                : "Đọc lời gốc → dịch → che phụ đề cũ & ghép phụ đề Việt — chỉ phụ đề, giữ nguyên tiếng gốc")
               : "Nhận dạng giọng nói → dịch → lồng tiếng → dựng video"}
             action={<Segmented size="sm" value={source} onChange={(v) => { setSource(v); setInp("") }} items={[
               { value: "file", label: "File", icon: <FileVideo /> },
@@ -401,8 +426,7 @@ export function CreatePage() {
               <ToggleRow label="Lồng tiếng Việt" checked={cfg.dub_voice} onChange={(v) => set("dub_voice", v)}
                 desc={cfg.dub_voice ? "Giọng & tuỳ chọn ở tab Lồng tiếng bên dưới." : "Tắt: chỉ ghép phụ đề Việt, giữ nguyên tiếng gốc."} />
             )}
-            <TextCoverOptions value={cfg} onChange={(p) => setCfg((c) => ({ ...c, ...p }))}
-              minutes={mode === "review" ? reviewMins || undefined : undefined} reup={mode === "reup"} />
+            {mode !== "review" && <TextCoverOptions value={cfg} onChange={(p) => setCfg((c) => ({ ...c, ...p }))} reup={mode === "reup"} />}
           </Section>
 
           {/* Các phần cấu hình gom thành tab — đỡ phải cuộn trang dài */}
@@ -571,16 +595,12 @@ export function CreatePage() {
                 </Field>
               ) : (
               <Field label="Kiểu che chữ cũ / logo">
-                <Segmented size="sm" value={cfg.cover_style} onChange={(v) => set("cover_style", v)}
-                  items={[{ value: "blur", label: "Làm mờ (như Review)" }, { value: "erase", label: "Xoá nhẹ" }, { value: "reflect", label: "Phản chiếu" }, { value: "clean", label: "Xoá sạch nét chữ" }]} />
+                <Segmented size="sm" value={cfg.cover_style === "reflect" ? "reflect" : "erase"} onChange={(v) => set("cover_style", v)}
+                  items={[{ value: "erase", label: "Làm mờ mềm (như Lồng tiếng)" }, { value: "reflect", label: "Phản chiếu" }]} />
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {cfg.cover_style === "clean"
-                    ? "Xoá sạch nét chữ chỉ có ở chế độ Dịch phụ đề — chế độ này sẽ dùng Xoá nhẹ."
-                    : cfg.cover_style === "erase"
-                    ? "Lấp cả vùng chữ bằng hình xung quanh như xoá logo — nhanh, ít vết; chỉ che lúc có chữ."
-                    : cfg.cover_style === "reflect"
-                    ? "Lấy dải hình ngay trên vùng che, lật ngược rồi phủ lên — nền trơn (trời, tường, sàn) trông như không có chữ. Chữ Trung AI quét trong cảnh vẫn dùng Xoá nhẹ."
-                    : "Như chế độ Review phim: làm mờ cố định cả dải phụ đề cũ (và vùng logo) suốt video, phụ đề Việt nằm trên dải mờ — đều, nhanh, chắc chắn không lộ chữ cũ."}
+                  {cfg.cover_style === "reflect"
+                    ? "Lấy dải hình ngay trên vùng che, lật ngược rồi phủ lên — hợp nền trơn (trời, tường, sàn)."
+                    : "Lấp vùng chữ bằng hình xung quanh rồi mờ nhẹ, mép tan dần vào hình — giống hệt bên Dịch phụ đề."}{mode === "review" && " Bạn tự vẽ vùng che, AI không tự che."}
                 </p>
               </Field>
               )}
@@ -592,7 +612,7 @@ export function CreatePage() {
                     boxes={cfg.cover_boxes} onChange={(v) => set("cover_boxes", v)}
                     subText={cfg.burn_subtitles && cfg.sub_in_cover ? "Phụ đề mới nằm giữa vùng che" : undefined}
                     fitText={mode === "vietsub" && cfg.sub_in_cover && cfg.cover_fit_text}
-                    onAutoDetect={isLocalFile ? async () => {
+                    onAutoDetect={isLocalFile && mode !== "review" ? async () => {
                       try {
                         const r = await api.detectSubBox({ inp: inp.trim(), target_resolution: cfg.target_resolution, crop_box: cfg.crop_on ? cfg.crop_box : [], crop_fill: cfg.crop_fill })
                         if (!r.box) { toast.info("Không thấy phụ đề cứng trong video", { description: `Đã xem 24 khung hình (${r.seconds}s)` }); return null }
@@ -603,6 +623,10 @@ export function CreatePage() {
                   {cfg.burn_subtitles && (
                     <ToggleRow label="Phụ đề mới nằm giữa vùng che" checked={cfg.sub_in_cover} onChange={(v) => set("sub_in_cover", v)}
                       desc="Chữ tiếng Việt đè đúng chỗ phụ đề cũ — kéo vùng che tới đâu, phụ đề theo tới đó (1 hay 2 dòng đều căn giữa)." />
+                  )}
+                  {mode !== "vietsub" && (
+                    <ToggleRow label="Chỉ che sát chữ, đúng lúc có chữ" checked={cfg.cover_tight} onChange={(v) => set("cover_tight", v)}
+                      desc={cfg.cover_tight ? "App chỉ đọc chữ BÊN TRONG khung bạn vẽ, che đúng bề ngang từng câu, lúc câu hiện. Khung logo vẫn che suốt. Không đọc được thì che cả khung." : "Tắt: che nguyên khung bạn vẽ suốt video, app không đọc chữ."} />
                   )}
                   {mode === "vietsub" && (
                     <ToggleRow label="AI tự căn vùng che khi dựng" checked={cfg.auto_sub_box} onChange={(v) => set("auto_sub_box", v)}
@@ -688,6 +712,18 @@ export function CreatePage() {
                     <ToggleRow label="Nền mờ thay viền đen" checked={cfg.frame_bg !== "black"} onChange={(v) => set("frame_bg", v ? "blur" : "black")}
                       desc="Phần trên / dưới là chính video phóng to làm mờ (kiểu CapCut, TikTok) thay vì viền đen." />
                   )}
+              </>)}
+              {mode === "reup" && (<>
+                <ToggleRow label="Video có phụ đề Trung in sẵn" checked={!!cfg.hardsub_source} onChange={(v) => set("hardsub_source", v)}
+                  desc="Đọc thẳng phụ đề trên hình làm lời gốc: đúng chữ, đúng giờ hơn nghe giọng. Không thấy phụ đề thì tự chuyển sang nghe giọng." />
+                {!cfg.target_resolution.endsWith("1920") && (
+                  <ToggleRow label="Xuất thêm bản dọc 9:16" checked={!!cfg.extra_aspect} onChange={(v) => set("extra_aspect", v ? "9:16" : "")}
+                    desc="Thêm 1 file dọc nền mờ cho TikTok / Shorts, làm ngay sau khi dựng xong." />
+                )}
+                <Field label="Chia thành nhiều phần" hint="Cắt ở khoảng lặng giữa 2 câu, không cắt ngang lời. Có bản dọc thì chia cả bản dọc.">
+                  <Segmented size="sm" value={String(cfg.split_minutes)} onChange={(v) => set("split_minutes", Number(v))}
+                    items={[{ value: "0", label: "Không chia" }, { value: "1", label: "~1 phút" }, { value: "3", label: "~3 phút" }, { value: "10", label: "~10 phút" }]} />
+                </Field>
               </>)}
               <ToggleRow label="Chuẩn âm lượng YouTube / TikTok" checked={cfg.loudness !== "off"} onChange={(v) => set("loudness", v ? "youtube" : "off")}
                 desc="Đưa độ to video xuất về -14 LUFS như nền tảng khuyến nghị — không bị nhỏ / to bất thường so với video khác." />

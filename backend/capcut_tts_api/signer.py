@@ -138,13 +138,14 @@ def make_tts_payload_sign(
     return rsa_encrypt_pkcs1v15(sign_input, pem=pem)
 
 
-def make_sign_header(url: str, appvr: str, device_time: str, tdid: str) -> str:
-    """Return a candidate HTTP sign header used by this client implementation.
+def make_sign_header(url: str, appvr: str, device_time: str, tdid: str, pf: str = "4") -> str:
+    """Return the HTTP sign header for the common-task route.
 
-    This formula is confirmed for the working common-task compatibility route.
+    `pf` must match the device profile's platform code (windows=4, mac=3) —
+    it is part of the signed string, so a mismatch is rejected server-side.
     """
     path = url.split("?", 1)[0]
-    sign_str = f"9e2c|{path[-7:]}|3|{appvr}|{device_time}|{tdid}|11ac"
+    sign_str = f"9e2c|{path[-7:]}|{pf}|{appvr}|{device_time}|{tdid}|11ac"
     return hashlib.md5(sign_str.encode("utf-8")).hexdigest()
 
 

@@ -44,3 +44,17 @@ def test_music_keeps_playing_when_picture_runs_out(tmp):
     r = subprocess.run([FFMPEG_EXE, '-v', 'info', '-i', out, '-af', 'silencedetect=n=-40dB:d=0.3', '-f', 'null', '-'],
                        capture_output=True, text=True, encoding='utf-8', errors='replace')
     assert not re.findall(r'silence_start: ([\d.]+)', r.stderr), 'tiếng gốc / nhạc nền bị tắt giữa cảnh'
+
+
+def test_split_points_land_between_sentences():
+    from app.features.jobs.pipelines import split_points
+    scenes = [{'out_end': float(t)} for t in (20, 37, 58, 81, 100, 123, 150, 171)]
+    cuts = split_points(scenes, 180.0, 60)
+    assert cuts == [58.05, 123.05], 'cắt ở sát cuối câu gần mốc 1 phần nhất'
+    assert split_points(scenes, 75.0, 60) == [], 'phần cuối quá ngắn thì không chia'
+
+
+def test_reup_gets_soft_cover():
+    from app.features.jobs.pipelines import _render_options
+    cfg = {'mode': 'reup', 'remove_old_sub': True, 'cover_boxes': [[10, 80, 80, 10]], 'cover_style': 'blur'}
+    assert _render_options(cfg, {})['box_style'] == 'soft'

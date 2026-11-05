@@ -52,6 +52,13 @@ Không có cảnh nào cần sửa → {{"edits": []}}
 # KỊCH BẢN
 {scenes}"""
 
+# Reup / lồng tiếng là BẢN DỊCH: câu ngắn hơn hình thì phần còn lại là tiếng phim gốc, thêm chữ cho đủ hình tức là bịa lời nhân vật.
+DUB_RULE = """
+# ĐÂY LÀ BẢN DỊCH LỜI THOẠI (ưu tiên hơn mọi quy tắc trên)
+Mọi cảnh gửi lên đều DÀI HƠN hình. Chỉ RÚT GỌN cho đủ số {unit}, KHÔNG thêm ý, KHÔNG diễn đạt lại thành ý khác, KHÔNG thêm chi tiết.
+Phải giữ đúng nghĩa "goc" (lời gốc): đúng người, đúng việc, đúng tên riêng và xưng hô. Không rút gọn được mà vẫn đúng nghĩa thì giữ nguyên câu.
+"""
+
 RECHECK_PROMPT = """Các cảnh dưới đây VẪN SAI ĐỘ DÀI so với đoạn hình. Viết lại lời đọc của TỪNG cảnh để số {unit}
 nằm trong khoảng tu_muc_tieu ± {tol}% — giữ ý chính, giọng văn tự nhiên, không bịa tình tiết, không ký hiệu.{lang_rule_inline}
 Chỉ trả về JSON: {{"edits": [{{"id": <số>, "voiceover": "<lời mới>", "reason": "<ngắn>"}}]}}
@@ -171,8 +178,10 @@ def _extract_json(text):
     return None
 
 
-def _off_target(text, target, tol):
+def _off_target(text, target, tol, long_only=False):
     n = word_count(text)
+    if long_only:
+        return target > 0 and (n - target) / target > tol
     return target > 0 and abs(n - target) / target > tol
 
 
@@ -184,11 +193,17 @@ def suggest_edits(scenes, kind='review', instruction='', log_fn=print, wps=None,
         raise RuntimeError('Chưa đăng nhập tài khoản ChatGPT hoặc Gemini (Cài đặt → Tài khoản AI).')
     wps = wps or measure_wps(scenes, target_lang)
     rows = _scene_rows(scenes, wps, target_lang)
+    dub = kind != 'review' and not instruction.strip()   # người dùng tự gõ yêu cầu ở bước Xem trước → làm theo yêu cầu đó
+    if dub:                                      # chỉ gửi câu dài quá (bước dựng còn mượn khoảng lặng / đọc nhanh nhẹ được), kèm lời gốc
+        rows = [{**r, 'goc': str(scenes[r['id']].get('orig_text') or '')[:200]} for r in rows
+                if _off_target(r['voiceover'], r['tu_muc_tieu'], RECHECK_TOLERANCE, True)]
     if not rows:
         return []
-    off = sum(1 for r in rows if _off_target(r['voiceover'], r['tu_muc_tieu'], TOLERANCE))
+    off = sum(1 for r in rows if _off_target(r['voiceover'], r['tu_muc_tieu'], TOLERANCE, dub))
     log_fn(f'   [AI hậu kỳ] {len(rows)} cảnh, {off} cảnh lệch độ dài so với hình (giọng đọc ~{wps or units_per_sec(target_lang):.1f} {unit_name(target_lang)}/giây) — gửi AI rà...')
     extra = f'\n# YÊU CẦU THÊM CỦA NGƯỜI DÙNG (ưu tiên)\n{instruction.strip()}\n' if instruction.strip() else ''
+    if dub:
+        extra += DUB_RULE.format(unit=unit_name(target_lang))
     vi = _tl(target_lang) == 'vi'
     prompt = SYSTEM_PROMPT.format(kind='review phim' if kind == 'review' else 'dịch & lồng tiếng phim', wps=wps or units_per_sec(target_lang),
                                   tol=int(TOLERANCE * 100), extra=extra, scenes=json.dumps(rows, ensure_ascii=False, indent=0),
@@ -225,9 +240,9 @@ def suggest_edits(scenes, kind='review', instruction='', log_fn=print, wps=None,
         if e and e['exclude']:
             continue
         text = e['voiceover'] if e and 'voiceover' in e else r['voiceover']
-        if _off_target(text, r['tu_muc_tieu'], RECHECK_TOLERANCE):
+        if _off_target(text, r['tu_muc_tieu'], RECHECK_TOLERANCE, dub):
             retry.append({'id': r['id'], 'hinh': r['hinh'], 'tu_hien_tai': word_count(text), 'tu_muc_tieu': r['tu_muc_tieu'], 'voiceover': text})
-    if retry:
+    if retry and not dub:                        # bản dịch: AI giữ câu vì không gọn hơn được mà đúng nghĩa → không ép thêm
         log_fn(f'   [AI hậu kỳ] Kiểm tra lại: {len(retry)} cảnh vẫn lệch độ dài — sửa thêm 1 lượt...')
         data2 = _extract_json(web_llm.chat(RECHECK_PROMPT.format(tol=int(TOLERANCE * 100), unit=unit_name(target_lang),
                                                                   lang_rule_inline=lang_rule(target_lang, True),
@@ -246,7 +261,7 @@ def suggest_edits(scenes, kind='review', instruction='', log_fn=print, wps=None,
 
     still = [r['id'] + 1 for r in rows
              if not (edits.get(r['id']) or {}).get('exclude')
-             and _off_target((edits.get(r['id']) or {}).get('voiceover', r['voiceover']), r['tu_muc_tieu'], RECHECK_TOLERANCE)]
+             and _off_target((edits.get(r['id']) or {}).get('voiceover', r['voiceover']), r['tu_muc_tieu'], RECHECK_TOLERANCE, dub)]
     if still:
         log_fn(f'   [AI hậu kỳ] Còn {len(still)} cảnh lệch độ dài sau 2 lượt: {still[:10]} — bước căn hình sẽ bù phần còn lại.', 'warn')
     return [edits[k] for k in sorted(edits)]

@@ -53,8 +53,9 @@ def plan(qa, scenes, cfg):
         return by.get(cid, {}).get('data') or {}
 
     problems = {x['scene']: {'why': x['why'], 'fit': x['fit']} for x in data('sync').get('issues', [])}
-    # Lặp lời: viết lại khác đi, giữ độ dài hiện tại (gộp với lỗi độ dài nếu cùng cảnh)
-    for x in data('repeat').get('issues', []):
+    # Lặp lời: viết lại khác đi, giữ độ dài hiện tại (gộp với lỗi độ dài nếu cùng cảnh).
+    # Reup là bản dịch: nhân vật nói lặp thì dịch lặp — không viết lại lời thoại.
+    for x in [] if cfg.get('mode') == 'reup' else data('repeat').get('issues', []):
         i = x['scene']
         if i in problems:
             problems[i] = {**problems[i], 'why': problems[i]['why'] + '; ' + x['why'], 'ref': x['with']}

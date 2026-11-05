@@ -15,7 +15,7 @@ import type { Preset } from "@/lib/types"
  * khung hình, hậu kỳ…) thành mẫu có tên — chọn mẫu là điền lại hết. Không lưu nguồn video.
  */
 export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onApply, bare }: {
-  mode: string; cfg: C; onApply: (mode: string, cfg: Partial<C>) => void
+  mode: string; cfg: C; onApply: (cfg: Partial<C>) => void
   /** Không khung, gọn — nằm trong thanh trên cùng của trang Tạo video */
   bare?: boolean
 }) {
@@ -26,12 +26,15 @@ export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onAppl
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { api.presets().then(setItems).catch(() => {}) }, [])
+  useEffect(() => setCurrent(""), [mode])
+  // chỉ mẫu của đúng chế độ đang mở — chọn mẫu không nhảy sang chế độ khác
+  const mine = items.filter((p) => (p.mode || "review") === mode)
 
   const apply = (n: string) => {
     const p = items.find((x) => x.name === n)
     if (!p) return
     setCurrent(n)
-    onApply(p.mode, p.cfg as Partial<C>)
+    onApply(p.cfg as Partial<C>)
     toast.success(`Đã áp dụng mẫu "${n}"`)
   }
   const save = async () => {
@@ -55,11 +58,8 @@ export function PresetBar<C extends Record<string, unknown>>({ mode, cfg, onAppl
       <Select value={current} onValueChange={apply}>
         <SelectTrigger size="sm" className={bare ? "w-36 xl:w-48" : "w-56"} title="Mẫu kênh — điền sẵn giọng, phụ đề, logo, intro/outro…"><SelectValue placeholder={bare ? (items.length ? "Chọn mẫu kênh…" : "Mẫu kênh") : (items.length ? "Chọn mẫu để điền sẵn…" : "Chưa có mẫu nào")} /></SelectTrigger>
         <SelectContent>
-          {items.map((p) => (
-            <SelectItem key={p.name} value={p.name}>
-              {p.name}<span className="ml-1.5 text-[10.5px] text-muted-foreground">· {p.mode === "reup" ? "Dịch & Reup" : "Review"}</span>
-            </SelectItem>
-          ))}
+          {mine.length === 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">Chưa có mẫu cho chế độ này</p>}
+          {mine.map((p) => <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>)}
         </SelectContent>
       </Select>
       {current && <Button variant="ghost" size="icon-sm" title="Xoá mẫu này" onClick={remove}><Trash2 /></Button>}

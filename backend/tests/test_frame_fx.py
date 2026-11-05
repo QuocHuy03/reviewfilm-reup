@@ -87,3 +87,45 @@ def test_vietsub_reflect_box_chain(tmp):
     f = grab_gray(out, 1.0)
     reg = f[int(0.81 * 360):int(0.89 * 360), int(0.12 * 640):int(0.88 * 640)]
     assert (reg > 200).sum() == 0 and reg.mean() < 25
+
+
+def test_review_soft_cover_like_dub(tmp):
+    """Review che như Dịch phụ đề: chữ cũ biến mất, mép tan dần (không có cạnh vuông), hình ngoài vùng giữ nguyên."""
+    sub = (0.10, 0.80, 0.90, 0.90)
+    other = (0.10, 0.20, 0.90, 0.30)                      # chữ khác, không có trong vùng che
+    src = make_pattern_video(os.path.join(tmp, 'src.mp4'), [sub, other])
+    f = grab_gray(_render(tmp, src, '640x360', remove_old_sub=True, sub_cover_boxes=[[10, 80, 80, 10]], box_style='soft'), 1.0)
+    reg = f[int(0.81 * 360):int(0.89 * 360), int(0.12 * 640):int(0.88 * 640)]
+    assert (reg > 200).sum() == 0, 'chữ cũ chưa được che'
+    assert (f[int(0.21 * 360):int(0.29 * 360), int(0.12 * 640):int(0.88 * 640)] > 200).sum() > 300, 'che lan sang chỗ không vẽ'
+
+
+def test_review_never_runs_ai_cover():
+    from types import SimpleNamespace
+    from app.features.jobs.pipelines import _text_regions
+    run = SimpleNamespace(is_review=True, job=None, cfg={'auto_cover_text': True, 'text_regions_manual': [{'box': [0, 0, 1, 1]}]})
+    assert _text_regions(run) == {}
+
+
+def test_review_tight_cover_only_when_and_where_text_is(tmp):
+    """Che sát chữ: chỉ đúng bề ngang câu, đúng lúc câu hiện — ngoài câu / ngoài lúc đó hình giữ nguyên."""
+    left = (0.10, 0.80, 0.40, 0.90)                       # "chữ" câu đang hiện
+    right = (0.60, 0.80, 0.90, 0.90)                      # vẫn trong khung vẽ nhưng không thuộc câu → không bị che
+    src = make_pattern_video(os.path.join(tmp, 'src.mp4'), [left, right])
+    lines = [[0.10 * 640, 0.79 * 360, 0.40 * 640, 0.91 * 360, 0.0, 1.0]]            # câu hiện từ 0s tới 1s
+    out = _render(tmp, src, '640x360', remove_old_sub=True, sub_cover_boxes=[[8, 78, 84, 14]], box_style='soft', cover_lines=lines)
+    (a, b) = (int(0.81 * 360), int(0.89 * 360))
+    (l, r) = (slice(int(0.12 * 640), int(0.38 * 640)), slice(int(0.62 * 640), int(0.88 * 640)))
+    f = grab_gray(out, 0.5)
+    assert (f[a:b, l] > 200).sum() == 0, 'câu đang hiện chưa được che'
+    assert (f[a:b, r] > 200).sum() > 300, 'che tràn sang chỗ không có câu'
+    assert (grab_gray(out, 1.6)[a:b, l] > 200).sum() > 300, 'hết câu mà vẫn che'
+
+
+def test_line_box_ignores_stray_pixels():
+    from core.hardsub import _main_cols
+    pix = np.zeros((60, 960), np.uint8)
+    pix[20:40, 400:560] = 1                               # dòng chữ
+    pix[30, 40] = pix[31, 900] = 1                        # chấm sáng lẻ trên áo ở 2 mép
+    cols = _main_cols(pix)
+    assert cols[0] == 400 and cols[-1] == 559

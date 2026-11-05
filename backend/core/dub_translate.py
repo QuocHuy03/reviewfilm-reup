@@ -45,6 +45,8 @@ Quy tắc:
 5. Mỗi câu là ĐÚNG 1 dòng phụ đề trên hình (không có dấu câu), 1 câu nói hay bị ngắt sang 2–3 dòng liền nhau. Đọc cả các dòng
    liền nhau để hiểu đúng ý, nhưng mỗi "viet" chỉ dịch ĐÚNG phần của dòng đó (không dồn ý dòng sau lên, không lặp ý dòng trước)
    — đọc nối các dòng thành câu tiếng Việt tự nhiên; mỗi dòng được lồng tiếng & hiện phụ đề đúng lúc dòng gốc hiện.
+6. "goc" đọc từ chữ trên hình nên có thể dính 1–2 ký tự rác của logo ở đầu / cuối câu (动, 漫, 小, 麟…) hoặc dấu lạ: chữ nào không
+   hợp nghĩa câu thì bỏ qua, không dịch.
 {chars}{context}{glossary}{prev}
 Làm 2 bước cho TỪNG câu (như biên dịch chuyên nghiệp): "sat" = dịch SÁT NGHĨA lời gốc (đủ ý, chưa cần gọn);
 rồi tự soát lại "sat" (đúng nghĩa? đúng xưng hô? tự nhiên như người Việt nói?) và viết "viet" = câu lồng tiếng cuối cùng, gọn theo "toi_da".
@@ -98,7 +100,8 @@ def _prompts(target_lang):
 GLOSSARY_PROMPT = """Bạn chuẩn bị lồng tiếng Việt cho một phim Trung Quốc. Đọc toàn bộ kịch bản gốc dưới đây (mỗi dòng: người nói: lời).
 Lập bảng để cả đội dịch dùng chung cho NHẤT QUÁN cả phim:
 - "tom_tat": tóm tắt cốt truyện 2–3 câu (bối cảnh: cổ trang / hiện đại / tu tiên…).
-- "ten": tên riêng, biệt danh, chức danh, thuật ngữ đặc biệt → cách dịch tiếng Việt (tên người đọc Hán Việt), vd {{"goc": "宿主", "viet": "ký chủ"}}.
+- "ten": tên riêng, biệt danh, chức danh, thuật ngữ đặc biệt → cách dịch tiếng Việt, vd {{"goc": "宿主", "viet": "ký chủ"}}. Tên người đọc Hán Việt
+  theo TỪNG CHỮ HÁN, đủ dấu thanh, không dựa vào pinyin, vd {{"goc": "张伟", "viet": "Trương Vĩ"}}.
 - "xung_ho": cách xưng hô giữa các cặp nhân vật hay nói chuyện với nhau, vd {{"cap": "Diệp Phong → Anh cả", "cach": "xưng em, gọi anh cả"}}.
 Chỉ trả về JSON: {{"tom_tat": "...", "ten": [...], "xung_ho": [...]}}
 
@@ -146,11 +149,28 @@ def budgets(segments, wps=None, tolerance=1.5, target_lang='vi'):
     return out
 
 
-def translate(segments, cast, log=print, film_context='', batch=30, target_lang='vi'):
+# 1 câu hoàn chỉnh trong câu trả lời: {"i": 3, "sat": "...", "viet": "..."}
+_ROW = re.compile(r'"i"' + r'\s*:\s*(\d+)\s*,.*?"viet"\s*:\s*("(?:[^"\\]|\\.)*")', re.S)
+
+
+def reply_rows(raw):
+    """Câu dịch trong câu trả lời AI → {i: lời dịch}. AI web hay cắt ngang câu trả lời dài (JSON cụt, không đọc được cả khối)
+    → lấy từng câu hoàn chỉnh, chỉ mất câu đang viết dở."""
+    out = {}
+    for (i, text) in _ROW.findall(raw or ''):
+        try:
+            t = str(json.loads(text)).strip()
+        except ValueError:
+            continue
+        if t:
+            out[int(i)] = t
+    return out
+
+
+def translate(segments, cast, log=print, film_context='', batch=20, target_lang='vi'):
     """segments = [{'start', 'end', 'text'}] lời gốc; cast = kết quả phân vai ({'labels', 'speakers'}) hoặc None.
     → list câu dịch (cùng độ dài segments; câu AI không trả → None) hoặc None nếu chưa đăng nhập AI."""
     from core import web_llm
-    from app.features.jobs.postedit import _extract_json
     if not web_llm.available():
         return None
     n = len(segments)
@@ -180,26 +200,19 @@ def translate(segments, cast, log=print, film_context='', batch=30, target_lang=
     out = [None] * n
     for k in range(0, n, batch):
         idx = list(range(k, min(n, k + batch)))
-        rows = [{'i': i, 'ai': who(i), 'goc': str(segments[i]['text']).strip()[:200], 'toi_da': limit[i]} for i in idx]
         done = [(i, out[i]) for i in range(max(0, k - 6), k) if out[i]]
         prev = ('\nCác câu ngay trước (đã dịch, để nối mạch & giữ xưng hô): '
                 + json.dumps([{'ai': who(i), 'viet': t} for (i, t) in done], ensure_ascii=False) + '\n') if done else ''
-        for attempt in range(2):
+        for attempt in range(3):
+            todo = [i for i in idx if not out[i]]        # thử lại chỉ hỏi câu còn thiếu → câu trả lời ngắn, không bị cắt nữa
+            rows = [{'i': i, 'ai': who(i), 'goc': str(segments[i]['text']).strip()[:200], 'toi_da': limit[i]} for i in todo]
             raw = web_llm.chat(prompt_tpl.format(chars=chars, context=context, glossary=gloss, prev=prev, rows=json.dumps(rows, ensure_ascii=False, indent=0)), log)
-            data = _extract_json(raw)
-            items = data.get('cau') if isinstance(data, dict) else (data if isinstance(data, list) else None)
-            got = 0
-            for it in items or []:
-                try:
-                    i = int(it.get('i'))
-                    t = str(it.get('viet') or '').strip()
-                except (TypeError, ValueError, AttributeError):
-                    continue
-                if i in idx and t:
+            for (i, t) in reply_rows(raw).items():
+                if i in todo:
                     out[i] = t
-                    got += 1
-            if got >= len(idx) * 0.8:
+            left = sum(1 for i in idx if not out[i])
+            if not left:
                 break
-            log(f'   [WARN] AI dịch gói câu {k + 1}–{idx[-1] + 1} chỉ trả {got}/{len(idx)} câu' + (' — thử lại' if attempt == 0 else ''), 'warn')
+            log(f'   [WARN] AI dịch gói câu {k + 1}–{idx[-1] + 1} còn thiếu {left}/{len(idx)} câu' + (' — hỏi lại câu thiếu' if attempt < 2 else ''), 'warn')
         log(f'   Dịch theo vai: {min(n, k + batch)}/{n} câu', 'step')
     return out

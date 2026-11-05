@@ -229,6 +229,145 @@ def generate_tts_per_scene(scenes, voice, temp_dir, rate='+5%', log_fn=print, fp
     return polish_tts(out, log_fn) if out else out
 
 
+FLOW_MAX_SCENES = 3      # đọc liền tối đa 3 cảnh / lần
+FLOW_MAX_CHARS = 700     # gói dài hơn → CapCut dễ cắt request, giọng cũng hay đuối dần
+FLOW_END = '.!?…。！？"”\''
+
+
+def flow_groups(scenes):
+    """Nhóm các cảnh liền nhau để đọc 1 lần. Chỉ nối qua cảnh kết thúc bằng dấu hết câu (có chỗ nghỉ để cắt lại). → [[chỉ số]]."""
+    (groups, cur, n) = ([], [], 0)
+    for (i, s) in enumerate(scenes):
+        text = (s.get('voiceover') or '').strip()
+        if not text:
+            continue
+        if cur and (len(cur) >= FLOW_MAX_SCENES or n + len(text) > FLOW_MAX_CHARS or cur[-1] != i - 1
+                    or not (scenes[cur[-1]].get('voiceover') or '').strip().endswith(tuple(FLOW_END))):
+            groups.append(cur)
+            (cur, n) = ([], 0)
+        cur.append(i)
+        n += len(text)
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def split_at_pauses(x, sr, weights):
+    """Giọng đọc liền N cảnh → N-1 điểm cắt (mẫu) tại khoảng nghỉ thật, gần vị trí dự kiến (theo tỉ lệ số chữ).
+    Vị trí dự kiến tính trên THỜI GIAN CÓ TIẾNG (trừ các khoảng nghỉ), chọn khoảng nghỉ GẦN nhất — không chọn cái dài nhất: giọng
+    có khi nghỉ ở dấu phẩy lâu hơn cuối câu, chọn vậy là cắt nhầm câu (Whisper nghe lại đã bắt được). Không chắc → None."""
+    import numpy as np
+    hop = sr // 100
+    if len(x) < hop * 20:
+        return None
+    fr = x[:len(x) // hop * hop].reshape(-1, hop)
+    db = 20 * np.log10(np.sqrt((fr ** 2).mean(1)) + 1e-9)
+    act = np.where(db > db.max() - 35.0)[0]
+    if not len(act):
+        return None
+    (a, b) = (int(act[0]), int(act[-1]) + 1)
+    quiet = db[a:b] <= db.max() - 35.0
+    gaps = []
+    k = 0
+    while k < len(quiet):
+        if quiet[k]:
+            j = k
+            while j < len(quiet) and quiet[j]:
+                j += 1
+            if j - k >= 8:                            # ≥ 80ms
+                gaps.append((a + k, a + j))
+            k = j
+        else:
+            k += 1
+    (total, cuts, pos, last) = (sum(weights), [], 0.0, a)
+    voiced = (b - a) - sum(g[1] - g[0] for g in gaps)
+    tol = 70                                          # ±0.7s (đơn vị 10ms)
+
+    def at_voiced(n):
+        """Khung thứ n tính trên phần có tiếng → khung thật (cộng các khoảng nghỉ đã qua)."""
+        f = a + n
+        for g in gaps:
+            if g[0] < f:
+                f += g[1] - g[0]
+        return f
+    for w in weights[:-1]:
+        pos += w
+        want = at_voiced(voiced * pos / total)
+        near = [g for g in gaps if abs((g[0] + g[1]) / 2 - want) <= tol and g[0] > last and g[1] - g[0] >= 12]   # < 120ms: lấy hơi giữa câu
+        if not near:
+            return None
+        g = min(near, key=lambda q: abs((q[0] + q[1]) / 2 - want))
+        cuts.append((g[0] + g[1]) // 2 * hop)
+        last = g[1]
+    seq = [a * hop] + cuts + [b * hop]
+    for (k, w) in enumerate(weights):                 # mỗi phần phải gần đúng tỉ lệ chữ, lệch nhiều = cắt nhầm câu
+        if abs((seq[k + 1] - seq[k]) / (seq[-1] - seq[0]) - w / total) > 0.5 * w / total + 0.05:
+            return None
+    return cuts
+
+
+def _flow_split(group, res, temp_dir):
+    """Cắt 1 file đọc liền về từng cảnh → [cảnh có tts_path] hoặc None."""
+    import wave as _wave
+    import numpy as np
+    r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', res['tts_path'], '-ac', '1', '-ar', str(POLISH_RATE), '-f', 's16le', '-'],
+                       capture_output=True, creationflags=_HIDE)
+    if r.returncode != 0:
+        return None
+    x = np.frombuffer(r.stdout, '<i2').astype(np.float32) / 32768.0
+    cuts = split_at_pauses(x, POLISH_RATE, [len(s['voiceover'].strip()) for (_, s) in group])
+    if cuts is None:
+        return None
+    (edges, out) = ([0] + cuts + [len(x)], [])
+    for (k, (i, sc)) in enumerate(group):
+        path = os.path.join(temp_dir, f'vo_{i:04d}_f.wav')
+        y = x[edges[k]:edges[k + 1]]
+        with _wave.open(path, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(POLISH_RATE)
+            w.writeframes((y * 32767).astype('<i2').tobytes())
+        out.append({**sc, 'tts_path': path, 'tts_duration': len(y) / POLISH_RATE, '_tts_engine_used': res.get('_tts_engine_used', '')})
+    return out
+
+
+def generate_tts_flow(scenes, voice, temp_dir, log_fn=print, **kw):
+    """Review: đọc liền vài cảnh trong 1 lần rồi cắt lại ở khoảng nghỉ — đọc riêng từng cảnh thì câu đầu mỗi cảnh giọng vọt
+    lên như mở bài (đo CapCut: 327 Hz riêng, 281 Hz đọc liền), nghe rời rạc. Cụm lỗi / cắt không chắc → đọc riêng cảnh đó.
+    VieNeu đọc từng câu riêng bên trong nên không lợi gì."""
+    if str(voice or '').lower().startswith('vieneu'):
+        return generate_tts_per_scene(scenes, voice, temp_dir, log_fn=log_fn, **kw)
+    from core import cancel
+    cancel.check()
+    os.makedirs(temp_dir, exist_ok=True)
+    for (i, s) in enumerate(scenes):
+        s.setdefault('_original_index', i)
+    idx = [int(s['_original_index']) for s in scenes]
+    groups = [g for g in flow_groups(scenes)]
+    multi = [g for g in groups if len(g) > 1]
+    (done, left) = ([], {i for g in groups for i in g})
+    if multi:
+        flow_dir = os.path.join(temp_dir, 'flow')
+        joined = [{'voiceover': ' '.join(scenes[i]['voiceover'].strip() for i in g), 'subtitle': '', 'clip_start': 0.0, 'clip_end': 1.0,
+                   '_original_index': k} for (k, g) in enumerate(multi)]
+        res = _generate_tts_raw(joined, voice, flow_dir, log_fn=log_fn, **kw) or []
+        by_k = {int(r['_original_index']): r for r in res if r.get('tts_path')}
+        for (k, g) in enumerate(multi):
+            parts = _flow_split([(idx[i], scenes[i]) for i in g], by_k[k], temp_dir) if k in by_k else None
+            if parts:
+                done += parts
+                left -= set(g)
+        log_fn(f'   Đọc liền mạch: {len(multi) - sum(1 for g in multi if set(g) & left)}/{len(multi)} cụm cảnh'
+               + (' — cụm còn lại đọc riêng từng cảnh' if any(set(g) & left for g in multi) else ''))
+    rest = [scenes[i] for i in sorted(left)]
+    if rest:
+        done += _generate_tts_raw(rest, voice, temp_dir, log_fn=log_fn, **kw) or []
+    done.sort(key=lambda s: int(s.get('_original_index', 0)))
+    for o in done:
+        o['tts_text'] = o.get('voiceover', '')
+    return polish_tts(done, log_fn) if done else done
+
+
 def _generate_tts_raw(scenes, voice, temp_dir, rate='+5%', log_fn=print, fptai_key=None, ref_audio_path='', strict_voice=False, gpu_timeout=None, **_unused):
     os.makedirs(temp_dir, exist_ok=True)
     _lang = _langs.voice_lang(voice)

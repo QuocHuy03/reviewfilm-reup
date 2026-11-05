@@ -220,7 +220,7 @@ export function DownloadPage() {
           )}
         </Section>
 
-        <Section title="Đang tải & đã tải" icon={<Download />} desc="Tải xong bấm Review / Reup / Dịch phụ đề — hoặc làm cả bộ"
+        <Section title="Đang tải & đã tải" icon={<Download />} desc="Tải xong bấm Review / Reup / Lồng tiếng — hoặc làm cả bộ"
           action={jobs.length > 0 && (
             <div className="flex items-center gap-1.5">
               <div className="relative">
@@ -433,7 +433,7 @@ function CreateButtons({ path, onCreate }: { path: string; onCreate: (p: string,
   return <>
     <Button size="xs" variant="outline" title="Tạo review phim" onClick={() => onCreate(path, "review")}><Wand2 /> Review</Button>
     <Button size="xs" variant="outline" title="Dịch & Reup (lồng tiếng thuyết minh)" onClick={() => onCreate(path, "reup")}><Languages /> Reup</Button>
-    <Button size="xs" variant="outline" title="Dịch phụ đề (xoá phụ đề cũ, ghép phụ đề Việt, lồng tiếng)" onClick={() => onCreate(path, "vietsub")}><Subtitles /> Dịch phụ đề</Button>
+    <Button size="xs" variant="outline" title="Lồng tiếng (xoá phụ đề cũ, ghép phụ đề Việt, lồng tiếng theo nhân vật)" onClick={() => onCreate(path, "vietsub")}><Subtitles /> Lồng tiếng</Button>
   </>
 }
 

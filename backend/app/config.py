@@ -26,7 +26,7 @@ API_KEYS = {
 
 DEFAULT_SETTINGS = {
     'output_dir': os.path.join(os.path.expanduser('~'), 'Videos', 'ReviewFilm'),
-    'whisper_model': 'base',
+    'whisper_model': 'capcut',   # mặc định nhận dạng online CapCut: nhanh, chuẩn tiếng Trung, không cần GPU/tải model
     'device': 'GPU (NVIDIA)',
     'voice': 'Edge TTS — Nữ Bắc (miễn phí)',
     'sub_style': 'Mặc định (chữ trắng, viền đen)',

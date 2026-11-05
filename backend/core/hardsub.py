@@ -22,6 +22,19 @@ def _text_pixels(gray):
     return ((gray > 190) & (dark > 0)).astype(np.uint8)
 
 
+def _main_cols(pix):
+    """Cột của dòng chữ chính: gom cột có nét thành cụm (cách nhau < 60% chiều cao dải), lấy cụm nhiều nét nhất. Chấm sáng lẻ
+    trên áo, đồ vật ở xa dòng chữ bị bỏ — không thì 1 chấm ở mép dải cũng kéo khung che phình ra gần hết bề ngang."""
+    import numpy as np
+    dens = pix.sum(axis=0)
+    cols = np.where(dens > 0)[0]
+    if len(cols) < 2:
+        return cols
+    gap = max(12, int(pix.shape[0] * 0.6))
+    groups = np.split(cols, np.where(np.diff(cols) > gap)[0] + 1)
+    return max(groups, key=lambda g: int(dens[g].sum()))
+
+
 def _signature(pix):
     """Ảnh nét chữ thu nhỏ (khối 4×8) — so 2 khung để biết dải phụ đề có đổi câu không mà khỏi đọc lại."""
     h, w = pix.shape
@@ -70,7 +83,7 @@ def _cache_file(video, band, step):
     import os
     from app.config import DATA_DIR
     st = os.stat(video)
-    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 3])
+    key = json.dumps([os.path.abspath(video), st.st_size, int(st.st_mtime), [round(v, 3) for v in band], step, 4])
     d = os.path.join(DATA_DIR, 'cache', 'hardsub')
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, hashlib.md5(key.encode()).hexdigest() + '.json')
@@ -185,7 +198,7 @@ def _extract(video, band, step, log, should_stop, progress):
             box = None
             if text != '':                           # khung bao nét chữ của câu (để che đúng chỗ nếu xoá nét còn sót)
                 rows = np.where(pix.sum(axis=1) >= 3)[0]
-                cols = np.where(pix.sum(axis=0) > 0)[0]
+                cols = _main_cols(pix)
                 if len(rows) and len(cols):
                     (bw_, bh_) = (band[2] - band[0], band[3] - band[1])
                     box = (band[0] + cols[0] / W * bw_, band[1] + rows[0] / H * bh_,

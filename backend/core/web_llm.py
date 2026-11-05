@@ -94,15 +94,23 @@ def _dump_debug(prompt, raw, model):
         pass
 
 
+def _wait_limit(prompt, attempt, timeout):
+    """Giới hạn chờ 1 lượt (giây). Lượt bình thường xong trong 1 phút; lượt treo thì thử lại thường xong ngay (đo: treo 440s rồi
+    lượt sau 11s) → lượt đầu chờ ngắn, lượt sau gấp đôi, không vượt `timeout`."""
+    return min(timeout, (180 + len(prompt) // 100) * (attempt + 1))
+
+
 def chat(prompt, log_fn=print, model='auto', timeout=900):
     """Một lượt text. model: 'auto' (ChatGPT → Gemini) | 'chatgpt' | 'gemini'. Lỗi → ''."""
     if not _base():
         return ''
-    payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}]}
     for attempt in range(2):
+        limit = _wait_limit(prompt, attempt, timeout)
+        # Electron tự bỏ lượt quá hạn (không thì lượt treo chặn hàng đợi); backend chờ dư chút để nhận được lỗi đó
+        payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'timeout_ms': limit * 1000}
         try:
             from core import cancel
-            r = cancel.run(lambda: requests.post(_base() + '/v1/chat/completions', headers=_headers(), json=payload, timeout=timeout))
+            r = cancel.run(lambda: requests.post(_base() + '/v1/chat/completions', headers=_headers(), json=payload, timeout=limit + 30))
             if r.status_code == 200:
                 rj = r.json()
                 raw = ((rj.get('choices') or [{}])[0].get('message', {}).get('content') or '')

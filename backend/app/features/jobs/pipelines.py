@@ -269,6 +269,30 @@ def _transcribe(job, video_path, temp_dir, cfg, beam, allow_empty=False, words=F
     return transcript, lang
 
 
+def _translate_direct(job, segments, cfg, lang='zh'):
+    """Phim Trung: AI dịch thẳng từ chữ Hán, 2 lượt AI (bảng tên → dịch). Đi vòng qua tiếng Anh thì tên mất chữ Hán, chỉ còn pinyin
+    (江凡 → Jiang Fan → "Giang Pham") và 4 lượt AI lâu hơn. → scenes, hoặc None (thiếu nhiều câu → dùng cách dịch cũ).
+    Thiếu vài câu thì chỉ dịch Google đúng các câu đó — phim dài không phải dịch lại từ đầu."""
+    from core import dub_translate
+    from core.translator import _group_segments
+    blocks = _group_segments(segments)
+    texts = dub_translate.translate(blocks, None, job.log, cfg.get('film_context') or '', target_lang=_tl(cfg))
+    missing = [i for (i, t) in enumerate(texts or []) if not t]
+    if not texts or len(missing) > len(blocks) * 0.1:
+        job.log('   [WARN] AI dịch thẳng thiếu nhiều câu — chuyển sang cách dịch nhiều bước', 'warn')
+        return None
+    if missing:
+        from .vietsub import _google_lines
+        job.log(f'   [WARN] AI bỏ sót {len(missing)} câu — dịch Google riêng các câu đó', 'warn')
+        filled = _google_lines(job, [blocks[i] for i in missing], lang)
+        for (i, sc) in zip(missing, filled or []):
+            texts[i] = sc.get('voiceover') or sc.get('subtitle')
+        texts = [t or b['text'] for (t, b) in zip(texts, blocks)]
+    job.log(f'   Hoàn tất dịch: {len(blocks)} block sẵn sàng cho TTS', 'ok')
+    return [{'voiceover': t, 'subtitle': t, 'clip_start': float(b['start']), 'clip_end': float(b['end']),
+             'block_dur': float(b['end']) - float(b['start']), 'orig_text': b['text']} for (b, t) in zip(blocks, texts)]
+
+
 def _translate(job, segments, lang, cfg, video_path):
     """Dịch + Việt hoá phụ đề. AI khi bật ai_translate và có engine; không thì Google miễn phí."""
     from core import user_glossary
@@ -278,9 +302,11 @@ def _translate(job, segments, lang, cfg, video_path):
     job.log(f"   Dịch phụ đề ({'AI — tài khoản web' if use_ai else 'Google miễn phí'})...", 'info')
     # từ điển người dùng = cách dịch sang tiếng Việt → chỉ dùng khi xuất tiếng Việt
     context = ((user_glossary.prompt_block() if tl == 'vi' else '') + (cfg.get('film_context') or '')).strip()
-    scenes = translate_and_localize_transcript(
-        segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=context,
-        video_filename=os.path.basename(video_path), allow_web=use_ai, **_tl_kw(cfg))
+    scenes = _translate_direct(job, segments, cfg, lang) if use_ai and str(lang).lower().startswith('zh') else None
+    if not scenes:
+        scenes = translate_and_localize_transcript(
+            segments, api_key=NO_KEY, source_lang=lang, log_fn=job.log, openai_key=NO_KEY, user_context=context,
+            video_filename=os.path.basename(video_path), allow_web=use_ai, **_tl_kw(cfg))
     # cách dịch sai người dùng đã chốt → tự thay (cả bản dịch Google miễn phí)
     entries = user_glossary.load() if tl == 'vi' else []
     if scenes and entries:
@@ -311,13 +337,14 @@ def vieneu_fx(cfg):
         return (1.0, 0.0)
 
 
-def synthesize(scenes, voice_label, out_dir, log, strict=True, fx=None, target_lang='vi'):
+def synthesize(scenes, voice_label, out_dir, log, strict=True, fx=None, target_lang='vi', flow=False):
     """Đọc bằng ĐÚNG giọng đã chọn — lỗi thì trả về thiếu cảnh, không tự đổi sang Edge / giọng khác.
     fx = (tốc độ, pitch Hz) áp cho câu đọc bằng VieNeu (vieneu_fx(cfg)).
     target_lang ≠ 'vi': giọng không đọc được ngôn ngữ đó (VieNeu / FPT / giọng Việt) → Edge TTS của ngôn ngữ đó."""
-    from core.tts_engine import apply_voice_fx, generate_tts_per_scene
+    from core.tts_engine import apply_voice_fx, generate_tts_flow, generate_tts_per_scene
     voice = _voice_for_lang(_voice_id(voice_label, target_lang), target_lang, log)
-    out = generate_tts_per_scene(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=True)
+    gen = generate_tts_flow if flow else generate_tts_per_scene     # flow: Review đọc liền vài cảnh cho ngữ điệu nối nhau
+    out = gen(scenes, voice, out_dir, log_fn=log, fptai_key=get_key('FPT_API_KEY'), strict_voice=True)
     if fx and out:
         apply_voice_fx(out, fx[0], fx[1], log)
     return out
@@ -339,6 +366,7 @@ class Run:
     layout: dict = field(default_factory=dict)
     mixer: dict = field(default_factory=dict)
     sep: dict = field(default_factory=dict)        # tách giọng chạy nền (luồng, kết quả) — không lưu checkpoint
+    cover: dict = field(default_factory=dict)      # Review: đọc phụ đề cũ trong khung người vẽ, chạy nền — không lưu checkpoint
 
     def log(self, msg, tag=None):
         self.job.log(msg, tag)
@@ -412,9 +440,19 @@ def _step_source(run):
     run.video_path = _resolve_video(run.job, run.cfg['inp'], run.temp_dir)
     run.job.result['video_path'] = run.video_path
     run.job.check()
-    (run.transcript, run.lang) = _transcribe(run.job, run.video_path, run.temp_dir, run.cfg,
-                                             beam=1 if run.is_review else 5, allow_empty=run.is_review,
-                                             words=not run.is_review)   # Reup: mốc câu bám đúng chữ đầu / cuối (lời Việt vào đúng lúc)
+    segs = None
+    if not run.is_review and run.cfg.get('hardsub_source'):
+        # Reup: video có phụ đề Trung in sẵn → đọc thẳng trên hình: đúng chữ, đúng giờ (Whisper hay nghe nhầm)
+        from .vietsub import _hardsub_segments
+        segs = _hardsub_segments(run.job, run.cfg, run.video_path)
+    if segs:
+        run.transcript = {'language': 'zh', 'segments': segs, 'full_text': ' '.join(x['text'] for x in segs), 'hardsub': True}
+        run.lang = 'zh'
+        run.job.result['hardsub_source'] = True
+    else:
+        (run.transcript, run.lang) = _transcribe(run.job, run.video_path, run.temp_dir, run.cfg,
+                                                 beam=1 if run.is_review else 5, allow_empty=run.is_review,
+                                                 words=not run.is_review)   # Reup: mốc câu bám đúng chữ đầu / cuối (lời Việt vào đúng lúc)
     run.base = _base_name(run.video_path)
     if run.transcript['segments']:
         cues = _rechunk(segments_to_cues(run.transcript['segments']), run.layout)
@@ -550,6 +588,90 @@ def _bg_track_ranged(run):
     return (music or '', segs if music else None)
 
 
+def _cover_frame(run):
+    """Khung rộng nhất người dùng vẽ (dải phụ đề) → (band 0-1 hình gốc, khung px xuất, hàm đổi toạ độ); None nếu không có."""
+    from .vietsub import _out_to_src, _src_to_out, text_cover_probe
+    cfg = run.cfg
+    boxes = [b for b in (cfg.get('cover_boxes') or []) if isinstance(b, (list, tuple)) and len(b) >= 4]
+    (sw, sh, _) = text_cover_probe(run.video_path)
+    if not boxes or not sw or not sh:
+        return None
+    (w, h) = [int(v) for v in str(cfg.get('target_resolution') or '1920x1080').split('x')]
+    b = max(boxes, key=lambda x: float(x[2]))
+    clip = (float(b[0]) / 100 * w, float(b[1]) / 100 * h, (float(b[0]) + float(b[2])) / 100 * w, (float(b[1]) + float(b[3])) / 100 * h)
+    (ix, iy) = _out_to_src(cfg, sw, sh, w, h)
+    band = [max(0.0, ix(clip[0])), max(0.0, iy(clip[1])), min(1.0, ix(clip[2])), min(1.0, iy(clip[3]))]
+    if band[2] - band[0] < 0.02 or band[3] - band[1] < 0.01:
+        return None
+    return (band, clip, _src_to_out(cfg, sw, sh, w, h), w, h)
+
+
+def _tight_cover_on(run):
+    cfg = run.cfg
+    return bool(cfg.get('remove_old_sub') and cfg.get('cover_boxes')) and cfg.get('cover_tight', True) is not False
+
+
+def _start_cover_scan(run):
+    """Review "che sát chữ": đọc phụ đề CHỈ trong khung người dùng vẽ, chạy nền lúc tạo giọng."""
+    import threading
+    if not _tight_cover_on(run) or run.cover.get('thread'):
+        return
+    from core import hardsub, text_cover
+    frame = _cover_frame(run) if text_cover.available() else None
+    if not frame:
+        return
+    (job, box) = (run.job, run.cover)
+    box['band'] = frame[0]
+
+    def work():
+        try:
+            box['segs'] = hardsub.extract(run.video_path, frame[0], 0.2, job.log, should_stop=lambda: job.cancelled)
+        except Exception as e:
+            box['err'] = e
+    job.log('   Che sát chữ: đọc phụ đề cũ trong vùng che bạn vẽ (chạy nền)...', 'info')
+    box['thread'] = threading.Thread(target=work, daemon=True)
+    box['thread'].start()
+
+
+def _cover_opts(run):
+    """Review: khung từng câu trong vùng người vẽ → {'cover_lines': [...]}; không đọc được → {} (che cả khung, không lộ chữ cũ)."""
+    if not _tight_cover_on(run):
+        return {}
+    from core import hardsub, text_cover
+    from .vietsub import line_boxes
+    job = run.job
+    if not text_cover.available():
+        job.log('   [WARN] Chưa cài bộ đọc chữ — che cả khung bạn vẽ', 'warn')
+        return {}
+    frame = _cover_frame(run)
+    if not frame:
+        return {}
+    (band, clip, (fx, fy), w, h) = frame
+    box = run.cover
+    if box.get('thread') and box['thread'].is_alive():
+        job.set_progress(85, 'Đợi đọc phụ đề cũ')
+        box['thread'].join()
+    job.check()
+    segs = box.get('segs') if box.get('band') == band else None    # đổi vùng che ở Hậu kỳ → đọc lại đúng vùng mới
+    if segs is None and not box.get('err'):
+        try:
+            segs = hardsub.extract(run.video_path, band, 0.2, job.log, should_stop=lambda: job.cancelled,
+                                   progress=lambda pc: job.set_progress(85, f'Đọc phụ đề cũ {pc}%'))
+        except Exception as e:
+            if job.cancelled:
+                raise
+            box['err'] = e
+    if box.get('err'):
+        job.log(f"   [WARN] Đọc phụ đề cũ lỗi ({str(box['err'])[:120]}) — che cả khung bạn vẽ", 'warn')
+        return {}
+    lines = line_boxes(run.video_path, segs or [], fx, fy, w, h, job.log, clip)
+    if not lines:
+        job.log('   Không đọc được chữ trong vùng che — che cả khung bạn vẽ cho chắc', 'warn')
+        return {}
+    job.log(f'   Che sát chữ: {len(lines)} câu, chỉ che lúc câu hiện', 'info')
+    return {'cover_lines': [[round(float(x), 2) for x in ln] for ln in lines]}
+
+
 def _bg_track(run):
     """Nhạc nền đã tách cho bước dựng ('' nếu tắt / lỗi). Chưa chạy (job tiếp tục từ checkpoint / vừa bật ở Hậu kỳ) → tách ngay."""
     from core import vocal_sep
@@ -616,6 +738,8 @@ def _step_script(run):
                              openai_key=NO_KEY, quality='standard', film_context=film_ctx)
     if not analysis:
         raise RuntimeError('Phân tích nội dung thất bại.')
+    if isinstance(analysis, dict) and not analysis.get('origin') and str(run.lang).lower().startswith('zh'):
+        analysis['origin'] = 'trung'   # chưa rõ xuất xứ thì AI giữ pinyin ("Jiang Fan"); lời gốc tiếng Trung → đọc tên Hán Việt
     if isinstance(analysis, dict):     # giữ phần tóm tắt cho bước viết bài đăng
         job.result['film'] = {k: analysis.get(k) for k in ('title_guess', 'genre', 'setting', 'themes', 'summary') if analysis.get(k)}
     job.check()
@@ -666,6 +790,7 @@ def _step_voice(run):
     (job, cfg) = (run.job, run.cfg)
     job.set_progress(55, 'Tạo giọng đọc')
     _start_range_separation(run)                 # Review phim dài: tách nhạc nền các đoạn sẽ dùng, chạy song song lúc tạo giọng
+    _start_cover_scan(run)                       # Review che sát chữ: đọc phụ đề trong khung người vẽ, chạy song song
     audio_dir = os.path.join(run.temp_dir, 'audio')
     voice_label = cfg.get('voice', '')
     web = _web_ai()
@@ -675,7 +800,8 @@ def _step_voice(run):
         rendered = _multi_voice(job, voice_label, audio_dir, cast_key, cfg)
     else:
         run.log(f'[5] Tạo giọng đọc: {voice_label}', 'info')
-        rendered = synthesize([{**s, '_original_index': i} for (i, s) in enumerate(job.scenes)], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config))
+        rendered = synthesize([{**s, '_original_index': i} for (i, s) in enumerate(job.scenes)], voice_label, audio_dir, job.log, strict=cfg.get('strict_voice', False), fx=vieneu_fx(job.config), target_lang=_tl(job.config),
+                              flow=run.is_review)
     if not rendered:
         raise RuntimeError('Tạo giọng đọc thất bại.')
     rendered = _fill_missing_voices(job, rendered, voice_in_use(job), audio_dir, cfg)
@@ -857,6 +983,8 @@ def _step_preview(run):
         run.cfg['sub_in_cover'] = bool(cover['sub_in_cover'])
     if 'burn_subtitles' in cover:
         run.cfg['burn_subtitles'] = bool(cover['burn_subtitles'])
+    if 'cover_tight' in cover:
+        run.cfg['cover_tight'] = bool(cover['cover_tight'])
     if 'auto_cover_text' in cover:
         run.cfg['auto_cover_text'] = bool(cover['auto_cover_text'])
         run.cfg['text_scan_interval'] = max(0.5, min(5.0, float(cover.get('text_scan_interval') or 2.0)))
@@ -881,6 +1009,8 @@ def _render_options(cfg, mixer):
         opts.update(remove_old_sub=True, sub_cover_boxes=cfg['cover_boxes'])
         if cfg.get('cover_style') == 'reflect':                  # vùng che vẽ tay: phản chiếu dải hình bên cạnh thay làm mờ
             opts['box_style'] = 'reflect'
+        else:                                                    # Review / Reup: che mềm như Dịch phụ đề
+            opts['box_style'] = 'soft'
     if cfg.get('crop_box'):           # cắt khung hình gốc (vd bỏ dải phụ đề cũ) rồi phóng đầy khung / giữ viền đen
         opts.update(crop_box=cfg['crop_box'], crop_fill=bool(cfg.get('crop_fill', True)))
     if mixer:
@@ -922,6 +1052,68 @@ def _render_options(cfg, mixer):
     return opts
 
 
+def split_points(scenes, total, part_sec):
+    """Điểm chia video thành các phần ~part_sec giây, đặt ở khoảng lặng giữa 2 câu (không cắt ngang lời). → [giây]."""
+    ends = sorted(float(s['out_end']) for s in scenes if s.get('out_end') is not None)
+    (cuts, want) = ([], part_sec)
+    while want < total - part_sec * 0.35:                # phần cuối quá ngắn thì gộp vào phần trước
+        near = [e for e in ends if abs(e - want) <= part_sec * 0.2 and (not cuts or e > cuts[-1] + 1)]
+        cut = min(near, key=lambda e: abs(e - want)) + 0.05 if near else want
+        cuts.append(round(cut, 2))
+        want = cut + part_sec
+    return cuts
+
+
+def _reup_extras(run, video):
+    """Reup: xuất thêm bản dọc 9:16 (nền mờ) và / hoặc chia thành nhiều phần để đăng TikTok / Shorts. Lỗi không làm hỏng video chính."""
+    from core.utils import FFMPEG_EXE, run_subprocess
+    from core.video_editor import _safe_duration, fit_frame
+    (job, cfg) = (run.job, run.cfg)
+    part_sec = float(cfg.get('split_minutes') or 0) * 60
+    vertical = bool(cfg.get('extra_aspect')) and not str(cfg.get('target_resolution') or '').endswith('1920')
+    if not vertical and part_sec <= 0:
+        return
+    enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k']
+    root = os.path.splitext(video)[0]
+    outs = [video]
+    try:
+        if vertical:
+            job.set_progress(93, 'Xuất bản dọc 9:16')
+            v = _unique_path(root + '_doc_9x16.mp4')
+            r = run_subprocess([FFMPEG_EXE, '-y', '-v', 'error', '-i', video, '-vf', fit_frame(1080, 1920, 'blur', tag='vt'), *enc, v], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                               encoding='utf-8', errors='replace')
+            if r.returncode == 0:
+                job.result['vertical_path'] = v
+                outs.append(v)
+                run.log(f'[OK] Bản dọc 9:16: {v}', 'ok')
+            else:
+                run.log(f'   [WARN] Không xuất được bản dọc: {(r.stderr or "")[-160:]}', 'warn')
+        job.check()
+        total = _safe_duration(video)
+        cuts = split_points(job.scenes, total, part_sec) if part_sec > 0 and total > part_sec * 1.35 else []
+        if part_sec > 0 and not cuts:
+            run.log('   Video ngắn hơn độ dài 1 phần — không cần chia', 'info')
+        parts = []
+        for src in outs if cuts else []:
+            edges = [0.0] + cuts + [total]
+            base = os.path.splitext(src)[0]
+            for (k, (a, b)) in enumerate(zip(edges, edges[1:]), 1):
+                job.set_progress(94, f'Chia phần {k}/{len(edges) - 1}')
+                job.check()
+                o = _unique_path(f'{base}_phan{k}.mp4')
+                r = run_subprocess([FFMPEG_EXE, '-y', '-v', 'error', '-ss', f'{a:.3f}', '-t', f'{b - a:.3f}', '-i', src, *enc, o], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   encoding='utf-8', errors='replace')
+                if r.returncode == 0:
+                    parts.append(o)
+        if parts:
+            job.result['parts'] = parts
+            run.log(f'[OK] Đã chia {len(cuts) + 1} phần · {len(parts)} file', 'ok')
+    except JobCancelled:
+        raise
+    except Exception as e:
+        run.log(f'   [WARN] Xuất thêm lỗi: {str(e)[:160]} — video chính vẫn dùng được', 'warn')
+
+
 def _step_render(run):
     """Dựng video hoàn chỉnh + xuất SRT tiếng Việt → QA soi video → tự sửa chỗ lỗi (nếu bật)."""
     (job, cfg) = (run.job, run.cfg)
@@ -931,6 +1123,8 @@ def _step_render(run):
     _render(run, out_path)
     _write_job_srt(run)
     run.log(f'[OK] Video: {out_path}', 'ok')
+    if not run.is_review:
+        _reup_extras(run, out_path)
     job.set_progress(96, 'Kiểm tra video')
     try:
         qa = run_qa(job)
@@ -1014,6 +1208,8 @@ def _text_regions(run):
     """Bật "tự che chữ Trung" → AI quét đoạn video được dùng (Review: các cảnh; Reup: cả phim) → vùng làm mờ.
     Kết quả lưu theo file video nên dựng lại / tự sửa lỗi không phải quét lại."""
     (job, cfg) = (run.job, run.cfg)
+    if run.is_review:                            # Review: người tự vẽ vùng che, AI không tự quét / che (kể cả preset cũ còn bật)
+        return {}
     sigma = int(cfg.get('text_blur_strength') or 22)
     manual = cfg.get('text_regions_manual')
     if isinstance(manual, list):                 # đã quét & chỉnh tay ở Hậu kỳ → dùng đúng danh sách đó
@@ -1056,14 +1252,18 @@ def _render(run, out_path):
     (job, cfg) = (run.job, run.cfg)
     sub_source = C.SUBTITLE_SOURCE_OPTIONS.get(cfg.get('sub_source'), 'voiceover')
     timeline = []
+    sub_style = _sub_style(cfg)
+    if cfg.get('remove_old_sub') and cfg.get('cover_boxes'):
+        # như Dịch phụ đề: đã che phụ đề cũ → chữ trắng viền đen, không ô nền (ô đen chồng lên vùng che nhìn xám xịt)
+        sub_style = {**sub_style, 'sub_box_enabled': False, 'sub_border_width': max(3, int(sub_style.get('sub_border_width', 3) or 3))}
     result = build_review_video([dict(s) for s in job.scenes], run.video_path, out_path, run.temp_dir, log_fn=job.log, timeline_out=timeline,
                                 muted_spans=(job.result.get('reup_muted') or []) if not run.is_review else [],
                                 target_resolution=cfg.get('target_resolution') or '1920x1080',
                                 sub_source_mode=sub_source, is_reup=not run.is_review,
                                 mirror_video=bool(cfg.get('mirror_video')), video_speed=_speed(cfg),
                                 should_stop=lambda: job.cancelled,
-                                **_sub_style(cfg), **_layout_for(run.layout, _tl(cfg)), **_render_options(cfg, run.mixer), **_text_regions(run),
-                                **_bg_options(run), **_tl_kw(cfg))
+                                **sub_style, **_layout_for(run.layout, _tl(cfg)), **_render_options(cfg, run.mixer), **_text_regions(run),
+                                **_bg_options(run), **_cover_opts(run), **_tl_kw(cfg))
     job.check()
     if not result or not os.path.isfile(out_path):
         raise RuntimeError('Dựng video thất bại.')

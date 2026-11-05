@@ -3,7 +3,7 @@
 Cookie tuỳ chọn: Cài đặt → Key giọng đọc → CAPCUT_COOKIE (chuỗi "a=b; c=d" hoặc JSON xuất từ extension cookie).
 Không có cookie vẫn tạo được giọng (dùng mã thiết bị ẩn danh); có cookie thì dùng phiên đăng nhập của bạn.
 Gom vài cảnh trong 1 request (CapCut tốn ~60s cố định mỗi request, quá ~140s thì cắt) — xem synthesize_batch;
-tải mp3 về, cắt khoảng lặng đầu/cuối cho lời khít hình.
+tải mp3 về. Cắt lặng đầu / cuối do polish_tts (core/tts_engine) lo — silenceremove từng xoá mất âm tiết đầu câu.
 """
 import hashlib
 import json
@@ -220,7 +220,6 @@ def synthesize_batch(items, voice_type, cookie, speed=1.0, volume=100):
             return f'Tải audio CapCut lỗi (HTTP {a.status_code}).'
         with open(out_path, 'wb') as f:
             f.write(a.content)
-        trim_silence(out_path)
         return None
 
     from concurrent.futures import ThreadPoolExecutor
@@ -248,26 +247,7 @@ def _synthesize_pc(items, voice_type, resource_id, speed):
             return str(e)[:160]
         with open(out_path, 'wb') as f:
             f.write(audio)
-        trim_silence(out_path)
         return None
 
     with ThreadPoolExecutor(min(4, len(items)) or 1) as ex:
         return dict(enumerate(ex.map(_one, range(len(items)))))
-
-
-def trim_silence(path, threshold='-50dB', min_dur=0.15):
-    """Cắt khoảng lặng đầu/cuối (CapCut hay chèn ~0.3s im lặng) — lỗi thì giữ nguyên file."""
-    from core.utils import FFMPEG_EXE
-    tmp = path + '.trim.mp3'
-    af = (f'silenceremove=start_periods=1:start_duration={min_dur}:start_threshold={threshold},areverse,'
-          f'silenceremove=start_periods=1:start_duration={min_dur}:start_threshold={threshold},areverse')
-    try:
-        r = subprocess.run([FFMPEG_EXE, '-y', '-v', 'error', '-i', path, '-af', af, '-c:a', 'libmp3lame', '-b:a', '192k', tmp],
-                           capture_output=True, timeout=120, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        if r.returncode == 0 and os.path.getsize(tmp) > 1000:
-            os.replace(tmp, path)
-    except Exception:
-        pass
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)

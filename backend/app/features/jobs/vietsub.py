@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import time
 
-from core.video_editor import enable_expr
+from core.video_editor import _boxes_chain, _group_line_boxes, enable_expr
 
 from .pipelines import (_audio_codec, _base_name, _force_style, _is_url, _layout, _out_dir, _rechunk, _resolve_video,
                         _sub_style, _transcribe, _translate, _unique_path, _workspace, _write_srt, clean_regions,
@@ -119,94 +119,6 @@ def _call_tl(fn, *args, tl='vi', **kw):
         except (TypeError, ValueError):
             pass
     return fn(*args, **kw)
-
-
-def _box_geom(box, w, h, style, spans):
-    """1 vùng (% khung xuất [x, y, rộng, cao]) → (px, py, pw, ph, enable, sigma), None nếu vùng quá nhỏ / không có lúc nào che."""
-    try:
-        (x, y, bw, bh) = [max(0.0, min(100.0, float(v))) / 100.0 for v in box[:4]]
-    except (TypeError, ValueError):
-        return None
-    (px, py) = (max(1, int(x * w)), max(1, int(y * h)))
-    (pw, ph) = (min(int((x + bw) * w), w - 2) - px, min(int((y + bh) * h), h - 2) - py)
-    (pw, ph) = (pw // 2 * 2, ph // 2 * 2)
-    if pw < 8 or ph < 8:
-        return None
-    en = ''
-    if spans is not None:
-        merged = []
-        for (a, b) in sorted(spans):
-            if merged and a <= merged[-1][1] + 0.6:
-                merged[-1][1] = max(merged[-1][1], b)
-            else:
-                merged.append([a, b])
-        if not merged:
-            return None
-        en = ":enable='" + enable_expr(merged) + "'"   # gộp cho đủ ngắn (phim dài hàng trăm câu → ffmpeg hết bộ nhớ)
-    sigma = max(4, round(ph * 0.09)) if style == 'erase' else 20     # 'blur' = y như Review phim (gblur 20); 'erase' vùng lớn mờ thêm cho hết vệt sọc
-    return (px, py, pw, ph, en, sigma)
-
-
-def _feather_rect(px, py, pw, ph, w, h):
-    """Vùng làm mờ mép mềm = vùng che nới ra mỗi bên 1 khoảng viền (viền chuyển nằm NGOÀI vùng đã xoá chữ, không lộ vệt delogo).
-    → (ex, ey, ew, eh, khoảng nới trái, trên, phải, dưới)."""
-    f = max(6, round(min(pw, ph) * 0.3))
-    (ex, ey) = (max(0, px - f), max(0, py - f))
-    (ex2, ey2) = (min(w, px + pw + f), min(h, py + ph + f))
-    (ew, eh) = ((ex2 - ex) // 2 * 2, (ey2 - ey) // 2 * 2)
-    return (ex, ey, ew, eh, px - ex, py - ey, ex + ew - (px + pw), ey + eh - (py + ph))
-
-
-def _feather_mask(path, ew, eh, gl, gt, gr, gb):
-    """Mặt nạ xám ew x eh: vùng che (cách mép gl, gt, gr, gb) trắng đặc, viền ngoài mờ dần về đen → ô mờ tan vào hình
-    xung quanh, không lộ cạnh chữ nhật. Mép chạm khung hình (nới = 0) thì giữ trắng tới sát mép."""
-    from PIL import Image, ImageDraw, ImageFilter
-    f = max(gl, gt, gr, gb, 1)
-    big = Image.new('L', (ew + 2 * f, eh + 2 * f), 0)      # vẽ rộng hơn để mép chạm khung không bị tối khi làm mờ
-    (x1, y1) = (f + (gl // 2 if gl else -f), f + (gt // 2 if gt else -f))
-    (x2, y2) = (f + ew - (gr // 2 if gr else -f) - 1, f + eh - (gb // 2 if gb else -f) - 1)
-    ImageDraw.Draw(big).rectangle([x1, y1, x2, y2], fill=255)
-    big.filter(ImageFilter.GaussianBlur(f / 3)).crop((f, f, f + ew, f + eh)).save(path)
-
-
-def _boxes_chain(cur, items, w, h, tag='bx', mask_dir=None):
-    """Che NHIỀU vùng trong 1 lượt. items = [(box, style, spans)] — box % khung xuất [x, y, rộng, cao];
-    style 'erase': delogo lấp bằng điểm ảnh xung quanh + mờ nhẹ cho mượt viền; 'blur': làm mờ mạnh;
-    spans = [(a, b)] giây → chỉ che lúc đó (None = suốt video).
-    Chỉ split 1 lần rồi tách N nhánh cắt + làm mờ, dán lần lượt lên hình chính: mỗi vùng 1 cặp split → overlay nối tiếp
-    làm ffmpeg kéo khung hình nhân đôi qua từng cặp (thời gian dựng tăng theo 2^số vùng — 22 vùng đã không xong)."""
-    geoms = [(g, style) for (box, style, spans) in items for g in [_box_geom(box, w, h, style, spans)] if g]
-    if not geoms:
-        return ('', cur)
-    parts = []
-    for (k, ((px, py, pw, ph, en, _), style)) in enumerate(geoms):
-        if style == 'erase':                     # delogo không tách luồng → nối tiếp bao nhiêu vùng cũng nhanh
-            parts.append(f'[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}{en}[{tag}d{k}]')
-            cur = f'{tag}d{k}'
-    n = len(geoms)
-    parts.append(f'[{cur}]split[{tag}m][{tag}s]')
-    parts.append(f'[{tag}s]split={n}' + ''.join(f'[{tag}s{k}]' for k in range(n)) if n > 1 else f'[{tag}s]null[{tag}s0]')
-    prev = f'{tag}m'
-    for (k, ((px, py, pw, ph, en, sigma), style)) in enumerate(geoms):
-        # gblur cũng chỉ chạy lúc vùng cần che (không thì làm mờ đủ N vùng trên MỌI khung hình)
-        if style == 'reflect':
-            # dải hình ngay trên vùng (sát mép trên thì dải dưới), lật dọc + mờ nhẹ → nền trơn trông như không có chữ
-            sy = py - ph if py >= ph else max(0, min(h - ph, py + ph))
-            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{sy},vflip,gblur=sigma=2.5:steps=2{en}[{tag}c{k}]')
-        elif mask_dir:
-            # mép mềm: làm mờ vùng nới rộng, ghép kênh alpha từ mặt nạ (1 khung, ffmpeg tự lặp lại) → ô mờ tan dần vào hình
-            (ex, ey, ew, eh, gl, gt, gr, gb) = _feather_rect(px, py, pw, ph, w, h)
-            name = f'{tag}mask{k}.png'
-            _feather_mask(os.path.join(mask_dir, name), ew, eh, gl, gt, gr, gb)
-            parts.append(f'movie={name},format=gray[{tag}k{k}]')
-            parts.append(f'[{tag}s{k}]crop={ew}:{eh}:{ex}:{ey},gblur=sigma={sigma}:steps=3{en},format=yuva420p[{tag}g{k}]')
-            parts.append(f'[{tag}g{k}][{tag}k{k}]alphamerge[{tag}c{k}]')
-            (px, py) = (ex, ey)
-        else:
-            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{py},gblur=sigma={sigma}:steps=3{en}[{tag}c{k}]')
-        parts.append(f'[{prev}][{tag}c{k}]overlay={px}:{py}{en}[{tag}o{k}]')
-        prev = f'{tag}o{k}'
-    return (';'.join(parts), prev)
 
 
 def _text_rows(video, segs, n=24):
@@ -331,34 +243,29 @@ def _static_boxes(video, boxes, dur, n=16):
     return out
 
 
-def _group_line_boxes(lines, h, max_groups=4):
-    """Khung từng câu phụ đề cũ [(X1, Y1, X2, Y2, t0, t1)] (px khung xuất) → ≤ max_groups vùng che [(X1, Y1, X2, Y2, spans)].
-    Mỗi vùng che thêm 1 lớp làm mờ + chồng hình trên MỌI khung → 40 vùng làm lượt dựng chậm gấp chục lần. Gom: câu cùng
-    hàng (tâm dọc gần nhau) → chia theo độ rộng thành vài nhóm (câu ngắn che hẹp, câu dài che rộng) → mỗi nhóm 1 vùng
-    = khung bao các câu trong nhóm, chỉ bật đúng lúc các câu đó hiện."""
-    if not lines:
-        return []
-    rows = []
-    for ln in sorted(lines, key=lambda l: (l[1] + l[3]) / 2):
-        cy = (ln[1] + ln[3]) / 2
-        if rows and cy - rows[-1][-1][6] <= 0.04 * h:
-            rows[-1].append((*ln, cy))
-        else:
-            rows.append([(*ln, cy)])
-    rows.sort(key=len, reverse=True)
-    rows = rows[:max_groups]                     # hàng phụ đề thật nhiều câu nhất; hàng lẻ tẻ (đọc nhầm) gộp bỏ
-    per_row = [max(1, round(max_groups * len(r) / sum(len(x) for x in rows))) for r in rows]
-    while sum(per_row) > max_groups:
-        per_row[per_row.index(max(per_row))] -= 1
-    out = []
-    for (row, k) in zip(rows, per_row):
-        row = sorted(row, key=lambda l: l[2] - l[0])            # theo độ rộng
-        size = -(-len(row) // max(1, k))
-        for i in range(0, len(row), size):
-            g = row[i:i + size]
-            out.append((min(l[0] for l in g), min(l[1] for l in g), max(l[2] for l in g), max(l[3] for l in g),
-                        [(l[4], l[5]) for l in g]))
-    return out
+def line_boxes(video, segs, gx, gy, w, h, log, clip=None):
+    """Câu phụ đề cứng (có 'box' theo hình gốc) → khung che từng câu [(X1, Y1, X2, Y2, t0, t1)] px khung xuất, sát chữ.
+    gx / gy: hình gốc 0-1 → px khung xuất. clip = (X1, Y1, X2, Y2): không vượt khỏi khung người dùng vẽ."""
+    lines = []
+    rows = _text_rows(video, segs)                   # hàng chữ thật → che sát chữ, không lan lên hình
+    if rows:
+        (ry1, ry2) = (gy(rows[0]), gy(rows[1]))
+        rpad = max(6.0, (ry2 - ry1) * 0.3)
+        log(f'   Hàng chữ phụ đề cũ: cao {ry2 - ry1:.0f}px — che sát chữ', 'step')
+    for sg in segs:
+        if not sg.get('box'):
+            continue
+        (x1, y1, x2, y2) = sg['box']
+        (X1, Y1, X2, Y2) = (gx(x1), gy(y1), gx(x2), gy(y2))
+        (px_, py_) = (max(6.0, (Y2 - Y1) * 0.35), max(4.0, (Y2 - Y1) * 0.25))
+        (X1, Y1, X2, Y2) = (max(0.0, X1 - px_), max(0.0, Y1 - py_), min(float(w), X2 + px_), min(float(h), Y2 + py_))
+        if rows:                                     # dọc: siết về hàng chữ thật (+ lề) thay vì khung phình
+            (Y1, Y2) = (max(0.0, ry1 - rpad), min(float(h), ry2 + rpad))
+        if clip:
+            (X1, Y1, X2, Y2) = (max(X1, clip[0]), max(Y1, clip[1]), min(X2, clip[2]), min(Y2, clip[3]))
+        if X2 - X1 >= 8 and Y2 - Y1 >= 8:
+            lines.append((X1, Y1, X2, Y2, max(0.0, float(sg['start']) - 0.1), float(sg['end']) + 0.1))
+    return lines
 
 
 def _box_chain(cur, box, w, h, style='erase', spans=None, tag='bx'):
@@ -960,10 +867,30 @@ def _analyze_srt(job, segs):
                 merged += 1
                 continue
         out.append(sg)
+    kept = drop_logo_noise(out)
+    if len(kept) < len(out):
+        job.log(f'   Bỏ {len(out) - len(kept)} dòng rác đọc nhầm từ logo góc hình', 'step')
+    out = kept
     durs = [x['end'] - x['start'] for x in out] or [0]
     job.log(f'   Phân tích SRT gốc: {len(out)} dòng thoại' + (f' (gộp {merged} dòng đọc lỗi lúc chữ mờ dần)' if merged else '')
             + f' · trung bình {sum(durs) / len(durs):.1f}s/dòng · {sum(1 for d in durs if d < 1.0)} dòng ngắn < 1s', 'step')
     return out
+
+
+def drop_logo_noise(segs):
+    """Logo chữ ở góc lọt vào dải phụ đề: cùng ký tự vừa dính cuối nhiều câu, vừa đứng một mình thành dòng ngắn (动, 小, 小麟, 鹿麟动).
+    Bỏ dòng ngắn đó — trừ khi các chữ còn lại có trong lời thoại (小凡 là tên gọi của 江凡, giữ). Ký tự dính cuối câu giữ nguyên:
+    có thể là chữ thật (别动), AI dịch tự bỏ khi không hợp nghĩa."""
+    def core(t):
+        return re.sub(r'[\W_]+', '', t)
+    texts = [core(s['text']) for s in segs]
+    short = [t for t in texts if 0 < len(t) <= 3]
+    long_ = [t for t in texts if len(t) > 3]
+    logo = {c for t in short for c in t if sum(x.endswith(c) for x in long_) >= 2}
+    speech = set(''.join(long_))
+    return [s for (s, t) in zip(segs, texts)
+            if not (0 < len(t) <= 3 and float(s['end']) - float(s['start']) <= 1.5 and set(t) & logo
+                    and not (set(t) - logo) & speech)]
 
 
 def _translate_for_dub(job, cfg, video, transcript, lang, layout):
@@ -1859,22 +1786,7 @@ def run_vietsub_pipeline(job):
             (sw2, sh2, _) = text_cover_probe(video)
             if sw2 and sh2:
                 (gx, gy) = _src_to_out(cfg, sw2, sh2, w, h)
-                lines = []
-                rows = _text_rows(video, transcript['segments'])      # hàng chữ thật → che sát chữ, không lan lên hình
-                if rows:
-                    (ry1, ry2) = (gy(rows[0]), gy(rows[1]))
-                    rpad = max(6.0, (ry2 - ry1) * 0.3)
-                    job.log(f'   Hàng chữ phụ đề cũ: cao {ry2 - ry1:.0f}px — che sát chữ', 'step')
-                for sg in transcript['segments']:
-                    if not sg.get('box'):
-                        continue
-                    (x1, y1, x2, y2) = sg['box']
-                    (X1, Y1, X2, Y2) = (gx(x1), gy(y1), gx(x2), gy(y2))
-                    (px_, py_) = (max(6.0, (Y2 - Y1) * 0.35), max(4.0, (Y2 - Y1) * 0.25))
-                    (X1, Y1, X2, Y2) = (max(0.0, X1 - px_), max(0.0, Y1 - py_), min(float(w), X2 + px_), min(float(h), Y2 + py_))
-                    if rows:                         # dọc: siết về hàng chữ thật (+ lề) thay vì khung phình
-                        (Y1, Y2) = (max(0.0, ry1 - rpad), min(float(h), ry2 + rpad))
-                    lines.append((X1, Y1, X2, Y2, max(0.0, float(sg['start']) - 0.1), float(sg['end']) + 0.1))
+                lines = line_boxes(video, transcript['segments'], gx, gy, w, h, job.log)
                 groups = _group_line_boxes(lines, h)
                 items = [([X1 / w * 100, Y1 / h * 100, (X2 - X1) / w * 100, (Y2 - Y1) / h * 100], 'erase', spans)
                          for (X1, Y1, X2, Y2, spans) in groups]

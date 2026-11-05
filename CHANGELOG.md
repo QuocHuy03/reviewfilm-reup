@@ -12,6 +12,47 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.2] - 2026-11-05
+
+### Added
+- **Nhận dạng giọng nói mặc định dùng CapCut (online)**: nhanh & chuẩn nhất (nhất là tiếng Trung), không cần GPU hay
+  tải model, không cần cookie. Ô "Nhận dạng giọng nói" ghi rõ "CapCut (online)" và các mức "Whisper" để chọn chạy
+  offline trên máy. Căn hồ sơ thiết bị CapCut theo bản PC 9.5.0 Windows (khớp traffic thật) → ăn chuẩn như chạy script tay.
+- **Tách SRT: tự bật dịch bằng AI** khi đã đăng nhập ChatGPT/Gemini (dịch chuẩn hơn hẳn Google), còn lại lùi về Google.
+- **Reup: đọc phụ đề Trung in sẵn làm lời gốc**: đúng chữ, đúng giờ hơn nghe giọng; không thấy phụ đề thì tự nghe giọng.
+- **Reup: xuất thêm bản dọc 9:16** (nền mờ) và **chia thành nhiều phần** ~1 / 3 / 10 phút, cắt ở khoảng lặng giữa 2 câu.
+- **Reup: che phụ đề cũ kiểu mềm, sát chữ** như Review.
+
+### Fixed
+- **Chế độ "Dịch phụ đề" đổi tên thành "Lồng tiếng"**, mô tả đúng theo việc đang bật lồng tiếng hay chỉ phụ đề.
+- **Lời lồng tiếng trễ dần về cuối video**: phần đệm âm thanh của từng clip cộng dồn khi ghép (đo được ~0,7s sau 60 clip).
+  Tiếng từng clip nay cắt đúng bằng độ dài hình, lệch còn dưới 0,01s.
+- **Reup dịch nhanh và đúng hơn**: phim Trung dịch thẳng từ chữ Hán thay vì đi vòng qua tiếng Anh, tên đọc đúng Hán Việt
+  (Giang Phàm, không còn "Giang Pham"). Bỏ dòng rác đọc nhầm từ logo góc hình.
+- **Hậu kỳ không còn viết lại bản dịch**: Reup chỉ rút gọn câu quá dài theo lời gốc, không thêm chữ cho đủ hình, không đổi
+  lời thoại lặp.
+- **AI web treo không còn giữ cả job**: mỗi lượt có hạn chờ, ChatGPT treo thì chuyển Gemini, rồi tự thử lại.
+- **Review, Dịch & Reup, Dịch phụ đề tách riêng**: mỗi chế độ giữ cấu hình của mình, bật / tắt ở chế độ này không lây sang
+  chế độ kia (trước: bấm qua Dịch phụ đề là Review cũng bị bật che phụ đề). Mẫu kênh chỉ hiện đúng chế độ, chọn mẫu không
+  còn tự nhảy sang chế độ khác.
+- **Giọng CapCut mất chữ đầu câu**: bước cắt lặng xoá luôn âm tiết đầu nếu ngắn ("Kẻ thù…" thành "thù…"), mọi chế độ. Đã bỏ
+  bước đó — phần cắt lặng chuẩn xác đã có ở bước chuẩn hoá giọng.
+
+### Added
+- **Review: giọng đọc liền mạch giữa các cảnh**: đọc liền tối đa 3 cảnh rồi cắt lại đúng chỗ nghỉ, câu đầu cảnh sau nối theo
+  ngữ điệu câu trước thay vì vọt lên như mở bài. Không cắt chắc được thì tự đọc riêng từng cảnh. Áp dụng giọng CapCut,
+  Edge, FPT.AI; VieNeu giữ cách cũ.
+- **Review: khoảng nghỉ giữa cảnh theo dấu câu**: hết câu nghỉ ~0.4s như người kể (trước ~0.2s), câu chưa dứt nghỉ ngắn.
+
+### Changed
+- **Review: che phụ đề cũ đẹp như bên Dịch phụ đề**: lấp chữ bằng hình xung quanh, mờ nhẹ, mép tan dần vào hình — hết
+  khối mờ cạnh vuông; phụ đề mới không còn ô nền đen đè lên vùng che.
+- **Review: che sát chữ, đúng lúc có chữ** (công tắc riêng, mặc định bật): app chỉ đọc chữ BÊN TRONG khung bạn vẽ, che đúng
+  bề ngang từng câu, lúc câu hiện; hết câu hình sạch. Khung logo vẫn che suốt. Không đọc được chữ thì che cả khung.
+- **Khung che từng câu sát hơn** (cả Dịch phụ đề): chấm sáng trên áo, đồ vật không còn làm khung phình gần hết bề ngang.
+- **Review: AI không tự chọn chỗ che nữa**: bỏ "Tự che mọi chữ tiếng Trung (AI quét)" và nút AI tự căn vùng che. Bạn tự vẽ vùng che,
+  bật / tắt theo từng video bằng công tắc "Che phụ đề gốc / logo".
+
 ## [2.15.1] - 2026-11-02
 
 ### Fixed
@@ -510,7 +551,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.2...HEAD
+[2.15.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...v2.15.0
 [2.14.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.13.0...v2.14.0

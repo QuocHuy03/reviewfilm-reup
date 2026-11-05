@@ -10,6 +10,7 @@ import os
 import functools
 import subprocess
 import shutil
+import threading
 import sys
 import numpy as np
 import wave
@@ -529,12 +530,21 @@ def reup_fit(src, room, tts):
     return (room, max(room * pts, voice), pts, at)
 
 
+REVIEW_TAIL_END = 0.30      # nghỉ sau lời cảnh hết câu: cộng 0.1s đuôi giọng ≈ 0.4s — như người kể (0.3–0.5s), không vồ sang cảnh sau
+REVIEW_TAIL_MID = 0.12      # lời cảnh chưa hết câu (kể tiếp sang cảnh sau): gần như liền
+
+
+def review_tail(scene):
+    text = str(scene.get('voiceover') or '').rstrip()
+    return REVIEW_TAIL_END if text and text[-1] in '.!?…。！？"”\'' else REVIEW_TAIL_MID
+
+
 REVIEW_MAX_SHIFT = 20.0     # giây tối đa 1 cảnh Review được lệch khỏi chỗ AI chọn (lùi cho khỏi đè hình cảnh trước)
 
 
-def plan_review_clips(scenes, video_dur=0.0, tail=0.12, max_shift=REVIEW_MAX_SHIFT):
+def plan_review_clips(scenes, video_dur=0.0, max_shift=REVIEW_MAX_SHIFT):
     """Review: đoạn hình gốc cho từng cảnh → [(clip_start, review_cap | None)] theo đúng thứ tự `scenes`.
-    Mỗi cảnh cần hình dài bằng lời đọc (+ tail). Hai cảnh sát nhau trong phim (cảnh trước chưa đọc xong đã tới chỗ cảnh sau
+    Mỗi cảnh cần hình dài bằng lời đọc (+ khoảng nghỉ review_tail). Hai cảnh sát nhau trong phim (cảnh trước chưa đọc xong đã tới chỗ cảnh sau
     bắt đầu): LÙI điểm bắt đầu cảnh sau tới chỗ cảnh trước hết → hình chạy liền, không lặp, không đứng hình. Mỗi cảnh lệch
     khỏi chỗ AI chọn tối đa max_shift giây (cảnh dày đặc thì độ lệch không dồn mãi); vượt mức mới dùng review_cap như cũ
     (cảnh trước chiếu chậm / giữ khung cuối)."""
@@ -544,7 +554,7 @@ def plan_review_clips(scenes, video_dur=0.0, tail=0.12, max_shift=REVIEW_MAX_SHI
             st = float(s['clip_start'])
         except (KeyError, TypeError, ValueError):
             st = 0.0
-        need = float(s.get('tts_duration') or (float(s.get('clip_end', st)) - st) or 0) + tail
+        need = float(s.get('tts_duration') or (float(s.get('clip_end', st)) - st) or 0) + review_tail(s)
         items.append([i, st, need])
     order = sorted(items, key=lambda x: x[1])
     last_end = None
@@ -645,7 +655,6 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                    f'{n_slow} câu phải chậm hình (≤{REUP_MAX_SLOW}×) — nên rút gọn lời các câu này')
         scenes = continuous_scenes
     else:
-        _SRT_TAIL = 0.12
         video_dur_srt = _safe_duration(source_video)
         accumulated_time = 0.0
         for (idx, s) in enumerate(scenes):
@@ -656,16 +665,16 @@ def build_review_video(scenes, source_video, output_path, temp_dir, target_resol
                 s['tts_path'] = fallback_wav
                 s['tts_duration'] = s['clip_end'] - s['clip_start']
         # Lịch hình các cảnh: cảnh sau lùi điểm bắt đầu cho khỏi đè hình cảnh trước (thay vì chiếu chậm / ĐỨNG HÌNH cảnh trước)
-        for (s, (st, cap)) in zip(scenes, plan_review_clips(scenes, video_dur_srt, _SRT_TAIL)):
+        for (s, (st, cap)) in zip(scenes, plan_review_clips(scenes, video_dur_srt)):
             s['clip_start'] = st
             s['review_cap'] = cap
         for (idx, s) in enumerate(scenes):
             tts_dur = s.get('tts_duration', s['clip_end'] - s['clip_start'])
             if video_dur_srt > 0:
                 max_available = max(0.5, video_dur_srt - s['clip_start'])
-                real_clip_dur = max(tts_dur, min(tts_dur + _SRT_TAIL, max_available))
+                real_clip_dur = max(tts_dur, min(tts_dur + review_tail(s), max_available))
             else:
-                real_clip_dur = tts_dur + _SRT_TAIL
+                real_clip_dur = tts_dur + review_tail(s)
             s['out_start'] = accumulated_time
             s['out_end'] = accumulated_time + tts_dur
             accumulated_time += real_clip_dur
@@ -976,7 +985,7 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
             max_available = max(0.5, video_total_duration - clip_start)
         else:
             max_available = tts_duration + 5
-        TAIL = 0.12
+        TAIL = review_tail(scene)
         cap = scene.get('review_cap')
         if cap:                                  # không đọc hình lấn sang cảnh khác phía sau (tránh lặp hình)
             max_available = min(max_available, max(0.3, float(cap)))
@@ -1201,8 +1210,27 @@ def _process_one_scene(source_video, scene, out_path, resolution, fps, original_
                     if reg:
                         _sub_blur.append((*reg, t_cur, t_end))
     _all_blur_boxes = list(blur_boxes or []) + _extra_blur_boxes
-    (blur_chain, blur_last) = _build_blur_chain('vbase', _all_blur_boxes, clip_start=clip_start, clip_end=clip_end,
-                                                style='reflect' if kwargs.get('box_style') == 'reflect' else 'blur')
+    (blur_chain, blur_last) = ('', 'vbase')
+    if kwargs.get('box_style') == 'soft':
+        # Review: che như Dịch phụ đề — lấp bằng hình xung quanh + mờ nhẹ, mép tan dần (không còn khối mờ cạnh vuông)
+        (_flat, _timed) = ([b for b in _all_blur_boxes if not isinstance(b, dict)], [b for b in _all_blur_boxes if isinstance(b, dict)])
+        _lines = kwargs.get('cover_lines')
+        _tight = []
+        if _lines is not None and _flat:
+            # che sát chữ: khung rộng nhất (dải phụ đề) chỉ che đúng từng câu, đúng lúc câu hiện; khung khác (logo) che suốt
+            _flat.remove(max(_flat, key=lambda b: b[2] - b[0]))
+            _end = clip_start + clip_duration
+            _rel = [(x1, y1, x2, y2, max(0.0, t0 - clip_start), t1 - clip_start) for (x1, y1, x2, y2, t0, t1) in _lines if t0 < _end and t1 > clip_start]
+            _tight = [([X1 / int(w) * 100, Y1 / int(h) * 100, (X2 - X1) / int(w) * 100, (Y2 - Y1) / int(h) * 100], 'erase', spans)
+                      for (X1, Y1, X2, Y2, spans) in _group_line_boxes(_rel, int(h))]
+        _items = _tight + [([max(0.0, b[0] - 0.005) * 100, max(0.0, b[1] - 0.005) * 100, (b[2] - b[0] + 0.01) * 100, (b[3] - b[1] + 0.01) * 100], 'erase', None)
+                           for b in _flat]
+        (blur_chain, blur_last) = _boxes_chain('vbase', _items, int(w), int(h), 'cv', os.path.dirname(out_path))
+        _all_blur_boxes = _timed
+    if _all_blur_boxes:
+        (_c2, blur_last) = _build_blur_chain(blur_last, _all_blur_boxes, clip_start=clip_start, clip_end=clip_end,
+                                             style='reflect' if kwargs.get('box_style') == 'reflect' else 'blur')
+        blur_chain = ';'.join(x for x in (blur_chain, _c2) if x)
     has_wm = bool(watermark_path and os.path.exists(watermark_path))
     # Chữ Trung do AI quét (core/text_cover): làm mờ ngay trên hình GỐC, trước cắt/co/giãn → đúng chỗ, đúng lúc
     (src_chain, src_last) = _src_text_blur_chain(kwargs.get('text_regions'), clip_start, clip_duration, float(kwargs.get('text_blur_sigma') or 22),
@@ -1519,22 +1547,181 @@ def _stream_duration(path, stream):
         return 0.0
 
 
+def _exact_audio(clips, lens, wav_path):
+    """Tiếng cả video: mỗi clip cắt / độn đúng bằng độ dài HÌNH của nó. File AAC luôn dư mẫu đệm ở đuôi (khung 1024 mẫu) — ghép
+    thẳng thì phần dư cộng dồn, câu càng về cuối càng vào trễ so với hình (đo được ~0,7s sau 60 clip)."""
+    import wave
+    from concurrent.futures import ThreadPoolExecutor
+    rate = 44100
+
+    def pcm(c):
+        r = subprocess.run([FFMPEG_EXE, '-v', 'error', '-i', c, '-vn', '-ac', '1', '-ar', str(rate), '-f', 's16le', '-'],
+                           capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return r.stdout if r.returncode == 0 else b''
+    with wave.open(wav_path, 'wb') as w, ThreadPoolExecutor(4) as ex:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        (t, done) = (0.0, 0)
+        for (length, raw) in zip(lens, ex.map(pcm, clips)):
+            t += length                          # tính theo mốc cộng dồn → sai số làm tròn không dồn lại
+            need = round(t * rate) - done
+            w.writeframes(raw[:need * 2].ljust(need * 2, b'\0'))
+            done += need
+
+
 def _concat_clips(clips, output_path, temp_dir, log_fn):
     list_file = os.path.join(temp_dir, 'concat_list.txt')
+    lens = [(_stream_duration(c, 'v:0') or _safe_duration(c)) for c in clips]
+    exact = all(L and L > 0 for L in lens)
+    audio_in = []
+    if exact:
+        wav = os.path.join(temp_dir, 'concat_audio.wav')
+        try:
+            _exact_audio(clips, lens, wav)
+            audio_in = ['-i', wav, '-map', '0:v:0', '-map', '1:a:0']
+        except Exception as e:
+            exact = False
+            log_fn(f'   [WARN] Căn tiếng theo hình lỗi ({str(e)[:100]}) — ghép thường')
     with open(list_file, 'w', encoding='utf-8') as f:
-        for c in clips:
+        for (c, length) in zip(clips, lens):
             safe = c.replace('\\', '/').replace("'", "\\'")
-            f.write(f'''file \'{safe}\'\n''')
-    cmd = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
+            f.write(f"file '{safe}'\n")
+            if exact:
+                f.write(f'duration {length:.6f}\n')     # clip sau nối đúng chỗ hết hình, không theo đuôi tiếng dư
+    cmd = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, *audio_in, '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
     r = run_subprocess_heartbeat(cmd, log_fn=log_fn, label='Ghép clip cuối', text=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         log_fn('   Ghép nối (copy video/re-encode audio) thất bại, tiến hành re-encode toàn bộ...')
-        cmd2 = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
+        cmd2 = [FFMPEG_EXE, '-y', '-f', 'concat', '-safe', '0', '-i', list_file, *audio_in, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-ac', '1', output_path]
         r2 = run_subprocess_heartbeat(cmd2, log_fn=log_fn, label='Ghép clip cuối (re-encode toàn bộ)', text=True, encoding='utf-8', errors='replace')
         if r2.returncode != 0:
             log_fn(f'''   [LỖI] Concat: {r2.stderr[slice(None, 300, None)]}''')
             return False
     return os.path.exists(output_path)
+def _box_geom(box, w, h, style, spans):
+    """1 vùng (% khung xuất [x, y, rộng, cao]) → (px, py, pw, ph, enable, sigma), None nếu vùng quá nhỏ / không có lúc nào che."""
+    try:
+        (x, y, bw, bh) = [max(0.0, min(100.0, float(v))) / 100.0 for v in box[:4]]
+    except (TypeError, ValueError):
+        return None
+    (px, py) = (max(1, int(x * w)), max(1, int(y * h)))
+    (pw, ph) = (min(int((x + bw) * w), w - 2) - px, min(int((y + bh) * h), h - 2) - py)
+    (pw, ph) = (pw // 2 * 2, ph // 2 * 2)
+    if pw < 8 or ph < 8:
+        return None
+    en = ''
+    if spans is not None:
+        merged = []
+        for (a, b) in sorted(spans):
+            if merged and a <= merged[-1][1] + 0.6:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        if not merged:
+            return None
+        en = ":enable='" + enable_expr(merged) + "'"   # gộp cho đủ ngắn (phim dài hàng trăm câu → ffmpeg hết bộ nhớ)
+    sigma = max(4, round(ph * 0.09)) if style == 'erase' else 20     # 'blur' = y như Review phim (gblur 20); 'erase' vùng lớn mờ thêm cho hết vệt sọc
+    return (px, py, pw, ph, en, sigma)
+
+
+def _feather_rect(px, py, pw, ph, w, h):
+    """Vùng làm mờ mép mềm = vùng che nới ra mỗi bên 1 khoảng viền (viền chuyển nằm NGOÀI vùng đã xoá chữ, không lộ vệt delogo).
+    → (ex, ey, ew, eh, khoảng nới trái, trên, phải, dưới)."""
+    f = max(6, round(min(pw, ph) * 0.3))
+    (ex, ey) = (max(0, px - f), max(0, py - f))
+    (ex2, ey2) = (min(w, px + pw + f), min(h, py + ph + f))
+    (ew, eh) = ((ex2 - ex) // 2 * 2, (ey2 - ey) // 2 * 2)
+    return (ex, ey, ew, eh, px - ex, py - ey, ex + ew - (px + pw), ey + eh - (py + ph))
+
+
+def _feather_mask(path, ew, eh, gl, gt, gr, gb):
+    """Mặt nạ xám ew x eh: vùng che (cách mép gl, gt, gr, gb) trắng đặc, viền ngoài mờ dần về đen → ô mờ tan vào hình
+    xung quanh, không lộ cạnh chữ nhật. Mép chạm khung hình (nới = 0) thì giữ trắng tới sát mép."""
+    from PIL import Image, ImageDraw, ImageFilter
+    f = max(gl, gt, gr, gb, 1)
+    big = Image.new('L', (ew + 2 * f, eh + 2 * f), 0)      # vẽ rộng hơn để mép chạm khung không bị tối khi làm mờ
+    (x1, y1) = (f + (gl // 2 if gl else -f), f + (gt // 2 if gt else -f))
+    (x2, y2) = (f + ew - (gr // 2 if gr else -f) - 1, f + eh - (gb // 2 if gb else -f) - 1)
+    ImageDraw.Draw(big).rectangle([x1, y1, x2, y2], fill=255)
+    big.filter(ImageFilter.GaussianBlur(f / 3)).crop((f, f, f + ew, f + eh)).save(path)
+
+
+def _boxes_chain(cur, items, w, h, tag='bx', mask_dir=None):
+    """Che NHIỀU vùng trong 1 lượt. items = [(box, style, spans)] — box % khung xuất [x, y, rộng, cao];
+    style 'erase': delogo lấp bằng điểm ảnh xung quanh + mờ nhẹ cho mượt viền; 'blur': làm mờ mạnh;
+    spans = [(a, b)] giây → chỉ che lúc đó (None = suốt video).
+    Chỉ split 1 lần rồi tách N nhánh cắt + làm mờ, dán lần lượt lên hình chính: mỗi vùng 1 cặp split → overlay nối tiếp
+    làm ffmpeg kéo khung hình nhân đôi qua từng cặp (thời gian dựng tăng theo 2^số vùng — 22 vùng đã không xong)."""
+    geoms = [(g, style) for (box, style, spans) in items for g in [_box_geom(box, w, h, style, spans)] if g]
+    if not geoms:
+        return ('', cur)
+    parts = []
+    for (k, ((px, py, pw, ph, en, _), style)) in enumerate(geoms):
+        if style == 'erase':                     # delogo không tách luồng → nối tiếp bao nhiêu vùng cũng nhanh
+            parts.append(f'[{cur}]delogo=x={px}:y={py}:w={pw}:h={ph}{en}[{tag}d{k}]')
+            cur = f'{tag}d{k}'
+    n = len(geoms)
+    parts.append(f'[{cur}]split[{tag}m][{tag}s]')
+    parts.append(f'[{tag}s]split={n}' + ''.join(f'[{tag}s{k}]' for k in range(n)) if n > 1 else f'[{tag}s]null[{tag}s0]')
+    prev = f'{tag}m'
+    for (k, ((px, py, pw, ph, en, sigma), style)) in enumerate(geoms):
+        # gblur cũng chỉ chạy lúc vùng cần che (không thì làm mờ đủ N vùng trên MỌI khung hình)
+        if style == 'reflect':
+            # dải hình ngay trên vùng (sát mép trên thì dải dưới), lật dọc + mờ nhẹ → nền trơn trông như không có chữ
+            sy = py - ph if py >= ph else max(0, min(h - ph, py + ph))
+            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{sy},vflip,gblur=sigma=2.5:steps=2{en}[{tag}c{k}]')
+        elif mask_dir:
+            # mép mềm: làm mờ vùng nới rộng, ghép kênh alpha từ mặt nạ (1 khung, ffmpeg tự lặp lại) → ô mờ tan dần vào hình
+            (ex, ey, ew, eh, gl, gt, gr, gb) = _feather_rect(px, py, pw, ph, w, h)
+            # tên theo kích thước: các clip Review dựng song song dùng chung 1 file, ghi xong mới đổi tên (không đọc file dở)
+            mask = os.path.join(mask_dir, f'{tag}mask_{ew}x{eh}_{gl}_{gt}_{gr}_{gb}.png')
+            if not os.path.isfile(mask):
+                tmp_mask = f'{mask}.{os.getpid()}.{threading.get_ident()}.png'
+                _feather_mask(tmp_mask, ew, eh, gl, gt, gr, gb)
+                os.replace(tmp_mask, mask)
+            ref = mask.replace('\\', '/').replace(':', '\\:')
+            parts.append(f"movie='{ref}',format=gray[{tag}k{k}]")
+            parts.append(f'[{tag}s{k}]crop={ew}:{eh}:{ex}:{ey},gblur=sigma={sigma}:steps=3{en},format=yuva420p[{tag}g{k}]')
+            parts.append(f'[{tag}g{k}][{tag}k{k}]alphamerge[{tag}c{k}]')
+            (px, py) = (ex, ey)
+        else:
+            parts.append(f'[{tag}s{k}]crop={pw}:{ph}:{px}:{py},gblur=sigma={sigma}:steps=3{en}[{tag}c{k}]')
+        parts.append(f'[{prev}][{tag}c{k}]overlay={px}:{py}{en}[{tag}o{k}]')
+        prev = f'{tag}o{k}'
+    return (';'.join(parts), prev)
+
+
+def _group_line_boxes(lines, h, max_groups=4):
+    """Khung từng câu phụ đề cũ [(X1, Y1, X2, Y2, t0, t1)] (px khung xuất) → ≤ max_groups vùng che [(X1, Y1, X2, Y2, spans)].
+    Mỗi vùng che thêm 1 lớp làm mờ + chồng hình trên MỌI khung → 40 vùng làm lượt dựng chậm gấp chục lần. Gom: câu cùng
+    hàng (tâm dọc gần nhau) → chia theo độ rộng thành vài nhóm (câu ngắn che hẹp, câu dài che rộng) → mỗi nhóm 1 vùng
+    = khung bao các câu trong nhóm, chỉ bật đúng lúc các câu đó hiện."""
+    if not lines:
+        return []
+    rows = []
+    for ln in sorted(lines, key=lambda l: (l[1] + l[3]) / 2):
+        cy = (ln[1] + ln[3]) / 2
+        if rows and cy - rows[-1][-1][6] <= 0.04 * h:
+            rows[-1].append((*ln, cy))
+        else:
+            rows.append([(*ln, cy)])
+    rows.sort(key=len, reverse=True)
+    rows = rows[:max_groups]                     # hàng phụ đề thật nhiều câu nhất; hàng lẻ tẻ (đọc nhầm) gộp bỏ
+    per_row = [max(1, round(max_groups * len(r) / sum(len(x) for x in rows))) for r in rows]
+    while sum(per_row) > max_groups:
+        per_row[per_row.index(max(per_row))] -= 1
+    out = []
+    for (row, k) in zip(rows, per_row):
+        row = sorted(row, key=lambda l: l[2] - l[0])            # theo độ rộng
+        size = -(-len(row) // max(1, k))
+        for i in range(0, len(row), size):
+            g = row[i:i + size]
+            out.append((min(l[0] for l in g), min(l[1] for l in g), max(l[2] for l in g), max(l[3] for l in g),
+                        [(l[4], l[5]) for l in g]))
+    return out
+
+
 def _build_blur_chain(in_label, boxes, clip_start=0.0, clip_end=None, style='blur'):
     """Che các vùng người dùng vẽ (phụ đề cũ…). style 'blur': làm mờ mạnh · 'reflect': lấy dải hình ngay TRÊN vùng (sát
     mép trên khung thì lấy dải dưới), lật dọc rồi dán đè + mờ nhẹ → nền trơn (trời, tường, sàn) trông như không có gì."""

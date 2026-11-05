@@ -32,7 +32,7 @@ import { TextRegionsPanel, type SceneSpan } from "./TextRegionsPanel"
 
 /** Khung & phụ đề: vùng che mờ (% khung xuất), khung cắt (% hình gốc), phụ đề mới (bật/tắt, cách đáy %). */
 type Cover = {
-  remove_old_sub: boolean; cover_boxes: CoverBox[]; sub_margin_pct: number
+  remove_old_sub: boolean; cover_tight?: boolean; cover_boxes: CoverBox[]; sub_margin_pct: number
   crop_on: boolean; crop_box: CoverBox; crop_fill: boolean; burn_subtitles: boolean
   /** phụ đề mới căn giữa vùng che phụ đề cũ (vùng rộng nhất) */
   sub_in_cover?: boolean
@@ -90,6 +90,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
   const jcfg = job.config as Record<string, unknown>
   const cover: Cover = mixer.cover ?? {
     remove_old_sub: Boolean(jcfg.remove_old_sub),
+    cover_tight: jcfg.cover_tight !== false,
     cover_boxes: Array.isArray(jcfg.cover_boxes) && jcfg.cover_boxes.length ? (jcfg.cover_boxes as CoverBox[]) : [[...DEFAULT_BOX]],
     sub_margin_pct: typeof jcfg.sub_margin_pct === "number" ? jcfg.sub_margin_pct : 6,
     crop_on: Array.isArray(jcfg.crop_box) && jcfg.crop_box.length === 4,
@@ -322,7 +323,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
         confirmed, scenes, mixer: { original_volume: mixer.original_volume / 100, bgm_path: mixer.bgm_path, bgm_volume: mixer.bgm_volume / 100, audio_ducking: mixer.audio_ducking,
           ...(({ keep_bg, bg_volume, auto_sfx }) => ({ keep_bg, bg_volume: bg_volume / 100, auto_sfx }))(audioExtras(mixer, job.config as Record<string, unknown>, mode)),
           cover: mixer.cover ? {
-            remove_old_sub: cover.remove_old_sub, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [], sub_margin_pct: cover.sub_margin_pct,
+            remove_old_sub: cover.remove_old_sub, cover_tight: cover.cover_tight !== false, cover_boxes: cover.remove_old_sub ? cover.cover_boxes : [], sub_margin_pct: cover.sub_margin_pct,
             crop_box: cover.crop_on ? cover.crop_box : [], crop_fill: cover.crop_fill, burn_subtitles: cover.burn_subtitles, sub_in_cover: !!cover.sub_in_cover,
             auto_cover_text: cover.auto_cover_text, text_scan_interval: cover.text_scan_interval, text_blur_strength: cover.text_blur_strength,
             // tắt che chữ → danh sách rỗng (không che); bật mà chưa quét → null (app tự quét lúc dựng)
@@ -399,7 +400,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
               onCoverChange={(b) => setCover({ cover_boxes: b, remove_old_sub: true })}
               crop={cover.crop_on || cropEdit ? cover.crop_box : null} cropFill={cover.crop_fill} cropEdit={cropEdit && tab === "cover"}
               onCropChange={(b) => setCover({ crop_box: b, crop_on: true })}
-              textRegions={cover.auto_cover_text && cover.text_regions ? cover.text_regions : undefined} srcTime={srcTime}
+              textRegions={mode === "reup" && cover.auto_cover_text && cover.text_regions ? cover.text_regions : undefined} srcTime={srcTime}
               textEdit={textEdit && tab === "cover"} textBlurPx={Math.round(cover.text_blur_strength * 0.55)}
               onTextRegionChange={(i, r) => setCover({ text_regions: (cover.text_regions ?? []).map((x, j) => (j === i ? r : x)) })} />
 
@@ -647,10 +648,14 @@ function CoverTab({ cover, setCover, editing, setEditing, cropEditing, setCropEd
       {/* Che mờ */}
       <section className="flex flex-col gap-3 border-t border-border pt-4">
         <h4 className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">Che mờ chữ cứng / logo</h4>
-        <TextCoverOptions value={cover} onChange={(p) => setCover(p)} reup={reup} minutes={scanMinutes} />
-        {cover.auto_cover_text && textPanel}
+        {reup && <TextCoverOptions value={cover} onChange={(p) => setCover(p)} reup={reup} minutes={scanMinutes} />}
+        {reup && cover.auto_cover_text && textPanel}
         <ToggleRow label="Làm mờ vùng có chữ gốc" checked={cover.remove_old_sub} onChange={(v) => setCover({ remove_old_sub: v })}
           desc="Dùng khi không muốn cắt hình: làm mờ đúng vùng chữ cứng. Màn xem trước hiện mờ y như lúc xuất." />
+        {!reup && cover.remove_old_sub && (
+          <ToggleRow label="Chỉ che sát chữ, đúng lúc có chữ" checked={cover.cover_tight !== false} onChange={(v) => setCover({ cover_tight: v })}
+            desc="App chỉ đọc chữ bên trong khung bạn vẽ. Màn xem trước vẫn hiện cả khung, video xuất mới che sát từng câu." />
+        )}
         <Button variant={editing ? "default" : "outline"} size="sm" onClick={() => setEditing(!editing)}>
           <Move /> {editing ? "Xong — thoát sửa vùng che" : "Sửa vùng che trên màn hình"}
         </Button>

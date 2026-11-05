@@ -6,26 +6,27 @@ BASE_URL = "https://editor-api-sg.capcutapi.com"
 VOD_REGION = "sdwdmwlll"
 VOD_SERVICE = "vod"
 import random
-device = str(random.randint(10**(20 - 1), 10**20 - 1))
+device = str(random.randint(10**18, 10**19 - 1))   # device id ngẫu nhiên 19 số (khớp traffic CapCut PC thật)
+# Profile CapCut PC 9.5.0 Windows — khớp traffic đã bắt (bản mac 8.7.0 cũ dễ bị xếp hàng / cắt câu).
 DEFAULT_DEVICE = {
     "aid": "359289",
     "app_name": "CapCut",
-    "appvr": "8.7.0",
-    "version_name": "8.7.0",
-    "version_code": "8.7.0",
-    "channel": "capcutpc_google",
-    "device_platform": "mac",
-    "device_type": "MacBookPro17,4",
-    "device_brand": "MacBookPro17,4",
-    "os_version": "15.7.4",
+    "appvr": "9.5.0",
+    "version_name": "9.5.0",
+    "version_code": "9.5.0",
+    "channel": "capcutpc_0",
+    "device_platform": "windows",
+    "device_type": "",
+    "device_brand": "American Megatrends Inc.",
+    "os_version": "10.0.19045",
     "device_id": device,
     "iid": device,
     "region": "VN",
     "loc": "VN",
-    "lan": "vi-VN",
-    "pf": "3",
+    "lan": "en",
+    "pf": "4",
     "tdid": device,
-}
+} 
 
 TTS_SIGN_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmTd34Lw4b7IuldSXh/zY

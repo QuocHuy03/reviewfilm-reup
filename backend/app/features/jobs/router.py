@@ -25,7 +25,7 @@ def _title(inp, prefix):
 RUNNERS = {
     'review': (pipelines.run_video_pipeline, 'Review'),
     'reup': (pipelines.run_video_pipeline, 'Dịch & Reup'),
-    'vietsub': (vietsub.run_vietsub_pipeline, 'Dịch phụ đề'),
+    'vietsub': (vietsub.run_vietsub_pipeline, 'Lồng tiếng'),
     'srt': (pipelines.run_srt_pipeline, 'Tách SRT'),
     'burn': (pipelines.run_burn_pipeline, 'Ghép phụ đề'),
     'download': (pipelines.run_download_pipeline, 'Tải video'),
