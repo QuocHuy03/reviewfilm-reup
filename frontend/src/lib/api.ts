@@ -26,6 +26,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 export const mediaUrl = (path: string) => `${BASE_URL}/api/media?path=${encodeURIComponent(path)}`
 
+/** Dải khung hình (filmstrip) của video — 1 ảnh ghép `n` khung cách đều, timeline cắt từng khúc cho mỗi clip. */
+export const filmstripUrl = (path: string, n: number) => `${BASE_URL}/api/filmstrip?path=${encodeURIComponent(path)}&n=${n}`
+
 export const api = {
   health: () => request<{ ok: boolean }>("GET", "/api/health"),
   options: () => request<Options>("GET", "/api/options"),

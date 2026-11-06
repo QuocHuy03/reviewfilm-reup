@@ -43,7 +43,7 @@ export function StageShell({ title, meta, dot, actions, monitor, side, timeline 
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
       <StageHeader title={title} meta={meta} dot={dot} actions={actions} />
       <div className={cn("grid min-h-0 flex-1", side ? "grid-cols-[minmax(0,1fr)_minmax(360px,430px)]" : "grid-cols-1")}>
-        <div className="relative flex min-h-0 items-center justify-center overflow-hidden bg-black">{monitor}</div>
+        <div className="relative flex min-h-0 items-center justify-center overflow-hidden bg-neutral-200 dark:bg-black">{monitor}</div>
         {side && <div className="flex min-h-0 flex-col overflow-y-auto border-l border-border">{side}</div>}
       </div>
       {timeline}

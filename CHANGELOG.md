@@ -12,6 +12,25 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.3] - 2026-11-06
+
+### Added
+- **Timeline hiện khung hình video như CapCut**: làn Video nay hiện dải khung hình thật của từng cảnh (lấy từ video gốc,
+  dựng 1 lần rồi cache) thay vì ô màu trơn — nhìn ra ngay cảnh nào là cảnh nào. Làn cao hơn, thước to hơn cho dễ thao tác.
+
+### Changed
+- **Giao diện sáng phủ cả timeline và khung bọc video** (Studio / Hậu kỳ): trước đây bật theme sáng thì thanh timeline
+  và vùng nền quanh video vẫn tối, lệch với phần còn lại. Nay 2 chỗ đó đổi màu theo theme (sáng ra sáng, tối ra tối) cho
+  đồng bộ — màu lấy từ bộ token chung nên tự khớp cả 2 chế độ.
+
+### Fixed
+- **Lồng tiếng câu dài hết bị dồn/hụt hơi**: câu gốc dài hơn ~12s mà có dấu câu nay được tách nhỏ theo dấu câu
+  (`。！？` rồi `，；：`), chia đều thời lượng và gộp mẩu quá ngắn (<1,6s) vào câu kề — mỗi câu lồng tiếng có đủ chỗ để
+  đọc thong thả. Không có dấu câu thì giữ nguyên, không bịa mốc thời gian. Số như "1,500" / "3.5" không bị cắt giữa chừng.
+- **Dịch Google (khi chưa đăng nhập AI) nhanh và đúng hơn**: gộp tối đa 20 câu mỗi lần gọi thay vì mỗi câu một request
+  (ít bị Google chặn 429 hơn nhiều). Nếu số dòng trả về lệch so với gửi đi thì tự lùi về dịch từng câu (chống lệch dòng
+  làm sai toàn bộ phụ đề phía sau). Còn chữ Hán chưa dịch thì báo rõ để biết nên đăng nhập AI cho chuẩn.
+
 ## [2.15.2] - 2026-11-05
 
 ### Added
@@ -551,7 +570,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.2...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.3...HEAD
+[2.15.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.2...v2.15.3
 [2.15.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...v2.15.1
 [2.15.0]: https://github.com/quochuy03/reviewfilm-public/compare/v2.14.0...v2.15.0

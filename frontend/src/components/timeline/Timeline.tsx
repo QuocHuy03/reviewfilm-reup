@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { toast } from "sonner"
 import { LaneHeader, ZoomControl, fmtRuler, type LaneSlot } from "./LaneHeader"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { filmstripUrl } from "@/lib/api"
 import { fmtClock } from "@/lib/format"
 import type { Scene } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -18,12 +19,12 @@ const TICK_STEPS = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300]
 
 /** Cấu hình track: chiều cao cố định để các hàng luôn thẳng nhau. */
 const TRACKS = {
-  video: { label: "Video", sub: "source", icon: Film, h: 46, accent: "bg-sky-400", text: "text-sky-300", clip: "bg-slate-600/90 border-slate-400/40" },
-  voice: { label: "Voice", sub: "TTS", icon: Mic, h: 34, accent: "bg-orange-400", text: "text-orange-300", clip: "bg-orange-600/85 border-orange-300/40" },
-  subtitle: { label: "Subtitle", sub: "on video", icon: Captions, h: 34, accent: "bg-violet-400", text: "text-violet-300", clip: "bg-violet-600/85 border-violet-300/40" },
-  music: { label: "Music", sub: "", icon: Music2, h: 30, accent: "bg-emerald-400", text: "text-emerald-300", clip: "bg-emerald-600/80 border-emerald-300/40" },
+  video: { label: "Video", sub: "source", icon: Film, h: 64, accent: "bg-sky-400", text: "text-sky-300", clip: "bg-slate-600/90 border-slate-400/40" },
+  voice: { label: "Voice", sub: "TTS", icon: Mic, h: 44, accent: "bg-orange-400", text: "text-orange-300", clip: "bg-orange-600/85 border-orange-300/40" },
+  subtitle: { label: "Subtitle", sub: "on video", icon: Captions, h: 44, accent: "bg-violet-400", text: "text-violet-300", clip: "bg-violet-600/85 border-violet-300/40" },
+  music: { label: "Music", sub: "", icon: Music2, h: 34, accent: "bg-emerald-400", text: "text-emerald-300", clip: "bg-emerald-600/80 border-emerald-300/40" },
 } as const
-const RULER_H = 22
+const RULER_H = 26
 const HIDDEN_H = 14          // làn đã tắt mắt: còn 1 dải mỏng
 
 type Props = {
@@ -55,6 +56,8 @@ type Props = {
   mode?: EditMode
   /** Độ dài video gốc — giới hạn khi nới mép cuối. */
   videoDuration?: number
+  /** Đường dẫn video gốc — có thì làn Video hiện dải khung hình (filmstrip) như CapCut. */
+  videoPath?: string
   /** Hoàn tác / làm lại — có thì hiện nút trên thanh công cụ. */
   onUndo?: () => void
   onRedo?: () => void
@@ -71,7 +74,7 @@ type Props = {
 }
 
 /** Timeline nhiều track kiểu CapCut: Video · Lời đọc · Phụ đề · Nhạc nền, thước thời gian, đầu phát, zoom. */
-export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim: onTrimProp, onReorder: onReorderProp, onEditStart: onEditStartProp, onPeek: onPeekProp, mode = "review", videoDuration, onUndo, onRedo, canUndo, canRedo, onToggleExcluded, readOnlyHint = "Đổi thứ tự / cắt cảnh được ở bước Sửa kịch bản và Hậu kỳ & xác nhận (khi job dừng chờ bạn).", onSeek: onSeekProp, onSelect: onSelectProp, onToggle, onToggleMute }: Props) {
+export function Timeline({ scenes, clips, total, time, playing, selected, muted, bgmName, issues = {}, showMute = true, subtitleVisible, onToggleSubtitle, emptyHint = "Chưa có cảnh", onTrim: onTrimProp, onReorder: onReorderProp, onEditStart: onEditStartProp, onPeek: onPeekProp, mode = "review", videoDuration, videoPath, onUndo, onRedo, canUndo, canRedo, onToggleExcluded, readOnlyHint = "Đổi thứ tự / cắt cảnh được ở bước Sửa kịch bản và Hậu kỳ & xác nhận (khi job dừng chờ bạn).", onSeek: onSeekProp, onSelect: onSelectProp, onToggle, onToggleMute }: Props) {
   // Trang cha truyền callback mới mỗi lần render (mỗi khung hình khi phát) → bọc thành hàm cố định đọc bản mới nhất,
   // để các làn clip (useMemo bên dưới) không phải dựng lại 60 lần/giây.
   const latest = useRef({ onSeekProp, onSelectProp, onTrimProp, onReorderProp, onEditStartProp, onPeekProp })
@@ -100,6 +103,21 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
   const [fitted, setFitted] = useState(false)
   const [follow, setFollow] = useState(true)
   const width = total > 0 ? total * pps + 48 : 0
+
+  // Dải khung hình (filmstrip) cho làn Video: tải 1 ảnh ghép nhiều khung, mỗi clip cắt đúng khúc của mình.
+  const srcDur = videoDuration && videoDuration > 0 ? videoDuration : total
+  const [strip, setStrip] = useState<string | null>(null)
+  useEffect(() => {
+    if (!videoPath || !(srcDur > 0)) { setStrip(null); return }
+    const n = Math.max(20, Math.min(240, Math.round(srcDur / 2)))
+    const url = filmstripUrl(videoPath, n)
+    const img = new Image()
+    let alive = true
+    img.onload = () => { if (alive) setStrip(url) }
+    img.onerror = () => { if (alive) setStrip(null) }
+    img.src = url
+    return () => { alive = false }
+  }, [videoPath, srcDur])
 
   const fit = useCallback(() => {
     const w = (scroller.current?.clientWidth ?? 800) - 48
@@ -328,6 +346,15 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                   <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
                     onBodyDown={(e) => startMove(e, c)} dragging={dragRole(c)}
                     className={cn(TRACKS.video.clip, (onReorder || onTrim) && "cursor-grab active:cursor-grabbing")}>
+                    {strip && span > 0.05 && <>
+                      {/* dải khung hình gốc, cắt đúng khúc [clip_start, clip_end] của cảnh này */}
+                      <div className="pointer-events-none absolute inset-0 bg-no-repeat" style={{
+                        backgroundImage: `url(${strip})`,
+                        backgroundSize: `${(srcDur / span) * c.dur * pps}px 100%`,
+                        backgroundPositionX: `${-(c.scene.clip_start / span) * c.dur * pps}px`,
+                      }} />
+                      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-black/25" />
+                    </>}
                     {over > 0.3 && (
                       <span title={`Lời dài hơn đoạn hình ${over.toFixed(1)}s — video sẽ chiếu sang phần hình phía sau (có thể lặp hình cảnh kế)`}
                         className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(135deg,rgba(251,191,36,.35)_0_4px,transparent_4px_8px)]"
@@ -342,7 +369,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                     {drag?.index === c.index && (
                       <span className="tabular absolute top-0.5 right-1.5 z-20 rounded bg-black/75 px-1 font-mono text-[9.5px] whitespace-nowrap text-white">{drag.label}</span>
                     )}
-                    {c.dur * pps >= 46 && <div className="relative flex h-full flex-col justify-between px-2 py-1">
+                    {c.dur * pps >= 46 && <div className="relative flex h-full flex-col justify-between px-2 py-1 text-white [text-shadow:0_1px_2px_rgba(0,0,0,.6)]">
                       <span className="flex items-center gap-1 truncate text-[11px] font-semibold">
                         Cảnh {k + 1}
                         {issues[c.index] && <AlertTriangle className={cn("size-3 shrink-0", issues[c.index] === "error" ? "text-red-300" : "text-amber-300")} />}
@@ -372,7 +399,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                   <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
                     onBodyDown={onReorder ? (e) => startMove(e, c) : undefined} dragging={dragRole(c)}
                     className={TRACKS.subtitle.clip}>
-                    {c.dur * pps >= 40 && <span className="block truncate px-2 pt-[9px] text-[10.5px] leading-none">{s?.subtitle || s?.voiceover}</span>}
+                    {c.dur * pps >= 40 && <span className="block truncate px-2 pt-[9px] text-[10.5px] leading-none text-white">{s?.subtitle || s?.voiceover}</span>}
                   </ClipBox>
                 )
               })}
@@ -385,7 +412,7 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                 </div>
               )}
             </Lane>
-  </>), [clips, scenes, pps, selected, drag, issues, muted.voice, muted.music, bgmName, total, mode, videoDuration, readOnlyHint, !!onTrim, !!onReorder, hidden]) // eslint-disable-line react-hooks/exhaustive-deps
+  </>), [clips, scenes, pps, selected, drag, issues, muted.voice, muted.music, bgmName, total, mode, videoDuration, strip, srcDur, readOnlyHint, !!onTrim, !!onReorder, hidden]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Thanh tổng quan: cả video thu nhỏ, khung trắng = phần đang nhìn; bấm / kéo để nhảy tới
   const overview = useRef<HTMLDivElement>(null)
@@ -406,19 +433,19 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
   const pct = (px: number) => `${(px / width) * 100}%`
 
   return (
-    <div className="flex shrink-0 flex-col border-t border-white/10 bg-[#161618] text-white/90 select-none">
+    <div className="flex shrink-0 flex-col border-t border-border bg-card text-foreground select-none">
       {/* Thanh công cụ: công cụ | điều khiển phát ở GIỮA | zoom */}
-      <div className="grid h-11 grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 px-3">
+      <div className="grid h-11 grid-cols-[1fr_auto_1fr] items-center border-b border-border px-3">
         <div className="flex items-center gap-1">
           <IconBtn title={follow ? "Đang bám theo đầu phát — bấm để tắt" : "Bám theo đầu phát khi phát"} active={follow} onClick={() => setFollow(!follow)}><Crosshair /></IconBtn>
           {(onUndo || onRedo) && <>
-            <span className="mx-1 h-4 w-px bg-white/10" />
+            <span className="mx-1 h-4 w-px bg-border" />
             <IconBtn title="Hoàn tác (Ctrl+Z)" disabled={!canUndo} onClick={() => onUndo?.()}><Undo2 /></IconBtn>
             <IconBtn title="Làm lại (Ctrl+Y)" disabled={!canRedo} onClick={() => onRedo?.()}><Redo2 /></IconBtn>
           </>}
           {selClip && (onReorder || onToggleExcluded) && <>
-            <span className="mx-1 h-4 w-px bg-white/10" />
-            <span className="mr-0.5 text-[11px] whitespace-nowrap text-white/55">Cảnh {selPos + 1}</span>
+            <span className="mx-1 h-4 w-px bg-border" />
+            <span className="mr-0.5 text-[11px] whitespace-nowrap text-muted-foreground">Cảnh {selPos + 1}</span>
             {onReorder && <>
               <IconBtn title="Đưa lên đầu" disabled={selPos <= 0} onClick={() => moveSel(0)}><ArrowLeftToLine /></IconBtn>
               <IconBtn title="Dời sang trái (Alt+←)" disabled={selPos <= 0} onClick={() => moveSel(selPos - 1)}><ChevronLeft /></IconBtn>
@@ -429,11 +456,11 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
               <IconBtn title="Bỏ cảnh này khỏi video (Delete)" onClick={() => onToggleExcluded(selClip.index)}><EyeOff /></IconBtn>
             )}
           </>}
-          <span className="mx-1 h-4 w-px bg-white/10" />
-          <span className="text-[11px] whitespace-nowrap text-white/40">{clips.length} cảnh</span>
+          <span className="mx-1 h-4 w-px bg-border" />
+          <span className="text-[11px] whitespace-nowrap text-muted-foreground">{clips.length} cảnh</span>
         </div>
         <div className={cn("flex items-center gap-3", empty && "pointer-events-none opacity-40")}>
-          <span className="tabular w-[62px] text-right font-mono text-[12.5px] text-white">{fmtClock(empty ? 0 : time)}</span>
+          <span className="tabular w-[62px] text-right font-mono text-[12.5px] text-foreground">{fmtClock(empty ? 0 : time)}</span>
           <div className="flex items-center gap-1">
             <IconBtn title="Cảnh trước (←)" onClick={() => jump(-1)}><SkipBack /></IconBtn>
             <button title="Phát / dừng (Space)" onClick={onToggle}
@@ -442,12 +469,12 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
             </button>
             <IconBtn title="Cảnh sau (→)" onClick={() => jump(1)}><SkipForward /></IconBtn>
           </div>
-          <span className="tabular w-[62px] font-mono text-[12.5px] text-white/40">{fmtClock(total)}</span>
+          <span className="tabular w-[62px] font-mono text-[12.5px] text-muted-foreground">{fmtClock(total)}</span>
         </div>
         <div className="flex items-center justify-end gap-1.5">
           <ZoomControl pps={pps} setPps={setPps} min={MIN_PPS} max={MAX_PPS} base={Math.max(MIN_PPS, (view.w - 48) / Math.max(1, total))} onFit={fit} />
           <Tooltip>
-            <TooltipTrigger asChild><span className="ml-1 cursor-help text-white/40 hover:text-white/80 [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
+            <TooltipTrigger asChild><span className="ml-1 cursor-help text-muted-foreground hover:text-foreground [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
               Space: phát/dừng · ← →: chuyển cảnh · Kéo thước: tua · Kéo cảnh: đổi thứ tự (Alt + ← →) · Kéo mép: cắt hình, tự hít nối liền cảnh kề ·
               Delete: bỏ/dùng lại cảnh · Ctrl+Z / Ctrl+Y: hoàn tác / làm lại · Lăn chuột: cuộn ngang · Ctrl + lăn chuột: zoom · Thanh tổng quan: bấm để nhảy nhanh
@@ -457,16 +484,16 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
       </div>
 
       {showOverview && (
-        <div className="flex h-4 items-center border-b border-white/10 bg-black/20" style={{ paddingLeft: HEADER_W }}>
+        <div className="flex h-4 items-center border-b border-border bg-muted" style={{ paddingLeft: HEADER_W }}>
           <div ref={overview} onPointerDown={startOverview} title="Bấm / kéo để nhảy tới đoạn đó"
-            className="relative mx-1 h-2.5 flex-1 cursor-pointer overflow-hidden rounded-sm bg-white/[0.04]">
+            className="relative mx-1 h-2.5 flex-1 cursor-pointer overflow-hidden rounded-sm bg-foreground/[0.06]">
             {clips.map((c) => (
               <span key={c.index} className={cn("absolute inset-y-0 border-r border-black/40",
-                selected === c.index ? "bg-white/70" : issues[c.index] === "error" ? "bg-red-400/60" : issues[c.index] ? "bg-amber-400/50" : "bg-sky-400/35")}
+                selected === c.index ? "bg-foreground/70" : issues[c.index] === "error" ? "bg-red-400/60" : issues[c.index] ? "bg-amber-400/50" : "bg-sky-400/45")}
                 style={{ left: pct(c.start * pps), width: pct(c.dur * pps) }} />
             ))}
             <span className="pointer-events-none absolute inset-y-0 w-px bg-red-500" style={{ left: pct(time * pps) }} />
-            <span className="pointer-events-none absolute inset-y-0 rounded-sm border border-white/80 bg-white/10"
+            <span className="pointer-events-none absolute inset-y-0 rounded-sm border border-foreground/50 bg-foreground/10"
               style={{ left: pct(view.left), width: pct(Math.min(width, view.w)) }} />
           </div>
         </div>
@@ -474,8 +501,8 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
 
       <div className="flex">
         {/* Cột track kiểu CapCut: icon + nút điều khiển, tên hiện khi rê chuột */}
-        <div className="shrink-0 border-r border-white/10 bg-[#1b1b1e]" style={{ width: HEADER_W }}>
-          <div className="border-b border-white/10" style={{ height: RULER_H }} />
+        <div className="shrink-0 border-r border-border bg-muted" style={{ width: HEADER_W }}>
+          <div className="border-b border-border" style={{ height: RULER_H }} />
           {(Object.keys(TRACKS) as (keyof typeof TRACKS)[]).map((k) => {
             const t = TRACKS[k]
             const muteKey = (k === "subtitle" ? undefined : k) as TrackKey | undefined
@@ -506,10 +533,10 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
         {/* Các làn */}
         <div ref={scroller} className="relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden" onWheel={onWheel}>
           <div className="relative" style={{ width: width || "100%" }}>
-            <div className="relative cursor-ew-resize border-b border-white/10 bg-white/[0.03]" style={{ height: RULER_H }} onPointerDown={startScrub}>
+            <div className="relative cursor-ew-resize border-b border-border bg-foreground/[0.03]" style={{ height: RULER_H }} onPointerDown={startScrub}>
               {ticks.map((t) => (
-                <div key={t} className="absolute inset-y-0 border-l border-white/15" style={{ left: t * pps }}>
-                  <span className="tabular absolute top-[4px] left-1 font-mono text-[10px] text-white/50">{fmtRuler(t)}</span>
+                <div key={t} className="absolute inset-y-0 border-l border-border" style={{ left: t * pps }}>
+                  <span className="tabular absolute top-[4px] left-1 font-mono text-[10px] text-muted-foreground">{fmtRuler(t)}</span>
                 </div>
               ))}
             </div>
@@ -522,13 +549,13 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                 {(Object.keys(TRACKS) as (keyof typeof TRACKS)[]).map((k, row) => (
                   <div key={k} className="relative flex items-center gap-1 border-b border-transparent px-1" style={{ height: laneH(k) }}>
                     {[22, 14, 30, 18, 26].map((w, i) => (
-                      <span key={i} className="h-[calc(100%-8px)] animate-pulse rounded-md bg-white/[0.045]"
+                      <span key={i} className="h-[calc(100%-8px)] animate-pulse rounded-md bg-foreground/[0.05]"
                         style={{ width: `${w - row * 2}%`, animationDelay: `${(i + row) * 120}ms` }} />
                     ))}
                   </div>
                 ))}
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="rounded-full border border-white/10 bg-[#161618]/90 px-3 py-1 text-[11px] text-white/55">{emptyHint}</span>
+                  <span className="rounded-full border border-border bg-card/90 px-3 py-1 text-[11px] text-muted-foreground">{emptyHint}</span>
                 </div>
               </div>
             )}
@@ -557,7 +584,7 @@ function IconBtn({ title, onClick, children, active, danger, disabled }: { title
   return (
     <button title={title} onClick={onClick} disabled={disabled} aria-pressed={active}
       className={cn("flex size-7 shrink-0 items-center justify-center rounded-md disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5",
-        active ? (danger ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-white/15 text-white") : "text-white/60 hover:bg-white/10 hover:text-white")}>
+        active ? (danger ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "bg-accent text-foreground") : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
       {children}
     </button>
   )
@@ -565,7 +592,7 @@ function IconBtn({ title, onClick, children, active, danger, disabled }: { title
 
 function Lane({ h, children, onScrub }: { h: number; children: ReactNode; onScrub: (e: ReactPointerEvent) => void }) {
   return (
-    <div className="relative border-b border-white/10" style={{ height: h }} onPointerDown={(e) => { if (e.target === e.currentTarget) onScrub(e) }}>
+    <div className="relative border-b border-border" style={{ height: h }} onPointerDown={(e) => { if (e.target === e.currentTarget) onScrub(e) }}>
       {children}
     </div>
   )

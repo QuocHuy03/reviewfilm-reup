@@ -98,6 +98,46 @@ def _google_translate(text: str, sl: str, tl: str) -> str:
     _GT_FAILS[0] += 1
     return text
 
+
+_HAN_RE = re.compile('[\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff]')
+
+
+def _has_han(s: str) -> bool:
+    """Còn chữ Hán trong bản dịch → dịch nửa vời (Google trả nguyên văn hoặc dính rate-limit)."""
+    return bool(_HAN_RE.search(s or ''))
+
+
+_BATCH_LINES = 20        # gói tối đa 20 dòng / 3500 ký tự mỗi request (đo được: ít request hơn ~20× → ít dính 429)
+_BATCH_CHARS = 3500
+
+
+def _google_translate_lines(lines: list, sl: str, tl: str) -> list:
+    """Dịch NHIỀU dòng trong 1 request (nối bằng xuống dòng) thay vì mỗi dòng một request.
+    Ít request → ít bị Google chặn 429 (nguyên nhân chính làm bản dịch hỏng/thiếu).
+    CHỐT CHẶN: nếu số dòng trả về KHÁC số dòng gửi đi → lùi về dịch từng dòng. Lệch 1 dòng là
+    gán sai toàn bộ phụ đề phía sau — sai âm thầm còn tệ hơn chạy chậm."""
+    out = [''] * len(lines)
+    i = 0
+    n = len(lines)
+    while i < n:
+        idx = []
+        chars = 0
+        while i < n and len(idx) < _BATCH_LINES and (not idx or chars + len(lines[i]) <= _BATCH_CHARS):
+            idx.append(i)
+            chars += len(lines[i]) + 1
+            i += 1
+        chunk = [lines[j] for j in idx]
+        res = _google_translate('\n'.join(chunk), sl, tl)
+        parts = res.split('\n')
+        if len(parts) == len(chunk):                 # khớp số dòng → nhận cả lô
+            for (k, j) in enumerate(idx):
+                out[j] = parts[k].strip()
+        else:                                        # lệch dòng → dịch lại từng dòng cho chắc
+            for j in idx:
+                out[j] = _google_translate(lines[j], sl, tl).strip()
+    return out
+
+
 def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_context: str, video_filename: str, target_lang: str = 'vi') -> list:
     t = langs.norm(target_lang)
     tl = langs.google_code(t)
@@ -114,47 +154,48 @@ def _translate_via_google_free(segments: list, source_lang: str, log_fn, user_co
             _glossary = _get_char_glossary_for_film(vi_t)
         if _known and _glossary:
             log_fn(f"   → Nhận diện phim '{vi_t}' từ mô tả — áp {len(_glossary)} tên nhân vật vào bản dịch miễn phí.")
-        try:
-            from .tts_engine import replace_numbers_with_words as _r2w
-            _has_r2w = True
-        except Exception:
-            _has_r2w = False
         log_fn('   Dịch miễn phí (Google): gốc → tiếng Anh → tiếng Việt...' if t == 'vi' else
                f"   Dịch miễn phí (Google): gốc → {'tiếng Anh' if t == 'en' else 'tiếng Anh → ' + langs.name_vi(t).lower()}...")
         _GT_FAILS[0] = 0
-        translated_scenes = []
-        for (i, block) in enumerate(blocks):
-            src = block['text'].strip()
-            translated_text = src
-            if src:
-                try:
-                    eng = _google_translate(src, sl, 'en')
-                    if t == 'en':
-                        translated_text = eng or src
-                    elif eng:
-                        translated_text = _google_translate(eng, 'en', tl)
-                    else:
-                        translated_text = _google_translate(src, sl, tl)
-                except Exception as e:
-                    log_fn(f'   [WARN] Lỗi dịch đoạn {i + 1}: {e}. Thử dịch thẳng...')
+        srcs = [block['text'].strip() for block in blocks]
+        hit = [i for (i, s) in enumerate(srcs) if s]          # chỉ dịch block có chữ, giữ nguyên vị trí
+        finals = list(srcs)                                   # mặc định: nguyên văn gốc (nếu dịch hỏng)
+        if hit:
+            try:
+                engs = _google_translate_lines([srcs[i] for i in hit], sl, 'en')
+                if t == 'en':
+                    for (k, i) in enumerate(hit):
+                        finals[i] = engs[k] or srcs[i]
+                else:
+                    pivots = [(engs[k] or srcs[hit[k]]) for k in range(len(hit))]
+                    vis = _google_translate_lines(pivots, 'en', tl)
+                    for (k, i) in enumerate(hit):
+                        finals[i] = vis[k] or srcs[i]
+            except Exception as e:
+                log_fn(f'   [WARN] Lỗi dịch lô: {e}. Lùi về dịch thẳng từng câu...')
+                for i in hit:
                     try:
-                        translated_text = _google_translate(src, sl, tl)
+                        finals[i] = _google_translate(srcs[i], sl, tl) or srcs[i]
                     except Exception:
-                        translated_text = src
+                        finals[i] = srcs[i]
+        translated_scenes = []
+        _han_left = 0
+        for (i, block) in enumerate(blocks):
+            src = srcs[i]
+            translated_text = finals[i]
             if _glossary and translated_text:
                 for e in _glossary:
                     (s, v) = ((e.get('src') or '').strip(), (e.get('vi') or '').strip())
                     if s and v and (s.lower() != v.lower()):
                         translated_text = re.sub(re.escape(s), v, translated_text, flags=re.IGNORECASE)
+            if src and t != 'zh' and _has_han(translated_text):   # dịch nửa vời: còn chữ Hán ở ngôn ngữ đích không phải Trung
+                _han_left += 1
             sub = translated_text                # phụ đề giữ chữ số — chỉ lời đọc đổi số thành chữ
-            if _has_r2w and re.search('\\d', translated_text):
-                try:
-                    pass  # số → chữ để bước tạo giọng làm (voiceover_for_tts); lời & phụ đề giữ chữ số
-                except Exception:
-                    pass
             translated_scenes.append({'voiceover': translated_text, 'clip_start': float(block['start']), 'clip_end': float(block['end']), 'subtitle': sub, 'block_dur': float(block['end']) - float(block['start']), 'orig_text': src})
         if _GT_FAILS[0]:
             log_fn(f'   [WARN] Google Dịch không phản hồi {_GT_FAILS[0]} lần — một số câu còn nguyên văn gốc, kiểm tra mạng rồi chạy lại.')
+        if _han_left:
+            log_fn(f'   [WARN] {_han_left} câu còn chữ Hán chưa dịch (có thể bị Google chặn) — nên đăng nhập AI để dịch chuẩn hơn.')
         log_fn(f'   Hoàn tất dịch Google: {len(translated_scenes)} đoạn.')
         return translated_scenes
     return []
@@ -364,25 +405,79 @@ def _group_segments(segments: list) -> list:
     if cur:
         blocks.append(cur)
     return _split_oversized_blocks(blocks)
-_OVERSIZED_BLOCK_DUR = 25.0
+_OVERSIZED_BLOCK_DUR = 25.0   # không dấu câu mà dài hơn mức này → đành cắt thô theo ký tự
 _OVERSIZED_BLOCK_CHARS = 260
+_DUB_BLOCK_DUR = 12.0         # câu lồng tiếng lý tưởng ≤ ~12s; dài hơn mà CÓ dấu câu thì tách để giọng khỏi dồn/hụt hơi
+_DUB_BLOCK_CHARS = 160
+_MIN_PIECE_DUR = 1.6         # mẩu < 1.6s thì gộp vào mẩu kề (tránh câu lồng tiếng vụn, giật)
 _SENTENCE_SPLIT_RE = re.compile('(?<=[。！？!?.;；])\\s*')
-_CLAUSE_SPLIT_RE = re.compile('(?<=[，,])\\s*')
+_CLAUSE_SPLIT_RE = re.compile('(?<=[，,；;：:])(?!\\d)\\s*')   # (?!\\d): chừa số "1,500" / "3.5" khỏi bị cắt giữa chừng
+
+
+def _sentence_parts(text: str) -> list:
+    return [p.strip() for p in _SENTENCE_SPLIT_RE.split(text) if p.strip()]
+
+
+def _clause_parts(text: str) -> list:
+    return [p.strip() for p in _CLAUSE_SPLIT_RE.split(text) if p.strip()]
+
+
+def _balance_pieces(parts: list, total_dur: float) -> list:
+    """Gộp các mẩu câu thành cụm sao cho mỗi cụm ~ ≤ _DUB_BLOCK_DUR (ước theo số ký tự),
+    và không để cụm cuối quá ngắn (< _MIN_PIECE_DUR) — gộp ngược vào cụm trước."""
+    total_chars = sum((len(p) for p in parts)) or 1
+    per_sec = total_chars / max(0.1, total_dur)              # ký tự / giây của block này
+    target = max(1, int(_DUB_BLOCK_DUR * per_sec))
+    min_chars = max(1, int(_MIN_PIECE_DUR * per_sec))
+    chunks = []
+    cur = ''
+    for p in parts:
+        if cur and len(cur) + 1 + len(p) > target:
+            chunks.append(cur)
+            cur = p
+        else:
+            cur = (cur + ' ' + p).strip() if cur else p
+    if cur:
+        if chunks and len(cur) < min_chars:
+            chunks[-1] = (chunks[-1] + ' ' + cur).strip()
+        else:
+            chunks.append(cur)
+    return chunks or parts
+
 
 def _split_oversized_blocks(blocks: list) -> list:
     out = []
     for b in blocks:
-        dur = b['end'] - b['start']
-        text = b['text'].strip()
-        if dur <= _OVERSIZED_BLOCK_DUR and len(text) <= _OVERSIZED_BLOCK_CHARS:
-            out.append(b)
-        else:
-            parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text) if p.strip()]
-            if len(parts) <= 1:
-                step = max(_OVERSIZED_BLOCK_CHARS, 80)
-                parts = [text[i:i + step] for i in range(0, len(text), step)] or [text]
-            out.extend(_distribute_time(parts, b['start'], b['end']))
+        out.extend(_split_one_block(b))
     return out
+
+
+def _split_one_block(b: dict) -> list:
+    dur = float(b['end']) - float(b['start'])
+    text = b['text'].strip()
+    if dur <= _DUB_BLOCK_DUR and len(text) <= _DUB_BLOCK_CHARS:
+        return [b]
+    parts = _sentence_parts(text)
+    if len(parts) <= 1:
+        parts = _clause_parts(text)
+    if len(parts) <= 1:
+        # không có dấu câu để tách an toàn: chỉ cắt thô khi quá dài, còn lại giữ nguyên (khỏi bịa mốc thời gian)
+        if dur <= _OVERSIZED_BLOCK_DUR and len(text) <= _OVERSIZED_BLOCK_CHARS:
+            return [b]
+        step = max(_DUB_BLOCK_CHARS, 80)
+        parts = [text[i:i + step] for i in range(0, len(text), step)] or [text]
+    else:
+        per_sec = (sum((len(p) for p in parts)) or 1) / max(0.1, dur)
+        expanded = []
+        for p in parts:                                      # mẩu câu nào ước vẫn quá dài → tách tiếp theo dấu phẩy
+            if len(p) / max(1e-06, per_sec) > _DUB_BLOCK_DUR:
+                expanded.extend(_clause_parts(p) or [p])
+            else:
+                expanded.append(p)
+        parts = expanded
+    pieces = _balance_pieces(parts, dur)
+    return _distribute_time(pieces, float(b['start']), float(b['end']))
+
 
 def _distribute_time(parts: list, t_start: float, t_end_total: float) -> list:
     total_chars = sum((len(p) for p in parts)) or 1
@@ -393,11 +488,7 @@ def _distribute_time(parts: list, t_start: float, t_end_total: float) -> list:
         part_dur = total_dur * (len(part) / total_chars)
         t_end = t_end_total if pi == len(parts) - 1 else min(t_end_total, t_cursor + part_dur)
         t_end = max(t_cursor + 0.05, t_end)
-        sub = [q.strip() for q in _CLAUSE_SPLIT_RE.split(part) if q.strip()]
-        if t_end - t_cursor > _OVERSIZED_BLOCK_DUR and len(sub) > 1:
-            result.extend(_distribute_time(sub, t_cursor, t_end))
-        else:
-            result.append({'start': t_cursor, 'end': t_end, 'text': part})
+        result.append({'start': t_cursor, 'end': t_end, 'text': part})
         t_cursor = t_end
     return result
 

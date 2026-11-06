@@ -447,7 +447,7 @@ export function PostEditor({ job }: { job: JobDetail }) {
           </div>
           <Timeline scenes={scenes} clips={player.clips} total={player.total} time={player.time} playing={player.playing}
             selected={selected} muted={player.muted} bgmName={mixer.bgm_path ? basename(mixer.bgm_path) : ""} issues={levels}
-            mode={mode} videoDuration={Number.isFinite(player.videoDuration) ? player.videoDuration : undefined}
+            mode={mode} videoDuration={Number.isFinite(player.videoDuration) ? player.videoDuration : undefined} videoPath={job.result.video_path}
             onTrim={(i, patch) => update(i, patch)} onEditStart={snapshot} onPeek={player.peek} onReorder={reorder}
             subtitleVisible={subVisible} onToggleSubtitle={() => setSubVisible((v) => !v)}
             onUndo={undo} onRedo={redo} canUndo={past.current.length > 0} canRedo={future.current.length > 0} onToggleExcluded={toggleExcluded}

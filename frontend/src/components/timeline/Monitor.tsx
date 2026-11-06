@@ -142,7 +142,7 @@ export function Monitor({ videoPath, attachVideo, subtitle, time, total, label, 
   }
 
   return (
-    <div ref={wrap} className="relative flex min-h-0 items-center justify-center overflow-hidden bg-black">
+    <div ref={wrap} className="relative flex min-h-0 items-center justify-center overflow-hidden bg-neutral-200 dark:bg-black">
       <div ref={frame} className="relative overflow-hidden" style={{ width: size.w, height: size.h, containerType: "size" }}>
         {videoPath ? (
           <div ref={stage} className="absolute" style={st}>
