@@ -812,7 +812,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
   const overviewSegs = useMemo(() => {
     const W = Math.max(1, width)
     return lanes.sub.map((x) => (
-      <span key={x.key} className={cn("absolute inset-y-0", selected === x.scene ? "bg-white/70" : retimedSet.has(x.scene) ? "bg-amber-300/60" : "bg-violet-400/40")}
+      <span key={x.key} className={cn("absolute inset-y-0", selected === x.scene ? "bg-foreground/70" : retimedSet.has(x.scene) ? "bg-amber-300/60" : "bg-violet-400/40")}
         style={{ left: `${((x.start * pps) / W) * 100}%`, width: `${(Math.max(1, (x.end - x.start) * pps) / W) * 100}%` }} />
     ))
   }, [lanes.sub, selected, retimedSet, pps, width])
@@ -841,9 +841,9 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
 
   return (
     <div ref={root} onPointerEnter={() => { hot.current = true }}
-      className="flex shrink-0 flex-col border-t border-white/10 bg-[#161618] text-white/90 select-none">
+      className="flex shrink-0 flex-col border-t border-border bg-card text-foreground select-none">
       {/* Thanh công cụ: công cụ sửa | phát ở giữa | zoom */}
-      <div className="grid h-11 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-white/10 px-3">
+      <div className="grid h-11 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-3">
         <div className="flex min-w-0 items-center gap-1">
           <IconBtn title="Hoàn tác (Ctrl+Z)" disabled={!past.current.length} onClick={undo}><Undo2 /></IconBtn>
           <IconBtn title="Làm lại (Ctrl+Y)" disabled={!future.current.length} onClick={redo}><Redo2 /></IconBtn>
@@ -865,9 +865,9 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
           )}
           <Sep />
           {multi.size > 1 ? (
-            <span className="shrink-0 text-[11px] whitespace-nowrap text-white/60"><b className="text-white">{multi.size}</b> khối · kéo hoặc ← → để dời cả nhóm · Esc bỏ chọn</span>
+            <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground"><b className="text-foreground">{multi.size}</b> khối · kéo hoặc ← → để dời cả nhóm · Esc bỏ chọn</span>
           ) : selItem && selSpan ? <>
-            <span className="tabular mr-0.5 shrink-0 text-[11px] whitespace-nowrap text-white/60" title={`${fmtClock(selSpan.start)} → ${fmtClock(selSpan.end)}`}>
+            <span className="tabular mr-0.5 shrink-0 text-[11px] whitespace-nowrap text-muted-foreground" title={`${fmtClock(selSpan.start)} → ${fmtClock(selSpan.end)}`}>
               <b className={cn("font-semibold", selItem.lane === "voice" ? "text-orange-300" : "text-violet-300")}>
                 {selItem.lane === "voice" ? "Giọng" : "Phụ đề"} #{selItem.scene + 1}{selItem.part >= 0 && (lanes.sub.filter((x) => x.scene === selItem.scene).length > 1) ? `.${selItem.part + 1}` : ""}
               </b> · {(selSpan.end - selSpan.start).toFixed(1)}s
@@ -876,14 +876,14 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             <IconBtn title="Cuối dòng = đầu phát (])" onClick={() => edgeToPlayhead("r")}><ArrowRightToLine /></IconBtn>
             <IconBtn title="Về giờ gốc (R)" disabled={!isRetimed(scenes[selItem.scene])} onClick={() => resetScene(selItem.scene)}><RotateCcw /></IconBtn>
           </> : (
-            <span className="truncate text-[11px] whitespace-nowrap text-white/40">
-              {retimed > 0 ? <>{retimed} câu đã chỉnh · <button className="text-white/70 underline-offset-2 hover:text-white hover:underline" onClick={resetAll}>khôi phục</button></>
+            <span className="truncate text-[11px] whitespace-nowrap text-muted-foreground">
+              {retimed > 0 ? <>{retimed} câu đã chỉnh · <button className="text-foreground/80 underline-offset-2 hover:text-foreground hover:underline" onClick={resetAll}>khôi phục</button></>
                 : "Kéo khối để dời · kéo mép để cắt"}
             </span>
           )}
         </div>
         <div className={cn("flex items-center gap-3", empty && "pointer-events-none opacity-40")}>
-          <span className="tabular w-[62px] text-right font-mono text-[12.5px] text-white">{fmtClock(time)}</span>
+          <span className="tabular w-[62px] text-right font-mono text-[12.5px] text-foreground">{fmtClock(time)}</span>
           <div className="flex items-center gap-1">
             <IconBtn title="Dòng trước (↑)" onClick={() => jump(-1)}><SkipBack /></IconBtn>
             <button title="Phát / dừng (Space)" onClick={onToggle}
@@ -892,18 +892,18 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             </button>
             <IconBtn title="Dòng sau (↓)" onClick={() => jump(1)}><SkipForward /></IconBtn>
           </div>
-          <span className="tabular w-[62px] font-mono text-[12.5px] text-white/40">{fmtClock(total)}</span>
+          <span className="tabular w-[62px] font-mono text-[12.5px] text-muted-foreground">{fmtClock(total)}</span>
         </div>
         <div className="flex items-center justify-end gap-1.5">
           <IconBtn title={follow ? "Bám theo đầu phát: bật" : "Bám theo đầu phát: tắt"} active={follow} onClick={() => setFollow(!follow)}><Crosshair /></IconBtn>
           <ZoomControl pps={pps} setPps={setPps} min={MIN_PPS} max={MAX_PPS} base={Math.max(MIN_PPS, (view.w - 48) / Math.max(1, total))} onFit={fit} />
           <Tooltip>
-            <TooltipTrigger asChild><span className="ml-1 cursor-help text-white/40 hover:text-white/80 [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
+            <TooltipTrigger asChild><span className="ml-1 cursor-help text-muted-foreground hover:text-foreground [&_svg]:size-4"><CircleHelp /></span></TooltipTrigger>
             <TooltipContent side="top" className="w-72 p-3 text-xs">
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                 {HELP.map(([k, v]) => <div key={k} className="contents"><dt className="font-mono font-semibold whitespace-nowrap">{k}</dt><dd className="opacity-80">{v}</dd></div>)}
               </dl>
-              <p className="mt-2 border-t border-white/10 pt-2 leading-relaxed opacity-70">
+              <p className="mt-2 border-t border-border pt-2 leading-relaxed opacity-70">
                 Viền vàng / đỏ = dòng hiện quá nhanh (nên ≤ 17 ký tự/giây). Thanh trong khối giọng: xanh vừa · vàng hơi nhanh · đỏ dài quá. Vạch xanh ngọc = chuyển cảnh.
               </p>
             </TooltipContent>
@@ -912,19 +912,19 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
       </div>
 
       {!empty && width > view.w * 1.3 && (
-        <div className="flex h-4 items-center border-b border-white/10 bg-black/20" style={{ paddingLeft: HEADER_W }}>
+        <div className="flex h-4 items-center border-b border-border bg-muted" style={{ paddingLeft: HEADER_W }}>
           <div ref={overview} onPointerDown={startOverview} title="Bấm để nhảy tới"
-            className="relative mx-1 h-2.5 flex-1 cursor-pointer overflow-hidden rounded-sm bg-white/[0.04]">
+            className="relative mx-1 h-2.5 flex-1 cursor-pointer overflow-hidden rounded-sm bg-foreground/[0.06]">
             {overviewSegs}
             <span className="pointer-events-none absolute inset-y-0 w-px bg-red-500" style={{ left: pct(time * pps) }} />
-            <span className="pointer-events-none absolute inset-y-0 rounded-sm border border-white/80 bg-white/10" style={{ left: pct(view.left), width: pct(Math.min(width, view.w)) }} />
+            <span className="pointer-events-none absolute inset-y-0 rounded-sm border border-foreground/50 bg-foreground/10" style={{ left: pct(view.left), width: pct(Math.min(width, view.w)) }} />
           </div>
         </div>
       )}
 
       <div className="flex">
-        <div className="shrink-0 border-r border-white/10 bg-[#1b1b1e]" style={{ width: HEADER_W }}>
-          <div className="border-b border-white/10" style={{ height: RULER_H }} />
+        <div className="shrink-0 border-r border-border bg-muted" style={{ width: HEADER_W }}>
+          <div className="border-b border-border" style={{ height: RULER_H }} />
           {laneKeys.map((k) => {
             const t = LANES[k]
             // cột icon thẳng hàng mọi làn: [khoá] [mắt] [loa / kiểu chữ]
@@ -944,7 +944,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
                 ? { title: "Kiểu chữ phụ đề (cỡ chữ, in hoa, song ngữ)", on: styleOpen, icon: <Type />, onClick: () => setStyleOpen(!styleOpen),
                     extra: styleOpen && <>
                       <div className="fixed inset-0 z-40" onClick={() => setStyleOpen(false)} />
-                      <div className="absolute bottom-0 left-full z-50 ml-2 w-64 rounded-lg border border-white/15 bg-[#1f1f23] p-3 text-white/90 shadow-2xl">{subStyleMenu}</div>
+                      <div className="absolute bottom-0 left-full z-50 ml-2 w-64 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-2xl">{subStyleMenu}</div>
                     </> }
                 : null
             return (
@@ -958,10 +958,10 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
 
         <div ref={scroller} className="relative min-w-0 flex-1 overflow-x-auto overflow-y-hidden" onWheel={onWheel}>
           <div className="relative" style={{ width: width || "100%" }}>
-            <div className="relative cursor-ew-resize border-b border-white/10 bg-white/[0.03]" style={{ height: RULER_H }} onPointerDown={startScrub}>
+            <div className="relative cursor-ew-resize border-b border-border bg-foreground/[0.03]" style={{ height: RULER_H }} onPointerDown={startScrub}>
               {ticks.map((t) => (
-                <div key={t} className="absolute inset-y-0 border-l border-white/15" style={{ left: t * pps }}>
-                  <span className="tabular absolute top-[4px] left-1 font-mono text-[10px] text-white/50">{fmtRuler(t)}</span>
+                <div key={t} className="absolute inset-y-0 border-l border-border" style={{ left: t * pps }}>
+                  <span className="tabular absolute top-[4px] left-1 font-mono text-[10px] text-muted-foreground">{fmtRuler(t)}</span>
                 </div>
               ))}
             </div>
@@ -969,7 +969,7 @@ export function SubtitleTimeline({ scenes, onChange, dub, time, playing, selecte
             {shotEls}
             {empty && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center" style={{ top: RULER_H }}>
-                <span className="rounded-full border border-white/10 bg-[#161618]/90 px-3 py-1 text-[11px] text-white/55">Chưa có dòng phụ đề</span>
+                <span className="rounded-full border border-border bg-card/90 px-3 py-1 text-[11px] text-muted-foreground">Chưa có dòng phụ đề</span>
               </div>
             )}
             {/* vạch hít + nhãn thời gian khi đang kéo */}
@@ -1043,13 +1043,13 @@ function Wave({ peaks, pps, from, to, h }: { peaks: Peaks; pps: number; from: nu
   return <canvas ref={ref} className="pointer-events-none absolute top-0" style={{ left: from * pps, width: w, height: h }} />
 }
 
-const Sep = () => <span className="mx-1 h-4 w-px shrink-0 bg-white/10" />
+const Sep = () => <span className="mx-1 h-4 w-px shrink-0 bg-border" />
 
 function IconBtn({ title, onClick, children, active, disabled }: { title: string; onClick: () => void; children: ReactNode; active?: boolean; disabled?: boolean }) {
   return (
     <button title={title} onClick={onClick} disabled={disabled} aria-pressed={active}
       className={cn("flex size-7 shrink-0 items-center justify-center rounded-md disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5",
-        active ? "bg-primary/25 text-white ring-1 ring-primary/50" : "text-white/60 hover:bg-white/10 hover:text-white")}>
+        active ? "bg-primary/25 text-foreground ring-1 ring-primary/50" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
       {children}
     </button>
   )
@@ -1057,7 +1057,7 @@ function IconBtn({ title, onClick, children, active, disabled }: { title: string
 
 function Lane({ h, children, onScrub }: { h: number; children: ReactNode; onScrub: (e: RPE) => void }) {
   return (
-    <div className="relative border-b border-white/10" style={{ height: h }} onPointerDown={(e) => { if (e.target === e.currentTarget) onScrub(e) }}>
+    <div className="relative border-b border-border" style={{ height: h }} onPointerDown={(e) => { if (e.target === e.currentTarget) onScrub(e) }}>
       {children}
     </div>
   )

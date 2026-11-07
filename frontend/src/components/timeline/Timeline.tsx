@@ -104,16 +104,17 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
   const [follow, setFollow] = useState(true)
   const width = total > 0 ? total * pps + 48 : 0
 
-  // Dải khung hình (filmstrip) cho làn Video: tải 1 ảnh ghép nhiều khung, mỗi clip cắt đúng khúc của mình.
+  // Dải khung hình (filmstrip) cho làn Video: tải 1 ảnh ghép nhiều khung (giữ đúng tỉ lệ khung hình — dọc 9:16 hay
+  // ngang 16:9 đều không méo), mỗi clip cắt đúng khúc của mình.
   const srcDur = videoDuration && videoDuration > 0 ? videoDuration : total
-  const [strip, setStrip] = useState<string | null>(null)
+  const [strip, setStrip] = useState<{ url: string; w: number; h: number } | null>(null)
   useEffect(() => {
     if (!videoPath || !(srcDur > 0)) { setStrip(null); return }
     const n = Math.max(20, Math.min(240, Math.round(srcDur / 2)))
     const url = filmstripUrl(videoPath, n)
     const img = new Image()
     let alive = true
-    img.onload = () => { if (alive) setStrip(url) }
+    img.onload = () => { if (alive) setStrip({ url, w: img.naturalWidth, h: img.naturalHeight }) }
     img.onerror = () => { if (alive) setStrip(null) }
     img.src = url
     return () => { alive = false }
@@ -346,12 +347,11 @@ export function Timeline({ scenes, clips, total, time, playing, selected, muted,
                   <ClipBox key={c.index} c={c} pps={pps} x={clipX(c)} selected={selected === c.index} onPick={() => pick(c)}
                     onBodyDown={(e) => startMove(e, c)} dragging={dragRole(c)}
                     className={cn(TRACKS.video.clip, (onReorder || onTrim) && "cursor-grab active:cursor-grabbing")}>
-                    {strip && span > 0.05 && <>
-                      {/* dải khung hình gốc, cắt đúng khúc [clip_start, clip_end] của cảnh này */}
-                      <div className="pointer-events-none absolute inset-0 bg-no-repeat" style={{
-                        backgroundImage: `url(${strip})`,
-                        backgroundSize: `${(srcDur / span) * c.dur * pps}px 100%`,
-                        backgroundPositionX: `${-(c.scene.clip_start / span) * c.dur * pps}px`,
+                    {strip && srcDur > 0 && <>
+                      {/* dải khung hình gốc: giữ đúng tỉ lệ khung (auto 100%), canh theo thời gian ở mép trái cảnh */}
+                      <div className="pointer-events-none absolute inset-0 bg-[length:auto_100%] bg-no-repeat" style={{
+                        backgroundImage: `url(${strip.url})`,
+                        backgroundPositionX: `${-(c.scene.clip_start / srcDur) * strip.w * ((TRACKS.video.h - 8) / strip.h)}px`,
                       }} />
                       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-black/25" />
                     </>}

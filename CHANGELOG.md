@@ -12,6 +12,23 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.4] - 2026-11-07
+
+### Added
+- **Xem thử phụ đề đã dịch ngay trên video (trang Dịch phụ đề)**: mở khung preview, bấm số dòng để nhảy tới đúng
+  đoạn — câu phụ đề hiện chồng lên hình đúng lúc, xem được bản dịch "chạy thật" trước khi xuất.
+- **Trợ lý Telegram**: nhắn 1 link + ý muốn cho bot (lồng tiếng / reup / review / phụ đề / tải) → bot tự tải + dựng
+  rồi gửi video về Telegram. Bot gọi thẳng API của app, có allowlist bảo vệ. Nằm trong thư mục `telegram-bot/`.
+
+### Changed
+- **Ưu tiên CapCut cho nhận dạng giọng nói, bỏ chữ "online"**: ô chọn ghi "CapCut · chuẩn nhất, khuyên dùng";
+  danh sách Whisper gọn lại còn các mức thật sự hữu ích (base / small / medium / large-v3).
+- **Mặc định ngôn ngữ lồng tiếng & phụ đề là Tiếng Việt**: mở app lên ô ngôn ngữ chọn sẵn Tiếng Việt.
+
+### Fixed
+- **Giao diện sáng phủ nốt trang Dịch phụ đề**: thanh timeline phụ đề trước đây vẫn tối khi bật theme sáng, nay
+  đổi màu theo theme cho đồng bộ với các trang còn lại (màu lấy từ bộ token chung).
+
 ## [2.15.3] - 2026-11-06
 
 ### Added
@@ -570,7 +587,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.3...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.4...HEAD
+[2.15.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.3...v2.15.4
 [2.15.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.2...v2.15.3
 [2.15.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...v2.15.2
 [2.15.1]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.0...v2.15.1

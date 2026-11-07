@@ -1,8 +1,8 @@
 import {
-  AlertTriangle, ArrowRight, Captions, Clock, ExternalLink, FileText, FolderOpen, Languages, Loader2, Merge, Pencil, Plus, Save, Search,
+  AlertTriangle, ArrowRight, Captions, ChevronDown, ChevronRight, Clock, ExternalLink, FileText, Film, FolderOpen, Languages, Loader2, Merge, Pencil, Play, Plus, Save, Search,
   Trash2, Wand2,
 } from "lucide-react"
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { useStore } from "@/app/store"
 import { EmptyState, Field, PathInput, Section, StatusBadge, ToggleRow, jobFileName } from "@/components/common"
@@ -140,7 +140,7 @@ function RecentList({ title, jobs, render }: { title: string; jobs: JobSummary[]
 function ExtractTab({ send }: { send: (h: Omit<Handoff, "n">) => void }) {
   const { options, settings, system, openJob } = useStore()
   const [inp, setInp] = useState("")
-  const [cfg, setCfg] = useState({ source_lang: "Tự động", whisper_model: "base", device: "GPU (NVIDIA)", sub_layout: "2 dòng gọn (khuyên dùng)", translate: true, ai_translate: false, film_context: "", out_dir: "" })
+  const [cfg, setCfg] = useState({ source_lang: "Tự động", whisper_model: "capcut", device: "GPU (NVIDIA)", sub_layout: "2 dòng gọn (khuyên dùng)", translate: true, ai_translate: false, film_context: "", out_dir: "" })
   const [busy, setBusy] = useState(false)
   const recent = useRecentJobs("srt")
   useEffect(() => {
@@ -278,6 +278,38 @@ function BurnTab({ send, handoff }: { send: (h: Omit<Handoff, "n">) => void; han
 
 /* ─────────────────────────── Sửa SRT ─────────────────────────── */
 
+/** Xem trước: phát video + hiện đúng câu phụ đề theo thời gian (demo tại chỗ, như lúc xuất). */
+function SubPreview({ video, cues, videoRef, onPick }: {
+  video: string; cues: Cue[]; videoRef: React.RefObject<HTMLVideoElement | null>; onPick: () => void
+}) {
+  const [t, setT] = useState(0)
+  const active = useMemo(() => cues.find((c) => t >= c.start && t < c.end), [cues, t])
+  if (!video) {
+    return (
+      <div className="flex flex-wrap items-center justify-center gap-2 px-3 py-4 text-[12.5px] text-muted-foreground">
+        <Film className="size-4" /> Chưa gắn video để xem trước.
+        <Button size="sm" variant="outline" onClick={onPick}><Film /> Chọn video</Button>
+      </div>
+    )
+  }
+  return (
+    <div className="mx-auto my-2 w-full max-w-md px-3">
+      <div className="relative overflow-hidden rounded-lg bg-black">
+        <video ref={videoRef} src={mediaUrl(video)} controls playsInline preload="metadata"
+          onTimeUpdate={(e) => setT(e.currentTarget.currentTime)}
+          className="max-h-[32vh] w-full object-contain" />
+        {active && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-[7%] flex justify-center px-4">
+            <span className="rounded bg-black/35 px-2 py-0.5 text-center text-[15px] leading-snug font-semibold whitespace-pre-wrap text-white [text-shadow:0_1px_3px_#000,0_0_2px_#000]">
+              {active.text}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function EditTab({ send, handoff }: { send: (h: Omit<Handoff, "n">) => void; handoff: Handoff | null }) {
   const [path, setPath] = useState("")
   const [cues, setCues] = useState<Cue[]>([])
@@ -286,7 +318,10 @@ function EditTab({ send, handoff }: { send: (h: Omit<Handoff, "n">) => void; han
   const [video, setVideo] = useState("")
   const [query, setQuery] = useState("")
   const [shift, setShift] = useState("0.5")
+  const [showPreview, setShowPreview] = useState(true)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const recent = useRecentJobs("srt")
+  const seekTo = (sec: number) => { const v = videoRef.current; if (v) { v.currentTime = Math.max(0, sec); v.play().catch(() => {}) } }
 
   const load = async (p = path) => {
     try { const r = await api.readSrt(p); setCues(r.cues); setLoaded(p); setPath(p); setDirty(false) } catch (e) { toast.error((e as Error).message) }
@@ -370,6 +405,14 @@ function EditTab({ send, handoff }: { send: (h: Omit<Handoff, "n">) => void; han
         <Button variant="outline" size="sm" onClick={() => send({ tab: "burn", srt: loaded, video })}><Merge /> Ghép vào video</Button>
         <Button size="sm" onClick={save} disabled={!dirty}><Save /> Lưu</Button>
       </div>
+      {/* xem trước phụ đề trên video */}
+      <div className="border-b border-border bg-muted/10">
+        <button onClick={() => setShowPreview((v) => !v)} className="flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted/40">
+          {showPreview ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          Xem trước phụ đề trên video {video && <span className="font-normal">· {basename(video)}</span>}
+        </button>
+        {showPreview && <SubPreview video={video} cues={cues} videoRef={videoRef} onPick={async () => { const p = await bridge.pickVideo(); if (p) setVideo(p) }} />}
+      </div>
       {/* công cụ */}
       <div className="flex items-center gap-2 border-b border-border bg-muted/20 px-3 py-2">
         <div className="relative w-72">
@@ -386,15 +429,17 @@ function EditTab({ send, handoff }: { send: (h: Omit<Handoff, "n">) => void; han
         </div>
       </div>
       {/* danh sách dòng */}
-      <div className="grid grid-cols-[44px_250px_1fr_56px_36px] gap-3 border-b border-border px-4 py-1.5 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">
+      <div className="grid grid-cols-[56px_250px_1fr_56px_36px] gap-3 border-b border-border px-4 py-1.5 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">
         <span>#</span><span>Thời gian</span><span>Nội dung</span><span className="text-right">Dài</span><span />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {shown.map(({ c, i }) => (
-          <div key={i} className={cn("group grid grid-cols-[44px_250px_1fr_56px_36px] items-start gap-3 border-b border-border/60 px-4 py-2", problems[i] && "bg-warning/[0.04]")}>
-            <span className="tabular flex items-center gap-1 pt-2 text-xs text-muted-foreground">
+          <div key={i} className={cn("group grid grid-cols-[56px_250px_1fr_56px_36px] items-start gap-3 border-b border-border/60 px-4 py-2", problems[i] && "bg-warning/[0.04]")}>
+            <button type="button" onClick={() => seekTo(c.start)} title="Tua video tới dòng này" disabled={!video}
+              className="tabular group/seek flex items-center gap-1 pt-2 text-xs text-muted-foreground enabled:hover:text-primary disabled:cursor-default">
+              <Play className="size-3 opacity-0 group-hover/seek:opacity-100" />
               {i + 1}{problems[i] && <span title={problems[i]}><AlertTriangle className="size-3 text-warning" /></span>}
-            </span>
+            </button>
             <div className="flex items-center gap-1">
               <SrtTime value={c.start} onChange={(v) => upd(i, { start: v })} invalid={problems[i] === "Chồng lên dòng trước"} />
               <span className="text-muted-foreground">→</span>

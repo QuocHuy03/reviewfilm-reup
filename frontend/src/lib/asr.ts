@@ -1,6 +1,6 @@
 /** Mức nhận dạng giọng nói — tên hiển thị cho người dùng (giá trị lưu trong cấu hình giữ nguyên: capcut / tiny / base / small…). */
 export const ASR_LABELS: Record<string, string> = {
-  capcut: "CapCut (online) · chuẩn nhất, khuyên dùng",
+  capcut: "CapCut · chuẩn nhất, khuyên dùng",
   tiny: "Whisper · Siêu nhanh",
   base: "Whisper · Nhanh",
   small: "Whisper · Cân bằng",
@@ -13,4 +13,4 @@ export const ASR_LABELS: Record<string, string> = {
 export const asrLabel = (model?: string) => (model ? ASR_LABELS[model] ?? model : "")
 
 /** Gợi ý ngắn dưới ô chọn mức nhận dạng. */
-export const ASR_HINT = "CapCut: cần mạng, nhanh & chuẩn nhất (nhất là tiếng Trung), không cần GPU · Whisper: chạy trên máy, không cần mạng — mức càng cao càng chậm nhưng nghe kỹ hơn"
+export const ASR_HINT = "CapCut: nhanh & chuẩn nhất (nhất là tiếng Trung), không cần GPU — khuyên dùng · Whisper: chạy thẳng trên máy, mức càng cao càng chậm nhưng nghe kỹ hơn"

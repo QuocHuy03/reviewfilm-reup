@@ -358,13 +358,10 @@ LEGACY_VOICE_OPTIONS = {
 }
 
 WHISPER_MODELS = [
-    "capcut",      # nhận dạng online của CapCut (core/capcut_stt.py) — nhanh, không cần GPU
-    "tiny",
-    "base",
+    "capcut",      # CapCut (core/capcut_stt.py) — nhanh, chuẩn nhất, không cần GPU → ưu tiên mặc định
+    "base",        # Whisper offline: 4 mức theo loại — Nhanh / Cân bằng / Chính xác / Chính xác nhất
     "small",
     "medium",
-    "large",
-    "large-v2",
     "large-v3"
 ]
 

@@ -55,7 +55,7 @@ export function SimpleSelect({ value, onChange, items, placeholder, labels }: {
 }
 
 const DEFAULT_CFG = {
-  source_lang: "Tự động", whisper_model: "base", device: "GPU (NVIDIA)", minutes: 0, film_context: "",
+  source_lang: "Tự động", whisper_model: "capcut", device: "GPU (NVIDIA)", minutes: 0, film_context: "",
   scene_accurate: false, ai_translate: true, video_speed: "1.0x (mặc định)", mirror_video: false,
   voice: "Edge TTS — Nữ Bắc (miễn phí)", target_lang: "vi", multi_voice: false, vieneu_rate: 0, vieneu_pitch: 0,
   sub_style: "Mặc định (chữ trắng, viền đen)", sub_layout: "2 dòng gọn (khuyên dùng)",
@@ -74,7 +74,7 @@ const DEFAULT_CFG = {
 /** Whisper trên CPU tốn bao lâu so với độ dài phim (đo thật trên Xeon 2.4GHz, chế độ nhanh beam 1). */
 const CPU_RATIO: Record<string, number> = { tiny: 0.04, base: 0.11, small: 0.3, medium: 0.8, large: 1.6, "large-v2": 1.6, "large-v3": 1.6 }
 function whisperHint(model: string, device: string) {
-  if (model === "capcut") return "CapCut online: ~10s / tập, không cần GPU · cần mạng"
+  if (model === "capcut") return "CapCut: ~10s / tập, không cần GPU — nhanh & chuẩn nhất"
   if (device.startsWith("GPU")) return "GPU: vài phút cho phim dài"
   const r = CPU_RATIO[model]
   if (!r) return "base nhanh · medium chính xác hơn"
