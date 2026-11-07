@@ -12,6 +12,13 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 
 ## [Unreleased]
 
+## [2.15.5] - 2026-11-07
+
+### Added
+- **Thêm nguồn tải Douyin `douyinsaver.com`**: với link Douyin, tool thử nguồn này trước (không logo, không cần
+  cookie, lấy thẳng link CDN gốc chất lượng cao) rồi mới lùi về các nguồn cũ. Tự chọn bản phân giải cao nhất, có
+  đường tải dự phòng qua máy chủ khi link trực tiếp hết hạn — tăng tỉ lệ tải Douyin thành công.
+
 ## [2.15.4] - 2026-11-07
 
 ### Added
@@ -587,7 +594,8 @@ sẽ chuyển mục đó thành phiên bản mới kèm ngày.
 - Giọng tham chiếu VieNeu 3 không tìm thấy file mẫu.
 - Không tạo được job mới khi đang có job chạy (lỗi 409).
 
-[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.4...HEAD
+[Unreleased]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.5...HEAD
+[2.15.5]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.4...v2.15.5
 [2.15.4]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.3...v2.15.4
 [2.15.3]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.2...v2.15.3
 [2.15.2]: https://github.com/quochuy03/reviewfilm-public/compare/v2.15.1...v2.15.2
